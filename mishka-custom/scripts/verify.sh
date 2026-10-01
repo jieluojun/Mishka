@@ -49,13 +49,11 @@ skip() {
 
 step "离线自检"
 
-run "Kotlin 语法门（tree-sitter）" \
-  "$PY" "$DELIVER/tools/check_kotlin.py" "$DELIVER/app/src/main/kotlin/top/yukonga/mishka/custom/anchor"
-
 if "$PY" -c "import tree_sitter, tree_sitter_language_pack" >/dev/null 2>&1; then
-  : # 依赖在，上面已经跑过了
+  run "Kotlin 语法门（tree-sitter）" \
+    "$PY" "$DELIVER/tools/check_kotlin.py" "$DELIVER/app/src/main/kotlin/top/yukonga/mishka/custom/anchor"
 else
-  skip "Kotlin 语法门" "缺 tree-sitter / tree-sitter-language-pack（pip install tree-sitter tree-sitter-language-pack）"
+  skip "Kotlin 语法门" "缺依赖：pip install tree-sitter tree-sitter-language-pack"
 fi
 
 if "$PY" -c "import yaml" >/dev/null 2>&1; then

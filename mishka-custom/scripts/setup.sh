@@ -80,6 +80,9 @@ allow_patterns=(
   "?? $CUSTOM_REL/"
   "?? go.work"
   "?? go.work.sum"
+  "?? scripta/"
+  " M gradlew"    # 工作流里 chmod +x 造成的模式位变化（无害）
+  "M  gradlew"
 )
 unexpected=""
 while IFS= read -r line; do
@@ -101,9 +104,21 @@ if [[ -n "$unexpected" ]]; then
   fi
 fi
 # 把「生成的 / 机密的」东西挡在 git status 之外（mishka-custom/ 是否登记由上面的跟踪状态决定）
+# gradlew 丢可执行位（Windows / 网页上传 / 重新提交时很常见）：Gradle 步骤会直接 Permission denied
+if [[ -f "$REPO/gradlew" ]] && git -C "$REPO" ls-files -s gradlew 2>/dev/null | grep -q '^100644'; then
+  warn "gradlew 在仓库里的权限位是 100644（上游是 100755）——本地与 CI 都会 Permission denied。修复："
+  warn "  chmod +x gradlew && git update-index --chmod=+x gradlew && git commit -m 'fix: 恢复 gradlew 可执行位'"
+fi
 exclude_path "$REPO" "/go.work"
 exclude_path "$REPO" "/go.work.sum"
 exclude_path "$REPO" "/$CUSTOM_REL/"
+# fork 里没有子模块条目时，scripta / mihomo 都是普通目录 → 别让它们脏 status
+for sub in scripta mihomo; do
+  # 不检查目录是否存在：内核是第 3 步才 clone 的，exclude 得先登记好
+  if ! git -C "$REPO" ls-files -s "$sub" 2>/dev/null | grep -q '^160000'; then
+    exclude_path "$REPO" "/$sub/"
+  fi
+done
 ok "已登记 .git/info/exclude（go.work、go.work.sum、custom/ 源码目录）"
 
 # ---------------------------------------------------------------- 3. 内核
@@ -173,8 +188,14 @@ else
   else
     if [[ -z "$(git -C "$KERNEL_DIR" status --porcelain)" ]]; then
       say "  预检补丁（临时索引，不动工作区）…"
-      bash "$DELIVER/tools/verify_mihomo_patches.sh" --kernel-dir "$KERNEL_DIR" >/dev/null \
-        || die "内核补丁无法干净应用到 $BASE_COMMIT，请检查内核版本（--kernel-dir/--branch）"
+      if [[ -f "$DELIVER/tools/verify_mihomo_patches.sh" ]]; then
+        bash "$DELIVER/tools/verify_mihomo_patches.sh" --kernel-dir "$KERNEL_DIR" >/dev/null \
+          || die "内核补丁无法干净应用到 $BASE_COMMIT，请检查内核版本（--kernel-dir/--branch）"
+      else
+        # 没上传 tools/ 也能跑：内联的累积校验
+        kernel_patches_check "$DELIVER" "$KERNEL_DIR" \
+          || die "内核补丁无法干净应用到 $BASE_COMMIT，请检查内核版本（--kernel-dir/--branch）"
+      fi
       ok "补丁预检通过"
     fi
     for p in "$DELIVER"/patches/mihomo/[0-9]*.patch; do

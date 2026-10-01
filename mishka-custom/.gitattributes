@@ -1,0 +1,6 @@
+# 这个样本必须保留 CRLF：它测的就是「锚点手术不碰行尾」，
+# 而仓库根目录的 `* text=auto` 会在提交时把它转成 LF，测试就白跑了。
+tools/equiv/corpus/10-crlf.yaml -text
+
+# 补丁文件按原样存：git apply 依赖逐字节内容，别让任何归一化插进来
+patches/**/*.patch -text

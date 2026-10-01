@@ -90,6 +90,23 @@ is_tracked() {
   [[ -n "$(git -C "$repo" ls-files -- "$path" | head -1)" ]]
 }
 
+# 内核补丁「累积」校验：把 patches/mihomo/*.patch 依次应用到临时索引上（不动工作区）。
+# 用临时索引而不是逐个 git apply --check，是因为补丁之间有依赖（0003 的上下文来自 0001），
+# 单独 --check 会假失败。tools/verify_mihomo_patches.sh 做的是同一件事（外加逐文件哈希比对），
+# 这里内联一份是为了让 setup.sh 在没有 tools/ 目录时也能工作。
+kernel_patches_check() {
+  local deliver="$1" kernel_dir="$2" tmp_index
+  tmp_index="$(mktemp -u)"
+  rm -f "$tmp_index"
+  GIT_INDEX_FILE="$tmp_index" git -C "$kernel_dir" read-tree HEAD || return 1
+  local p
+  for p in "$deliver"/patches/mihomo/[0-9]*.patch; do
+    GIT_INDEX_FILE="$tmp_index" git -C "$kernel_dir" apply --cached "$p" || { rm -f "$tmp_index"; return 1; }
+  done
+  rm -f "$tmp_index"
+  return 0
+}
+
 # 在 .git/info/exclude 里登记（保证自定义文件不脏 git status，又不动 .gitignore）
 exclude_path() {
   local repo="$1" entry="$2" exclude_file

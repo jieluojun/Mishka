@@ -1,17 +1,21 @@
 # =============================================================================
-# 安装方法：把这个文件复制成 .github/workflows/release.yml 并提交（新增文件，不改上游任何文件）。
+# 安装方法：把这个文件复制成 .github/workflows/ 下的任意名字并提交（新增文件，不改上游任何文件）。
 #
 #   mkdir -p .github/workflows
-#   cp mishka-custom/ci/build-release.yml .github/workflows/release.yml
-#   git add .github/workflows/release.yml mishka-custom && git commit -m "ci: 只构建 release 的自定义工作流"
+#   cp mishka-custom/ci/build-release.yml .github/workflows/build-release.yml
+#   git add .github/workflows/build-release.yml mishka-custom && git commit -m "ci: 只构建 release 的自定义工作流" && git push
 #
-# 它做的事：拉代码 → 装 JDK 21 / Go / Gradle → 用 mishka-custom/scripts/setup.sh 换上
-# jieluojun/mihomo(Alpha) 内核并打好补丁 → 只跑 :app:assembleRelease → 上传 APK；
+# 它做的事：拉代码 → 备好 scripta → 装 JDK 21 / Go / Gradle → 用 mishka-custom/scripts/setup.sh
+# 换上 jieluojun/mihomo(Alpha) 内核并打好补丁 → 只跑 :app:assembleRelease → 上传 APK；
 # 打 tag（v*）时再附到 Release 上。**全程不碰 debug 变体。**
 #
 # 签名：仓库 secrets 里有 KEYSTORE_BASE64 / KEYSTORE_PASS / KEY_ALIAS / KEY_PASSWORD 就用你的 keystore；
 #       没有则用固定参数的 Android debug 风格 keystore 兜底（能直接装、能覆盖升级，但密钥是公开的，
 #       换用正式 keystore 后需要卸载重装）。
+#
+# 两个前置条件（都有明确报错，不会静默）：
+#   1. mishka-custom/ 必须**作为普通目录**提交（不能是空的/子模块指针）；
+#   2. scripta 子模块或源码必须可得 —— fork 里丢了子模块条目时，用工作流内置逻辑按上游 pin 直接 clone。
 # =============================================================================
 name: Release APK (custom kernel + anchor panel)
 
@@ -37,11 +41,87 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # 上游 mihomo 子模块用不到（会被 setup.sh 换成 jieluojun 内核），只拉 scripta
+          # 子模块稍后单独处理：上游 mihomo 用不到（setup.sh 会换成 jieluojun 内核），
+          # scripta 需要但 fork 里可能没有子模块条目，见下一步。
           submodules: false
 
-      - name: Checkout scripta submodule
-        run: git submodule update --init --recursive scripta
+      - name: 检查 mishka-custom 是否齐全
+        run: |
+          set -uo pipefail
+          if [ ! -e mishka-custom ]; then
+            echo "::error::仓库里没有 mishka-custom/：它必须被提交（git add mishka-custom 后 push）。清单见 README.md「提交到仓库的文件清单」。"
+            exit 1
+          fi
+          if [ ! -f mishka-custom/scripts/setup.sh ]; then
+            if [ -d mishka-custom ] && [ -z "$(ls -A mishka-custom)" ]; then
+              echo "::error::mishka-custom/ 是个空目录 —— 它被提交成了「子模块指针（gitlink）」而不是普通目录。"
+              echo "修复（本地仓库里执行）："
+              echo "  rm -rf mishka-custom/.git"
+              echo "  git rm --cached mishka-custom -r"
+              echo "  git add mishka-custom && git commit -m 'fix: mishka-custom 改为普通目录' && git push"
+            else
+              echo "::error::mishka-custom/scripts/setup.sh 不存在：mishka-custom 上传不完整。"
+            fi
+            echo "--- 实际内容 ---"
+            ls -la mishka-custom || true
+            exit 1
+          fi
+          missing=""
+          for f in scripts/lib.sh init/no-debug.init.gradle kernel/go.work.sum \
+                   patches/app/0001-anchor-panel.patch patches/app/BASELINE.txt \
+                   patches/mihomo/BASELINE.txt; do
+            [ -e "mishka-custom/$f" ] || missing="${missing}
+            - mishka-custom/$f"
+          done
+          if ! ls mishka-custom/patches/mihomo/[0-9]*.patch >/dev/null 2>&1; then
+            missing="${missing}
+            - mishka-custom/patches/mihomo/000*.patch"
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::mishka-custom/ 里缺下面这些文件（CI 构建需要，重新上传整个目录即可）：$missing"
+            exit 1
+          fi
+          echo "mishka-custom/ 齐全 ✓"
+          find mishka-custom -maxdepth 2 -type d | sort
+
+      - name: 准备 scripta 源码
+        run: |
+          set -euo pipefail
+          # settings.gradle.kts 里有 includeBuild("scripta")，没有它构建直接失败。
+          if [ -f mishka-custom/scripts/prepare-scripta.sh ]; then
+            bash mishka-custom/scripts/prepare-scripta.sh --repo .
+            exit 0
+          fi
+          echo "::warning::mishka-custom/scripts/prepare-scripta.sh 不在（老版本上传？），改用工作流内置逻辑"
+          if git ls-files -s scripta | grep -q '^160000'; then
+            echo "走子模块检出"
+            git submodule update --init --recursive scripta
+            exit 0
+          fi
+          echo "fork 里没有 scripta 子模块条目：按上游 pin 直接 clone"
+          git fetch --depth=1 --no-tags https://github.com/YuKongA/Mishka.git main
+          pin="$(git ls-tree FETCH_HEAD scripta | awk '{print $3}')"
+          echo "scripta pin = $pin"
+          rm -rf scripta
+          git clone --no-checkout https://github.com/YuKongA/scripta.git scripta
+          git -C scripta checkout "$pin"
+          echo "/scripta/" >> .git/info/exclude
+
+      - name: 确保 gradlew 可执行
+        run: |
+          set -uo pipefail
+          if [ -f gradlew ]; then
+            mode="$(stat -c '%a' gradlew)"
+            if [ "$mode" != "755" ] && [ "$mode" != "775" ]; then
+              echo "::warning::gradlew 在仓库里的权限位是 $mode（上游是 755）。CI 里已临时 chmod +x，但请在本地修掉，否则每次都会警告："
+              echo "::warning::  chmod +x gradlew && git update-index --chmod=+x gradlew && git commit -m 'fix: 恢复 gradlew 可执行位'"
+            fi
+            chmod +x gradlew
+            ls -l gradlew
+          else
+            echo "::error::没有 gradlew：仓库不完整（上游有 247 个文件，你的 fork 只有 265 个且缺 .github/workflows/build.yml，建议按 mishka-custom/BUILD.md 重新 fork）"
+            exit 1
+          fi
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -110,7 +190,7 @@ jobs:
         run: |
           set -euo pipefail
           apk="$(find app/build/outputs/apk/release -name '*.apk' | head -1)"
-          [ -n "$apk" ] || { echo "没找到 APK"; exit 1; }
+          [ -n "$apk" ] || { echo "::error::没找到 APK"; exit 1; }
           echo "path=$apk" >> "$GITHUB_OUTPUT"
           ls -lh "$apk"
           sha256sum "$apk"
