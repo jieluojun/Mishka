@@ -2395,10 +2395,10 @@ index 0000000..6c24053
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..a540d45
+index 0000000..d23a078
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,710 @@
+@@ -0,0 +1,706 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -2415,7 +2415,6 @@ index 0000000..a540d45
 +import androidx.compose.foundation.lazy.LazyColumn
 +import androidx.compose.foundation.lazy.items
 +import androidx.compose.foundation.rememberScrollState
-+import androidx.compose.foundation.shape.RoundedCornerShape
 +import androidx.compose.foundation.verticalScroll
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.getValue
@@ -2425,7 +2424,6 @@ index 0000000..a540d45
 +import androidx.compose.runtime.setValue
 +import androidx.compose.ui.Alignment
 +import androidx.compose.ui.Modifier
-+import androidx.compose.ui.draw.clip
 +import androidx.compose.ui.text.font.FontFamily
 +import androidx.compose.ui.text.font.FontWeight
 +import androidx.compose.ui.text.style.TextOverflow
@@ -2601,9 +2599,7 @@ index 0000000..a540d45
 +                if (entry.key == null) append("（P2）")
 +            }
 +            Card(
-+                modifier = Modifier
-+                    .fillMaxWidth()
-+                    .clip(CardDefaults.shape),
++                modifier = Modifier.fillMaxWidth(),
 +                colors = CardDefaults.defaultColors(),
 +                onClick = {
 +                    val key = entry.key
@@ -2690,7 +2686,7 @@ index 0000000..a540d45
 +@Composable
 +private fun CustomRow(row: FormCustomRow, onUnsupported: (String) -> Unit) {
 +    Card(
-+        modifier = Modifier.fillMaxWidth().clip(CardDefaults.shape),
++        modifier = Modifier.fillMaxWidth(),
 +        colors = CardDefaults.defaultColors(),
 +    ) {
 +        BasicComponent(
@@ -2714,7 +2710,7 @@ index 0000000..a540d45
 +    val summary = FormValues.describe(doc, field)
 +
 +    Card(
-+        modifier = Modifier.fillMaxWidth().clip(CardDefaults.shape),
++        modifier = Modifier.fillMaxWidth(),
 +        colors = CardDefaults.defaultColors(),
 +    ) {
 +        BasicComponent(

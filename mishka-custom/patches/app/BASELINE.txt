@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=e855709c476c8f82635b3bb6f751975e1319f391
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=26e7ec4aa3abb06c2baa80d41fdfbb5f8c7ff5d71a878065bfc093baf66cd48f
+patch_sha256=a6dbe8bd144c95f42f777fd2b394b9521ce2df752717da05d86f657e2314a419
 blob_before=b1b2479234cad3b9b9c467dc743ee0a9159cb937 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 blob_after=8466deb61244553a17929204b54c951d59078901 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 blob_new=71d33d23c04b07abd093019370dcfe7f7f484edc app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
@@ -9,6 +9,6 @@ blob_new=53d41054fa2dafa57cb359f7ee1d932f2670e6bd app/src/main/kotlin/top/yukong
 blob_new=44c20972a2ecb1d97174a1979fef1df11f1f6a63 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
 blob_new=f4a174d2878896585935a8a0eb3240a3fe294446 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 blob_new=6c240536e5876b13fd117fb5c681a1190c86b5e2 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
-blob_new=a540d453cc874fa6528a1277527b01bd530d7c1f app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
+blob_new=d23a078f5b4e5d8f0e8e466d10576ea84862988b app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 blob_new=b13339665712d4abbbe488cf0fda77aa294a9042 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt
 blob_new=2d46560d5e812d5a27c8816080f9208e5215c19c app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt

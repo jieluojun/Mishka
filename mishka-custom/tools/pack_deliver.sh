@@ -43,9 +43,10 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
     for full, rel in entries:
         zi = zipfile.ZipInfo(filename=full, date_time=(2026, 10, 1, 0, 0, 0))
         zi.compress_type = zipfile.ZIP_DEFLATED
-        mode = os.stat(rel).st_mode
+        src_path = os.path.join(src, rel)
+        mode = os.stat(src_path).st_mode
         zi.external_attr = (mode & 0xFFFF) << 16
-        with open(rel, 'rb') as fh:
+        with open(src_path, 'rb') as fh:
             z.writestr(zi, fh.read())
 print(f"{len(entries)} 个条目")
 PY

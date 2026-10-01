@@ -26,7 +26,7 @@
 
 ### 文件与入口
 
-新增 8 个文件（`patches/app/0001-anchor-panel.patch`，共 9 files / 5202 insertions）：
+新增 8 个文件（`patches/app/0001-anchor-panel.patch`，共 9 files / 5198 insertions）：
 
 | 文件 | 职责 |
 | --- | --- |

@@ -34,10 +34,10 @@ ok  工作区已回到干净状态
 PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 ```
 
-补丁规模：9 files / 5202 insertions（8 个新文件 + 编辑器入口 39 行）。
+补丁规模：9 files / 5198 insertions（8 个新文件 + 编辑器入口 39 行）。
 基线（`patches/app/BASELINE.txt`）：上游 `e855709c476c8f82635b3bb6f751975e1319f391`，
 `FileManagerEditorScreen.kt` before `b1b24792…c937` → after `8466deb6…8901`，
-补丁 sha256 `26e7ec4a…d48f`（导出幂等：`tools/export_app_patch.sh` 连跑两次逐字节一致）。
+补丁 sha256 `a6dbe8bd…a419`（导出幂等：`tools/export_app_patch.sh` 连跑两次逐字节一致）。
 
 导出注意：`setup.sh` 会把 `app/src/main/kotlin/top/yukonga/mishka/custom/` 写进 `.git/info/exclude`
 （这样装配后 `git status` 依旧干净），所以导出补丁必须 `git add -f -A`，否则整棵源码树会从补丁里消失。

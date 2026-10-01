@@ -25,7 +25,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
 | 路径 | 内容 |
 | --- | --- |
 | `scripts/` | `setup.sh`（装配）、`apply-patches.sh` / `revert-patches.sh`（重打/还原）、`build-release.sh`（只出 release）、`gen-keystore.sh`（签名） |
-| `patches/app/` | app 侧补丁 `0001-anchor-panel.patch`（8 个新文件 + 编辑器入口，9 files / 5202 insertions）+ 基线 `BASELINE.txt` |
+| `patches/app/` | app 侧补丁 `0001-anchor-panel.patch`（8 个新文件 + 编辑器入口，9 files / 5198 insertions）+ 基线 `BASELINE.txt` |
 | `patches/mihomo/` | 内核 4 个补丁（`0001`…`0004`）+ 基线 `BASELINE.txt`（含基线 commit 与逐文件 blob） |
 | `kernel/` | `go.work` + `go.work.sum`：让「换了分支的内核」不依赖改仓库 `go.mod`/`go.sum` 就能编译 |
 | `init/` | `no-debug.init.gradle`：构建 debug 变体时直接失败（默认只出 release） |
