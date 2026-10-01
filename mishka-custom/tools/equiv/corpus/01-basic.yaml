@@ -1,0 +1,9 @@
+# 01 基本：定义、引用、合并继承
+base: &base
+  udp: true
+proxies:
+  - name: n1
+    <<: *base
+rules:
+  - MATCH,*base
+unused: &solo 1

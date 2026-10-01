@@ -1,0 +1,9 @@
+# 02 引号内与注释里的 & / * 都不算锚点语法
+a: &real 1
+quoted: "&fake *fake2 #nope"
+single: '&fake2'
+escaped: 'it''s &notanchor'
+inline: "# {x} y"
+b: *real
+comment: something # *commentref &commentdef
+double: "hash # inside"

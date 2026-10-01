@@ -1,0 +1,137 @@
+# =============================================================================
+# 安装方法：把这个文件复制成 .github/workflows/release.yml 并提交（新增文件，不改上游任何文件）。
+#
+#   mkdir -p .github/workflows
+#   cp mishka-custom/ci/build-release.yml .github/workflows/release.yml
+#   git add .github/workflows/release.yml mishka-custom && git commit -m "ci: 只构建 release 的自定义工作流"
+#
+# 它做的事：拉代码 → 装 JDK 21 / Go / Gradle → 用 mishka-custom/scripts/setup.sh 换上
+# jieluojun/mihomo(Alpha) 内核并打好补丁 → 只跑 :app:assembleRelease → 上传 APK；
+# 打 tag（v*）时再附到 Release 上。**全程不碰 debug 变体。**
+#
+# 签名：仓库 secrets 里有 KEYSTORE_BASE64 / KEYSTORE_PASS / KEY_ALIAS / KEY_PASSWORD 就用你的 keystore；
+#       没有则用固定参数的 Android debug 风格 keystore 兜底（能直接装、能覆盖升级，但密钥是公开的，
+#       换用正式 keystore 后需要卸载重装）。
+# =============================================================================
+name: Release APK (custom kernel + anchor panel)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "custom-release-${{ github.ref }}"
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # 上游 mihomo 子模块用不到（会被 setup.sh 换成 jieluojun 内核），只拉 scripta
+          submodules: false
+
+      - name: Checkout scripta submodule
+        run: git submodule update --init --recursive scripta
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: 21
+          distribution: zulu
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: app/src/main/native/mishka_core/go.mod
+          cache-dependency-path: |
+            app/src/main/native/mishka_core/go.sum
+            mishka-custom/kernel/go.work.sum
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: 换内核 + 打补丁 + 生成 go.work
+        run: bash mishka-custom/scripts/setup.sh --ci --repo .
+
+      - name: 准备签名
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            ks="$RUNNER_TEMP/release.jks"
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$ks"
+            {
+              echo "KEYSTORE_PATH=$ks"
+              echo "KEYSTORE_PASS=$KEYSTORE_PASS"
+              echo "KEY_ALIAS=${KEY_ALIAS:-mishka}"
+              echo "KEY_PASSWORD=${KEY_PASSWORD:-$KEYSTORE_PASS}"
+            } >> "$GITHUB_ENV"
+            echo "使用仓库 secrets 里的 keystore 签名" >> "$GITHUB_STEP_SUMMARY"
+          else
+            ks="$RUNNER_TEMP/debug-key.jks"
+            keytool -genkeypair -keystore "$ks" -storetype PKCS12 \
+              -alias androiddebugkey -storepass android -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10950 \
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null
+            {
+              echo "KEYSTORE_PATH=$ks"
+              echo "KEYSTORE_PASS=android"
+              echo "KEY_ALIAS=androiddebugkey"
+              echo "KEY_PASSWORD=android"
+            } >> "$GITHUB_ENV"
+            {
+              echo "⚠️ 没有配置 KEYSTORE_BASE64，本次用固定的 debug 风格 keystore 签名：能直接安装、也能覆盖升级，"
+              echo "但私钥是公开的，不适合对外分发。配置 secrets 换正式 keystore 后，用户需要先卸载再安装。"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Download GeoIP files
+        run: ./gradlew :app:downloadGeoFiles
+
+      - name: Build Release APK（release only）
+        run: ./gradlew -I mishka-custom/init/no-debug.init.gradle :app:assembleRelease
+
+      - name: 收集产物
+        id: apk
+        run: |
+          set -euo pipefail
+          apk="$(find app/build/outputs/apk/release -name '*.apk' | head -1)"
+          [ -n "$apk" ] || { echo "没找到 APK"; exit 1; }
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+          ls -lh "$apk"
+          sha256sum "$apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: Mishka-custom-release
+          path: ${{ steps.apk.outputs.path }}
+          archive: false
+
+      - name: Attach to Release（仅打 tag 时）
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          apk="${{ steps.apk.outputs.path }}"
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" --clobber
+          else
+            gh release create "$tag" "$apk" --title "$tag" --generate-notes
+          fi

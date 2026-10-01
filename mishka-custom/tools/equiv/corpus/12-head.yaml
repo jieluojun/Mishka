@@ -1,0 +1,14 @@
+# 12 块内嵌套（dns-hijack 是嵌套项）与配置段锚点
+代理合集: &pub
+  a: 1
+  b: 2
+
+临时集: &tmp
+  c: 3
+
+mixed-port: 7890
+tun: &tun0
+  enable: true
+  dns-hijack:
+    - any:53
+use: *pub

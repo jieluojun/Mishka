@@ -1,0 +1,12 @@
+# 11 删锚点：mihomo 配置段只摘 &名，自建容器整块删
+dns: &dnsSection
+  enable: true
+  nameserver:
+    - 223.5.5.5
+代理合集: &pub
+  a: 1
+  b: 2
+后置: &tail
+  x: 1
+mixed-port: 7890
+使用: *pub

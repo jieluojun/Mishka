@@ -1,0 +1,22 @@
+# 05 路径回溯：name 值优先，其次键
+proxy-groups:
+  - name: 自动选择
+    type: url-test
+    proxies:
+      - p1
+      - p2
+  - name: 全球直连
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - AND,((NETWORK,tcp),(DST-PORT,443)),*common
+sub-rules:
+  common: &common
+    - MATCH,DIRECT
+dns:
+  nameserver-policy:
+    rule-set:cn:
+      - *nameservers
+nameservers: &nameservers
+  - 223.5.5.5

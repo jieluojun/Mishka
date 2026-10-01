@@ -1,0 +1,2455 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
+new file mode 100644
+index 0000000..71d33d2
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
+@@ -0,0 +1,236 @@
++package top.yukonga.mishka.custom.anchor
++
++import androidx.compose.runtime.Immutable
++
++/**
++ * 定义块的可视化模型：把 `键: &锚点` 带的那一块 YAML 拆成「参数行 / 列表项」，
++ * 编辑后仍在**原文行**上做替换（未改动的行逐字保留），不重新 dump 整块。
++ *
++ * 与 mihomo_box 的差别：那边用 js-yaml 的节点范围做保真替换，Kotlin 侧没有 YAML 依赖，
++ * 因此只支持能安全拆解的两种形态——映射（键值对）与序列（逐项）——嵌套多行的值不在这里改，
++ * 提示走「文本」模式（整块原文编辑）。这条边界是刻意画的：拆不动的形态宁可让用户看原文，
++ * 也不能让面板猜错层级把配置写坏。
++ */
++
++@Immutable
++enum class DefKind { Map, Seq, Scalar, Unknown }
++
++@Immutable
++data class DefEntrySeed(
++    val keyRaw: String,
++    val value: String,
++    val comment: String,
++    val indent: String,
++    val startIdx: Int,
++    val endIdx: Int,
++    val nested: Boolean,
++)
++
++@Immutable
++data class DefBlock(
++    val name: String,
++    val keyDisplay: String,
++    val keyRaw: String,
++    val indent: Int,
++    val dash: Boolean,
++    val kind: DefKind,
++    val headerValue: String,
++    val headerComment: String,
++    val entries: List<DefEntrySeed>,
++    val lines: List<String>,
++    val startLine1: Int,
++    val path: String,
++) {
++    /** 能否用可视化表单编辑（Scalar 单值也走一个值框，故一并算可视化）。 */
++    val visual: Boolean get() = kind != DefKind.Unknown
++    val lineCount: Int get() = lines.size
++}
++
++/** 一行可编辑内容。[seed] 为 null 表示新增行。 */
++@Immutable
++data class DefRow(
++    val seed: DefEntrySeed?,
++    val key: String,
++    val value: String,
++)
++
++object AnchorBlock {
++
++    private val SeqItemRegex = Regex("^(\\s*)-\\s*(.*)$")
++    private val MapEntryRegex = Regex("^(\\s*)([^:#][^:]*?)\\s*:\\s*(.*)$")
++
++    fun parse(lines: List<String>, startIndex: Int, endIndex: Int, name: String): DefBlock? {
++        val header = lines.getOrNull(startIndex) ?: return null
++        val shape = AnchorEdit.parseDefLine(header) ?: return null
++        if (shape.name != name) return null
++        val path = AnchorScan.pathOf(lines, startIndex)
++        val blockLines = lines.subList(startIndex, endIndex + 1).toList()
++        val headerComment = AnchorScan.trailingComment(header)
++        val bodyStart = 1
++        val bodyEnd = blockLines.lastIndex
++
++        val headerValue = AnchorScan.withoutComment(shape.value).trim()
++        if (headerValue.isNotEmpty()) {
++            return DefBlock(
++                name = name, keyDisplay = shape.key, keyRaw = shape.keyRaw, indent = shape.indent, dash = shape.dash,
++                kind = DefKind.Scalar, headerValue = headerValue, headerComment = headerComment,
++                entries = emptyList(), lines = blockLines, startLine1 = startIndex + 1, path = path,
++            )
++        }
++
++        val nonBlank = (bodyStart..bodyEnd).filter { blockLines[it].isNotBlank() }
++        if (nonBlank.isEmpty()) {
++            return DefBlock(
++                name = name, keyDisplay = shape.key, keyRaw = shape.keyRaw, indent = shape.indent, dash = shape.dash,
++                kind = DefKind.Scalar, headerValue = "", headerComment = headerComment,
++                entries = emptyList(), lines = blockLines, startLine1 = startIndex + 1, path = path,
++            )
++        }
++
++        val firstBody = blockLines[nonBlank.first()]
++        // 缩进后的 flow 根（`k: &u` + 缩进一行的 `{a: 1}`）必须先判定 Unknown：否则 MapEntryRegex 会
++        // 把 `{a` 当成键名、把 `1}` 当成值，逐项编辑就成了对着 flow 容器瞎猜。
++        val flowRoot = firstBody.trimStart()
++        val kind = when {
++            SeqItemRegex.matches(firstBody) -> DefKind.Seq
++            flowRoot.startsWith("{") || flowRoot.startsWith("[") -> DefKind.Unknown
++            MapEntryRegex.matches(firstBody) -> DefKind.Map
++            else -> DefKind.Unknown
++        }
++        if (kind == DefKind.Unknown) {
++            return DefBlock(
++                name = name, keyDisplay = shape.key, keyRaw = shape.keyRaw, indent = shape.indent, dash = shape.dash,
++                kind = DefKind.Unknown, headerValue = "", headerComment = headerComment,
++                entries = emptyList(), lines = blockLines, startLine1 = startIndex + 1, path = path,
++            )
++        }
++
++        val entries = mutableListOf<DefEntrySeed>()
++        var i = bodyStart
++        while (i <= bodyEnd) {
++            val line = blockLines[i]
++            if (line.isBlank() || AnchorScan.indentOf(line) <= shape.indent) {
++                i++
++                continue
++            }
++            val m = if (kind == DefKind.Seq) SeqItemRegex.find(line) else MapEntryRegex.find(line)
++            if (m == null) {
++                i++
++                continue
++            }
++            var end = i
++            var j = i + 1
++            while (j <= bodyEnd) {
++                val next = blockLines[j]
++                if (next.isBlank()) {
++                    j++
++                    continue
++                }
++                if (AnchorScan.indentOf(next) > AnchorScan.indentOf(line)) {
++                    end = j
++                    j++
++                } else {
++                    break
++                }
++            }
++            val rawValue = if (kind == DefKind.Seq) m.groupValues[2].trim() else m.groupValues[3].trim()
++            entries += DefEntrySeed(
++                keyRaw = if (kind == DefKind.Seq) "" else m.groupValues[2].trim(),
++                value = AnchorScan.withoutComment(rawValue).trim(),
++                comment = AnchorScan.trailingComment(line),
++                indent = m.groupValues[1],
++                startIdx = i,
++                endIdx = end,
++                nested = end > i,
++            )
++            i = end + 1
++        }
++        return DefBlock(
++            name = name, keyDisplay = shape.key, keyRaw = shape.keyRaw, indent = shape.indent, dash = shape.dash,
++            kind = kind, headerValue = "", headerComment = headerComment,
++            entries = entries, lines = blockLines, startLine1 = startIndex + 1, path = path,
++        )
++    }
++
++    /**
++     * 按 [rows] 生成新的块文本：改过值的行整行重写（保留行尾注释），删掉的行连同其嵌套子行一起消失，
++     * 其余行逐字保留，新增行追加在块尾。
++     */
++    fun render(block: DefBlock, rows: List<DefRow>): String {
++        if (block.kind == DefKind.Scalar) {
++            val value = rows.firstOrNull()?.value.orEmpty()
++            return renderHeader(block, value)
++        }
++        if (block.kind == DefKind.Unknown) return block.lines.joinToString("\n")
++
++        val out = ArrayList<String>(block.lines.size + 4)
++        out += block.lines[0]
++        var idx = 1
++        while (idx < block.lines.size) {
++            val seed = block.entries.firstOrNull { it.startIdx == idx }
++            if (seed == null) {
++                out += block.lines[idx]
++                idx++
++                continue
++            }
++            val row = rows.firstOrNull { it.seed === seed }
++            when {
++                row == null -> Unit // 删除：连同 startIdx..endIdx 一起跳过
++                seed.nested || row.value == seed.value -> out.addAll(block.lines.subList(seed.startIdx, seed.endIdx + 1))
++                else -> out += renderEntry(block, seed.keyRaw, row.value, seed.comment, seed.indent)
++            }
++            idx = seed.endIdx + 1
++        }
++        rows.filter { it.seed == null }.forEach { row ->
++            out += renderEntry(block, row.key, row.value, "", defaultIndent(block))
++        }
++        return out.joinToString("\n")
++    }
++
++    private fun renderHeader(block: DefBlock, value: String): String {
++        val sb = StringBuilder()
++        sb.append(" ".repeat(block.indent))
++        if (block.dash) sb.append("- ")
++        sb.append(block.keyRaw).append(": &").append(block.name)
++        if (value.isNotEmpty()) sb.append(' ').append(value)
++        if (block.headerComment.isNotEmpty()) sb.append(' ').append(block.headerComment)
++        return sb.toString()
++    }
++
++    private fun renderEntry(block: DefBlock, keyRaw: String, value: String, comment: String, indent: String): String {
++        val sb = StringBuilder()
++        sb.append(indent)
++        if (block.kind == DefKind.Seq) {
++            sb.append("-")
++            if (value.isNotEmpty()) sb.append(' ').append(value)
++        } else {
++            sb.append(keyRaw).append(':')
++            if (value.isNotEmpty()) sb.append(' ').append(value)
++        }
++        if (comment.isNotEmpty()) sb.append(' ').append(comment)
++        return sb.toString()
++    }
++
++    private fun defaultIndent(block: DefBlock): String {
++        val existing = block.entries.firstOrNull { it.indent.length > block.indent }?.indent
++        return existing ?: " ".repeat(block.indent + 2)
++    }
++
++    /**
++     * 新建顶层定义块：内容少且不长时压成一行 flow（mihomo_box 的 160 字符规则），
++     * 否则退回块式——两者对 mihomo 等价，前者在人读的配置里更省行。
++     */
++    fun buildTopBlock(topKey: String, anchor: String, rows: List<DefRow>): String {
++        val pairs = rows.map { it.key to it.value }
++        val inline = pairs.joinToString(", ") { (key, value) -> if (value.isEmpty()) "$key:" else "$key: $value" }
++        val oneLine = "$topKey: &$anchor {$inline}"
++        if (oneLine.length <= 160 && pairs.isNotEmpty()) return oneLine
++        val sb = StringBuilder()
++        sb.append(topKey).append(": &").append(anchor)
++        pairs.forEach { (key, value) ->
++            sb.append('\n').append("  ").append(key).append(':')
++            if (value.isNotEmpty()) sb.append(' ').append(value)
++        }
++        return sb.toString()
++    }
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
+new file mode 100644
+index 0000000..53d4105
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
+@@ -0,0 +1,818 @@
++package top.yukonga.mishka.custom.anchor
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.Immutable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateListOf
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberUpdatedState
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.TextStyle
++import androidx.compose.ui.text.font.FontFamily
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.DpSize
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import top.yukonga.mishka.R
++import top.yukonga.mishka.ui.theme.StatusColors
++import top.yukonga.miuix.kmp.basic.ButtonDefaults
++import top.yukonga.miuix.kmp.basic.DropdownDefaults
++import top.yukonga.miuix.kmp.basic.DropdownEntry
++import top.yukonga.miuix.kmp.basic.DropdownItem
++import top.yukonga.miuix.kmp.basic.Icon
++import top.yukonga.miuix.kmp.basic.IconButton
++import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.basic.TextButton
++import top.yukonga.miuix.kmp.basic.TextField
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Delete
++import top.yukonga.miuix.kmp.popup.WindowDropdownDialog
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++import top.yukonga.miuix.kmp.window.WindowDialog
++
++/**
++ * 锚点面板的四个子对话框：编辑定义块 / 编辑引用行 / 新建 / 改名，外加删除确认。
++ *
++ * 约定：对话框**自己不落地任何文本**——只把「用户意图」算成新的文本片段交回面板，
++ * 由面板走同一条 [MishkaAnchorPanel] 落地通道（整篇替换 + 跳转 + 提示）。
++ * 这样面板与编辑器永远只有一个写入点，撤销也是一步一个单元。
++ */
++
++private val CompactInsideMargin = DpSize(12.dp, 10.dp)
++
++/** 新增参数/列表项的报错文案占位名。 */
++private const val NewParamLabel = "新参数"
++
++/**
++ * 可视化表单的一行草稿：[seed] 为 null 表示这一行是新加的。
++ * key/value 是 Compose state——输入即触发重组，校验与预览跟着一起更新。
++ */
++private class RowDraft(val seed: DefEntrySeed?, key: String, value: String) {
++    var key by mutableStateOf(key)
++    var value by mutableStateOf(value)
++}
++
++private data class RowsResult(val rows: List<DefRow>?, val error: String)
++
++/**
++ * 把表单草稿校验成可渲染的行。规则与参考实现一致：
++ * 值按「单行标量或行内 flow」规范化（[YamlValue.normalize]），键名沿用原文（已有行不改名），
++ * 嵌套多行的值不在这里改、原样回写（要改请切「文本」），空表直接拒绝（删整块请用卡片上的「删除」）。
++ */
++private fun resolveBlock(block: DefBlock, drafts: List<RowDraft>, scalar: String): RowsResult {
++    if (block.kind == DefKind.Scalar) {
++        val value = YamlValue.normalize(scalar)
++            ?: return RowsResult(null, "这个值不是合法 YAML：引号或括号没闭合，或者裸文本里出现了 `: `")
++        return RowsResult(listOf(DefRow(null, "", value)), "")
++    }
++    val out = mutableListOf<DefRow>()
++    val seen = mutableSetOf<String>()
++    for (draft in drafts) {
++        val seed = draft.seed
++        if (seed != null && seed.nested) {
++            out += DefRow(seed, seed.keyRaw, seed.value)
++            continue
++        }
++        val label = if (seed != null) seed.keyRaw else draft.key.ifBlank { NewParamLabel }
++        val value = YamlValue.normalize(draft.value)
++            ?: return RowsResult(null, "「$label」的值不是合法 YAML")
++        if (block.kind == DefKind.Seq) {
++            out += DefRow(seed, "", value)
++            continue
++        }
++        val key = if (seed != null) {
++            seed.keyRaw
++        } else {
++            YamlValue.normalizeKey(draft.key)
++                ?: return RowsResult(null, "参数名「${draft.key}」不合法：不能为空，也不能含 : # & * ! | >")
++        }
++        if (!seen.add(key)) return RowsResult(null, "参数「$key」出现两次，YAML 会以后一个为准")
++        out += DefRow(seed, key, value)
++    }
++    if (out.isEmpty()) return RowsResult(null, "至少保留一个参数；要整块删掉请用卡片上的「删除」")
++    return RowsResult(out, "")
++}
++
++// ==================== 编辑定义块 ====================
++
++@Composable
++internal fun AnchorDefEditDialog(
++    block: DefBlock,
++    onDismiss: () -> Unit,
++    onApply: (String) -> Unit,
++) {
++    val original = remember(block) { block.lines.joinToString("\n") }
++    var textMode by remember(block) { mutableStateOf(!block.visual) }
++    var headerValue by remember(block) { mutableStateOf(block.headerValue) }
++    var textDraft by remember(block) { mutableStateOf(original) }
++    val drafts = remember(block) {
++        mutableStateListOf<RowDraft>().apply {
++            block.entries.forEach { add(RowDraft(it, it.keyRaw, it.value)) }
++        }
++    }
++
++    val result = if (textMode) RowsResult(null, "") else resolveBlock(block, drafts, headerValue)
++    val rendered = result.rows?.let { AnchorBlock.render(block, it) }
++    val textTrimmed = textDraft.trim('\n')
++    val canApply = if (textMode) {
++        textTrimmed.isNotEmpty() && textTrimmed != original
++    } else {
++        result.error.isEmpty() && rendered != null && rendered != original
++    }
++    val anchorGone = textMode && !textDraft.contains("&" + block.name)
++
++    WindowDialog(
++        show = true,
++        title = "编辑 &${block.name}",
++        summary = "${block.path} · L${block.startLine1} 起 ${block.lineCount} 行 · ${describeKind(block)}",
++        onDismissRequest = onDismiss,
++    ) {
++        if (block.visual) {
++            ModeSwitch(textMode = textMode, onMode = { textMode = it })
++            Spacer(Modifier.height(8.dp))
++        }
++        Column(
++            modifier = Modifier
++                .fillMaxWidth()
++                .heightIn(max = 360.dp)
++                .verticalScroll(rememberScrollState()),
++        ) {
++            when {
++                textMode -> {
++                    TextField(
++                        value = textDraft,
++                        onValueChange = { textDraft = it },
++                        modifier = Modifier.fillMaxWidth(),
++                        label = "整块原文（含 &${block.name}）",
++                        insideMargin = CompactInsideMargin,
++                        textStyle = MonoTextStyle,
++                        singleLine = false,
++                        minLines = 6,
++                        maxLines = 14,
++                    )
++                    if (anchorGone) {
++                        DialogWarn("这一段里已经没有 &${block.name}：应用后其它引用会变成悬空别名（mihomo 拒绝加载），要用卡片上的「删除」来摘锚点。")
++                    } else if (block.kind == DefKind.Unknown) {
++                        DialogHint("这块的形态（flow 根 / 混合层级）不适合逐项编辑，先在这里改原文最稳。")
++                    }
++                }
++
++                block.kind == DefKind.Scalar -> {
++                    DialogHint("这个锚点直接挂在标量值上：`${block.keyRaw}: &${block.name} <值>`。")
++                    Spacer(Modifier.height(8.dp))
++                    TextField(
++                        value = headerValue,
++                        onValueChange = { headerValue = it },
++                        modifier = Modifier.fillMaxWidth(),
++                        label = "值",
++                        insideMargin = CompactInsideMargin,
++                        textStyle = MonoTextStyle,
++                        singleLine = true,
++                    )
++                }
++
++                else -> {
++                    DialogHint(
++                        if (block.kind == DefKind.Map) {
++                            "键名沿用原文（要改键名用卡片上的「改名」）；值支持单行标量与 `[..]` / `{..}`。"
++                        } else {
++                            "每行一个列表项；值支持单行标量与 `[..]` / `{..}`。"
++                        },
++                    )
++                    Spacer(Modifier.height(6.dp))
++                    drafts.forEach { draft ->
++                        val nested = draft.seed?.nested == true
++                        Row(
++                            modifier = Modifier
++                                .fillMaxWidth()
++                                .padding(bottom = 8.dp),
++                            verticalAlignment = Alignment.CenterVertically,
++                            horizontalArrangement = Arrangement.spacedBy(8.dp),
++                        ) {
++                            if (nested) {
++                                Text(
++                                    text = "嵌套块（${(draft.seed?.endIdx ?: 0) - (draft.seed?.startIdx ?: 0) + 1} 行）· 请切「文本」编辑",
++                                    modifier = Modifier.weight(1f),
++                                    fontSize = 12.sp,
++                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                                )
++                            } else {
++                                if (draft.seed == null) {
++                                    TextField(
++                                        value = draft.key,
++                                        onValueChange = { draft.key = it },
++                                        modifier = Modifier.weight(1f),
++                                        label = "参数名",
++                                        insideMargin = CompactInsideMargin,
++                                        textStyle = MonoTextStyle,
++                                        singleLine = true,
++                                    )
++                                } else {
++                                    Text(
++                                        text = draft.key,
++                                        modifier = Modifier.weight(1f),
++                                        fontFamily = FontFamily.Monospace,
++                                        fontSize = 13.sp,
++                                        color = MiuixTheme.colorScheme.onSurfaceSecondary,
++                                        maxLines = 1,
++                                        overflow = TextOverflow.Ellipsis,
++                                    )
++                                }
++                                TextField(
++                                    value = draft.value,
++                                    onValueChange = { draft.value = it },
++                                    modifier = Modifier.weight(1.4f),
++                                    label = if (block.kind == DefKind.Seq) "值" else "YAML 值",
++                                    insideMargin = CompactInsideMargin,
++                                    textStyle = MonoTextStyle,
++                                    singleLine = true,
++                                )
++                            }
++                            IconButton(
++                                onClick = { drafts.remove(draft) },
++                                minWidth = 32.dp,
++                                minHeight = 32.dp,
++                            ) {
++                                Icon(
++                                    imageVector = MiuixIcons.Delete,
++                                    contentDescription = "删除这一行",
++                                    tint = StatusColors.danger,
++                                )
++                            }
++                        }
++                    }
++                    TextButton(
++                        text = if (block.kind == DefKind.Map) "＋ 添加参数" else "＋ 添加列表项",
++                        onClick = { drafts.add(RowDraft(seed = null, key = "", value = "")) },
++                        minWidth = 0.dp,
++                        minHeight = 36.dp,
++                        insideMargin = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
++                        textStyle = MiuixTheme.textStyles.button.copy(fontSize = 14.sp),
++                    )
++                }
++            }
++            if (!textMode && block.visual) {
++                if (result.error.isNotEmpty()) DialogWarn(result.error)
++                rendered?.let { CodePreview(caption = "应用后写回这一段：", text = it) }
++            }
++        }
++        DialogActions(
++            confirmText = "应用",
++            confirmEnabled = canApply,
++            onCancel = onDismiss,
++            onConfirm = { onApply(if (textMode) textTrimmed else rendered.orEmpty()) },
++        )
++    }
++}
++
++private fun describeKind(block: DefBlock): String = when (block.kind) {
++    DefKind.Map -> "映射：${block.entries.size} 项"
++    DefKind.Seq -> "序列：${block.entries.size} 项"
++    DefKind.Scalar -> "标量值"
++    DefKind.Unknown -> "复杂形态"
++}
++
++// ==================== 编辑引用行 ====================
++
++@Composable
++internal fun AnchorRefEditDialog(
++    anchor: String,
++    ref: AnchorRefLoc,
++    names: List<String>,
++    candidates: List<String>,
++    onDismiss: () -> Unit,
++    onRebind: (String?) -> Unit,
++    onApplyText: (String) -> Unit,
++) {
++    val shape = remember(ref) { AnchorEdit.parseRefLine(ref.text) }
++    var textMode by remember(ref) { mutableStateOf(shape == null) }
++    var picked by remember(ref) { mutableStateOf<String?>(anchor) }
++    var picker by remember(ref) { mutableStateOf(false) }
++    var textDraft by remember(ref) { mutableStateOf(ref.text) }
++
++    val isMerge = shape?.key == null
++    val known = anchor in names
++    // 候选表由面板算好（定义在前 + 合并目标必须是映射）；这里只负责提示为什么列表可能是空的。
++    val noCandidateReason = when {
++        candidates.isNotEmpty() -> ""
++        isMerge -> "没有可继承的锚点：`<<:` 只能指向**定义在这一行之前**的映射锚点——YAML 没有前向别名，也不能把 `<<:` 挂到标量/序列上。"
++        else -> "这一行之前还没有任何 `&定义`：YAML 的别名只能引用前面定义过的锚点（要新建请回面板点「新建」）。"
++    }
++    val canApply = if (textMode) textDraft.trimEnd() != ref.text else picked != anchor
++
++    WindowDialog(
++        show = true,
++        title = "编辑引用 L${ref.line}",
++        summary = "${ref.path} · " + (if (isMerge) "合并继承 `<<:`" else "字段引用 `*`") +
++            if (known) "" else "（当前是悬空引用，换绑到已有锚点即可修好）",
++        onDismissRequest = onDismiss,
++    ) {
++        if (shape != null) {
++            ModeSwitch(textMode = textMode, onMode = { textMode = it })
++            Spacer(Modifier.height(8.dp))
++        }
++        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
++            if (textMode) {
++                TextField(
++                    value = textDraft,
++                    onValueChange = { textDraft = it },
++                    modifier = Modifier.fillMaxWidth(),
++                    label = "整行原文",
++                    insideMargin = CompactInsideMargin,
++                    textStyle = MonoTextStyle,
++                    singleLine = false,
++                    minLines = 2,
++                    maxLines = 4,
++                )
++                DialogHint(
++                    if (shape == null) {
++                        "这一行的形态不适合按钮改绑（可能一次引用多个锚点，或写法特殊），在这里直接改原文。"
++                    } else {
++                        "整行都会被替换掉，注意别把同一行的其它内容（比如 `- ` 前缀）丢了。"
++                    },
++                )
++            } else {
++                DialogHint(if (isMerge) "把 `<<:` 改绑到别的锚点，或改成「不继承」（等于删掉这一行）。" else "把这个字段的值引用改绑到别的锚点。")
++                Spacer(Modifier.height(8.dp))
++                Row(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .clip(RoundedCornerShape(12.dp))
++                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
++                        .padding(horizontal = 14.dp, vertical = 12.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                ) {
++                    Text(
++                        text = (if (isMerge) "<<: " else "${shape?.key ?: ""}: ") + (picked?.let { "*$it" } ?: "（不继承）"),
++                        modifier = Modifier.weight(1f),
++                        fontFamily = FontFamily.Monospace,
++                        fontSize = 14.sp,
++                        color = MiuixTheme.colorScheme.onSurface,
++                        maxLines = 1,
++                        overflow = TextOverflow.Ellipsis,
++                    )
++                    TextButton(
++                        text = "选择",
++                        onClick = { picker = true },
++                        minWidth = 0.dp,
++                        minHeight = 34.dp,
++                        insideMargin = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
++                        textStyle = MiuixTheme.textStyles.button.copy(fontSize = 14.sp),
++                    )
++                }
++                if (!known) {
++                    DialogHint("提示：`*$anchor` 现在没有对应的 `&$anchor` 定义，换绑到下面列表里的锚点即可修好。")
++                }
++                if (noCandidateReason.isNotEmpty()) DialogHint(noCandidateReason)
++                CodePreview(caption = "当前行：", text = ref.text)
++            }
++        }
++        DialogActions(
++            confirmText = "应用",
++            confirmEnabled = canApply,
++            onCancel = onDismiss,
++            onConfirm = { if (textMode) onApplyText(textDraft.trimEnd()) else onRebind(picked) },
++        )
++    }
++
++    if (picker) {
++        AnchorPickerDialog(
++            current = picked,
++            names = candidates,
++            allowInheritOff = isMerge,
++            onDismiss = { picker = false },
++            onPick = {
++                picked = it
++                picker = false
++            },
++        )
++    }
++}
++
++/** 选锚点：已有锚点清单 + （合并行才有的）「不继承」。 */
++@Composable
++private fun AnchorPickerDialog(
++    current: String?,
++    names: List<String>,
++    allowInheritOff: Boolean,
++    onDismiss: () -> Unit,
++    onPick: (String?) -> Unit,
++) {
++    val currentOnPick by rememberUpdatedState(onPick)
++    val options = remember(names, allowInheritOff) {
++        buildList {
++            if (allowInheritOff) add(null to "(不继承)")
++            names.forEach { add(it to "*$it") }
++        }
++    }
++    val entry = remember(options, current) {
++        DropdownEntry(
++            options.map { (value, label) ->
++                DropdownItem(
++                    text = label,
++                    selected = value == current,
++                    onClick = { currentOnPick(value) },
++                )
++            },
++        )
++    }
++    WindowDropdownDialog(
++        entry = entry,
++        title = "选择锚点",
++        dialogButtonString = stringResource(R.string.common_cancel),
++        show = true,
++        onDismiss = onDismiss,
++        onDismissFinished = {},
++        dropdownColors = DropdownDefaults.dialogDropdownColors(),
++    )
++}
++
++// ==================== 新建锚点 ====================
++
++@Composable
++internal fun AnchorCreateDialog(
++    existingNames: List<String>,
++    existingTopKeys: List<String>,
++    onDismiss: () -> Unit,
++    onApply: (topKey: String, anchorName: String, rows: List<DefRow>) -> Unit,
++) {
++    var topKey by remember { mutableStateOf("") }
++    var anchorName by remember { mutableStateOf("") }
++    val drafts = remember { mutableStateListOf(RowDraft(seed = null, key = "", value = "")) }
++
++    val key = YamlValue.normalizeTopKey(topKey)
++    val nameOk = AnchorScan.isValidName(anchorName) && anchorName !in existingNames
++    val error = when {
++        anchorName.isNotEmpty() && !AnchorScan.isValidName(anchorName) ->
++            "锚点名只能用字母/下划线开头，可含 . - _（YAML 锚点语法的常见写法）"
++
++        anchorName.isNotEmpty() && anchorName in existingNames -> "&$anchorName 已存在：直接给已有锚点「改名/编辑」更合适"
++        topKey.isEmpty() -> ""
++        key == null -> "顶层条目名不能含空格或 : # & * 等 YAML 特殊符号"
++        key in existingTopKeys -> "配置里已有顶层键「$key」，换一个名字（内核会以后一个为准）"
++        else -> ""
++    }
++    val prepared = if (key != null && nameOk) {
++        val built = resolveBlock(CreateTemplate, drafts, "")
++        built.error.ifEmpty { AnchorBlock.buildTopBlock(key, anchorName, built.rows.orEmpty()) }
++    } else {
++        ""
++    }
++    val filled = drafts.any { it.key.isNotBlank() || it.value.isNotBlank() }
++    val canApply = error.isEmpty() && key != null && nameOk && filled && prepared.isNotEmpty()
++
++    WindowDialog(
++        show = true,
++        title = "新建锚点",
++        summary = "建一个顶层定义块并插到文件头，别处就能用 `<<: *名字` 继承它",
++        onDismissRequest = onDismiss,
++    ) {
++        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
++            TextField(
++                value = topKey,
++                onValueChange = { topKey = it },
++                modifier = Modifier.fillMaxWidth(),
++                label = "顶层条目名（如 proxies-b2）",
++                insideMargin = CompactInsideMargin,
++                textStyle = MonoTextStyle,
++                singleLine = true,
++            )
++            Spacer(Modifier.height(8.dp))
++            TextField(
++                value = anchorName,
++                onValueChange = { anchorName = it },
++                modifier = Modifier.fillMaxWidth(),
++                label = "锚点名（如 pub）",
++                insideMargin = CompactInsideMargin,
++                textStyle = MonoTextStyle,
++                singleLine = true,
++            )
++            Spacer(Modifier.height(10.dp))
++            DialogHint("内容参数：值支持单行标量与 `[..]` / `{..}`；含 `:` 的文本要加引号。")
++            Spacer(Modifier.height(6.dp))
++            drafts.forEach { draft ->
++                Row(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(bottom = 8.dp),
++                    verticalAlignment = Alignment.CenterVertically,
++                    horizontalArrangement = Arrangement.spacedBy(8.dp),
++                ) {
++                    TextField(
++                        value = draft.key,
++                        onValueChange = { draft.key = it },
++                        modifier = Modifier.weight(1f),
++                        label = "参数名",
++                        insideMargin = CompactInsideMargin,
++                        textStyle = MonoTextStyle,
++                        singleLine = true,
++                    )
++                    TextField(
++                        value = draft.value,
++                        onValueChange = { draft.value = it },
++                        modifier = Modifier.weight(1.3f),
++                        label = "值",
++                        insideMargin = CompactInsideMargin,
++                        textStyle = MonoTextStyle,
++                        singleLine = true,
++                    )
++                    IconButton(
++                        onClick = { drafts.remove(draft) },
++                        minWidth = 32.dp,
++                        minHeight = 32.dp,
++                    ) {
++                        Icon(
++                            imageVector = MiuixIcons.Delete,
++                            contentDescription = "删除这一行",
++                            tint = StatusColors.danger,
++                        )
++                    }
++                }
++            }
++            TextButton(
++                text = "＋ 添加参数",
++                onClick = { drafts.add(RowDraft(seed = null, key = "", value = "")) },
++                minWidth = 0.dp,
++                minHeight = 36.dp,
++                insideMargin = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
++                textStyle = MiuixTheme.textStyles.button.copy(fontSize = 14.sp),
++            )
++            if (error.isNotEmpty()) DialogWarn(error)
++            if (prepared.isNotEmpty()) CodePreview(caption = "确认后插到文件头：", text = prepared)
++        }
++        DialogActions(
++            confirmText = "新建",
++            confirmEnabled = canApply,
++            onCancel = onDismiss,
++            onConfirm = {
++                val built = resolveBlock(CreateTemplate, drafts, "")
++                if (built.rows != null && key != null) onApply(key, anchorName, built.rows)
++            },
++        )
++    }
++}
++
++/** 新建时的校验模板：只要不是 Scalar/Unknown，形状与新建块一致（顶层键 + 缩进两格的映射）。 */
++private val CreateTemplate = DefBlock(
++    name = "",
++    keyDisplay = "",
++    keyRaw = "",
++    indent = 0,
++    dash = false,
++    kind = DefKind.Map,
++    headerValue = "",
++    headerComment = "",
++    entries = emptyList(),
++    lines = emptyList(),
++    startLine1 = 1,
++    path = "",
++)
++
++// ==================== 重命名 ====================
++
++@Composable
++internal fun AnchorRenameDialog(
++    anchor: AnchorInfo,
++    defLineRaw: String,
++    knownNames: List<String>,
++    existingTopKeys: List<String>,
++    onDismiss: () -> Unit,
++    onApply: (newName: String?, newKeyRaw: String?) -> Unit,
++) {
++    val shape = remember(defLineRaw) { AnchorEdit.parseDefLine(defLineRaw) }
++    var newName by remember(anchor, defLineRaw) { mutableStateOf(anchor.name) }
++    var newKey by remember(anchor, defLineRaw) { mutableStateOf(shape?.keyRaw.orEmpty()) }
++
++    val nameChanged = newName != anchor.name
++    val keyChanged = shape != null && newKey.isNotBlank() && newKey != shape.keyRaw
++    val nameError = when {
++        !nameChanged -> ""
++        !AnchorScan.isValidName(newName) -> "锚点名只能用字母/下划线开头，可含 . - _"
++        newName in knownNames -> "&$newName 已被其它锚点占用"
++        else -> ""
++    }
++    val bareKey = newKey.removeSurrounding("\"").removeSurrounding("'")
++    val keyError = when {
++        !keyChanged -> ""
++        YamlValue.normalizeKey(bareKey) == null -> "条目名不能含 : # & * 等 YAML 符号"
++        bareKey in existingTopKeys -> "顶层键「$bareKey」已存在，改完会出现重复键"
++        else -> ""
++    }
++    val canApply = (nameChanged || keyChanged) && nameError.isEmpty() && keyError.isEmpty()
++
++    WindowDialog(
++        show = true,
++        title = "重命名 &${anchor.name}",
++        summary = "改名会级联到 ${anchor.refs.size} 处引用（`<<:` 与 `*值` 一起改）；条目名只改定义行的键",
++        onDismissRequest = onDismiss,
++    ) {
++        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
++            TextField(
++                value = newName,
++                onValueChange = { newName = it },
++                modifier = Modifier.fillMaxWidth(),
++                label = "新锚点名（当前 ${anchor.name}）",
++                insideMargin = CompactInsideMargin,
++                textStyle = MonoTextStyle,
++                singleLine = true,
++            )
++            if (nameError.isNotEmpty()) DialogWarn(nameError)
++            Spacer(Modifier.height(10.dp))
++            if (shape == null) {
++                DialogHint("这个定义行的形态解析不出顶层键（可能是序列项或 flow 根），条目名请在编辑器里改。")
++            } else {
++                TextField(
++                    value = newKey,
++                    onValueChange = { newKey = it },
++                    modifier = Modifier.fillMaxWidth(),
++                    label = "条目名 / 顶层键（当前 ${shape.keyRaw}）",
++                    insideMargin = CompactInsideMargin,
++                    textStyle = MonoTextStyle,
++                    singleLine = true,
++                )
++                if (keyError.isNotEmpty()) DialogWarn(keyError)
++            }
++            CodePreview(caption = "定义行：", text = defLineRaw)
++        }
++        DialogActions(
++            confirmText = "改名",
++            confirmEnabled = canApply,
++            onCancel = onDismiss,
++            onConfirm = {
++                onApply(
++                    if (nameChanged) newName else null,
++                    if (keyChanged) newKey else null,
++                )
++            },
++        )
++    }
++}
++
++// ==================== 删除定义 ====================
++
++@Composable
++internal fun AnchorDropDialog(
++    anchor: AnchorInfo,
++    onDismiss: () -> Unit,
++    onConfirm: () -> Unit,
++) {
++    val def = anchor.primaryDef
++    val shape = remember(def) { def?.let { AnchorEdit.parseDefLine(it.text) } }
++    val keepBlock = shape != null && shape.indent == 0 && !shape.dash && shape.key in AnchorEdit.MIHOMO_TOP_KEYS
++    val blocked = anchor.refs.isNotEmpty()
++
++    WindowDialog(
++        show = true,
++        title = "删除锚点 &${anchor.name}",
++        summary = if (blocked) {
++            "还有 ${anchor.refs.size} 处引用：先把它们改绑到别的锚点，或者删掉这些引用行（卡片上每行都有「编辑 / 删行」）。"
++        } else if (keepBlock) {
++            "「${shape?.key}」是 mihomo 直接读取的配置段，删锚点时只摘掉 &${anchor.name}，块体保留给内核。"
++        } else {
++            "这个顶层条目是为挂 &${anchor.name} 而建的容器，删除时整块一起清掉，不留 `键: 值` 残块。"
++        },
++        onDismissRequest = onDismiss,
++    ) {
++        if (def != null) {
++            CodePreview(caption = "将处理的定义行（L${def.line}）：", text = def.text)
++        }
++        DialogActions(
++            confirmText = stringResource(R.string.common_delete),
++            confirmEnabled = !blocked,
++            onCancel = onDismiss,
++            onConfirm = onConfirm,
++        )
++    }
++}
++
++// ==================== 共用小组件 ====================
++
++private val MonoTextStyle: TextStyle
++    @Composable get() = MiuixTheme.textStyles.main.copy(
++        fontFamily = FontFamily.Monospace,
++        fontSize = 13.sp,
++    )
++
++@Composable
++private fun DialogActions(
++    confirmText: String,
++    confirmEnabled: Boolean,
++    onCancel: () -> Unit,
++    onConfirm: () -> Unit,
++) {
++    Spacer(Modifier.height(12.dp))
++    Row(
++        modifier = Modifier.fillMaxWidth(),
++        horizontalArrangement = Arrangement.spacedBy(12.dp),
++    ) {
++        TextButton(
++            text = stringResource(R.string.common_cancel),
++            modifier = Modifier.weight(1f),
++            onClick = onCancel,
++        )
++        TextButton(
++            text = confirmText,
++            modifier = Modifier.weight(1f),
++            colors = ButtonDefaults.textButtonColorsPrimary(),
++            enabled = confirmEnabled,
++            onClick = onConfirm,
++        )
++    }
++}
++
++/** 可视化 / 文本 两种编辑方式切换；形态拆不动时只能走文本。 */
++@Composable
++private fun ModeSwitch(textMode: Boolean, onMode: (Boolean) -> Unit) {
++    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++        TextButton(
++            text = "可视化",
++            onClick = { onMode(false) },
++            colors = if (!textMode) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors(),
++            minWidth = 0.dp,
++            minHeight = 34.dp,
++            insideMargin = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
++            textStyle = MiuixTheme.textStyles.button.copy(fontSize = 14.sp),
++        )
++        TextButton(
++            text = "文本",
++            onClick = { onMode(true) },
++            colors = if (textMode) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors(),
++            minWidth = 0.dp,
++            minHeight = 34.dp,
++            insideMargin = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
++            textStyle = MiuixTheme.textStyles.button.copy(fontSize = 14.sp),
++        )
++    }
++}
++
++@Composable
++private fun DialogHint(text: String) {
++    Text(
++        text = text,
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(top = 6.dp),
++        fontSize = 12.sp,
++        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++    )
++}
++
++@Composable
++private fun DialogWarn(text: String) {
++    Text(
++        text = text,
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(top = 6.dp),
++        fontSize = 12.sp,
++        color = StatusColors.danger,
++    )
++}
++
++/** 等宽预览块：应用后会写回去的那段文本，逐字展示。 */
++@Composable
++private fun CodePreview(caption: String, text: String) {
++    Spacer(Modifier.height(10.dp))
++    Text(
++        text = caption,
++        fontSize = 12.sp,
++        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++    )
++    Spacer(Modifier.height(4.dp))
++    Column(
++        modifier = Modifier
++            .fillMaxWidth()
++            .heightIn(min = 34.dp, max = 140.dp)
++            .clip(RoundedCornerShape(12.dp))
++            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
++            .verticalScroll(rememberScrollState())
++            .padding(horizontal = 12.dp, vertical = 10.dp),
++    ) {
++        Text(
++            text = text,
++            fontFamily = FontFamily.Monospace,
++            fontSize = 12.sp,
++            fontWeight = FontWeight.Normal,
++            color = MiuixTheme.colorScheme.onSurfaceContainerHigh,
++        )
++    }
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
+new file mode 100644
+index 0000000..44c2097
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
+@@ -0,0 +1,426 @@
++package top.yukonga.mishka.custom.anchor
++
++import androidx.compose.runtime.Immutable
++
++/**
++ * 锚点的**行级手术**：所有操作都是「原文进、原文出」，只重写目标块/目标行的字符范围，
++ * 其余行（含 CRLF、空行、行尾空格、注释）一个字节都不动——这是与 mihomo_box 相同的约定，
++ * 也是「改动后仍能跟上游订阅配置对上」的前提。
++ *
++ * 手术结果不做完整 YAML 解析（Kotlin 侧没有 YAML 依赖）：面板在每次改动后立刻重扫锚点图，
++ * 悬空别名、重复定义当场可见；真正的合法性由保存路径上的内核校验兜底（非法 YAML 会阻止保存，
++ * 文件不会被写坏）。见 FileManagerEditorScreen 的 saveWithValidation。
++ */
++
++@Immutable
++data class DefLineShape(
++    val indent: Int,
++    val dash: Boolean,
++    val key: String,
++    val keyRaw: String,
++    val name: String,
++    val value: String,
++)
++
++/** 引用行形态。[key] 为 null 表示 `<<: *x` 合并继承行。 */
++@Immutable
++data class RefLineShape(
++    val indent: String,
++    val key: String?,
++    val comment: String,
++)
++
++sealed interface DropAnchorResult {
++    /** 定义所在的块是 mihomo 真正会读的配置段（mixed-port / dns / proxies …）：只摘 `&名`，块留给内核。 */
++    data class KeptBlock(val text: String) : DropAnchorResult
++
++    /** 为挂 `&名` 而存在的自建容器：整块删干净，不留 `键: 值` 残块。 */
++    data class RemovedBlock(val text: String, val removedLines: Int) : DropAnchorResult
++
++    data object NotFound : DropAnchorResult
++
++    /** 同一名字有多处 `&定义`，无法确定删哪个。 */
++    data class Ambiguous(val count: Int) : DropAnchorResult
++}
++
++object AnchorEdit {
++
++    // 名字字符集与参考实现一致：解析阶段不卡合法性（&9bad 这类名字在 YAML 里合法、
++    // mihomo 也可能照读），合法性只在「新建/改名」时用 AnchorScan.isValidName 校验。
++    private val NamePat = "[^\\s,\\[\\]{}#]+"
++    private val DefLineRegex = Regex("^(\\s*)(-\\s+)?([^:#]+?)\\s*:\\s*&($NamePat)\\s*(.*)$")
++    private val MergeRefRegex = Regex("^(\\s*)<<\\s*:\\s*\\*($NamePat)\\s*(#.*)?$")
++    private val ValueRefRegex = Regex("^(\\s*)([^:\\s#][^:]*?)\\s*:\\s*\\*($NamePat)\\s*(#.*)?$")
++
++    /**
++     * mihomo 内核真正会读的顶层配置段（与 mihomo_box 的 `MIHOMO_TOP_KEYS` 同表）。
++     * 删锚点时这些块只摘 `&名`、保留块体；其余顶层键都是「为挂 `&名` 而存在」的自建容器，
++     * 连块一起删——否则会在配置里留下 `代理合集: {…}` 这种内核不认又删不掉的残块。
++     */
++    val MIHOMO_TOP_KEYS: Set<String> = setOf(
++        "port", "socks-port", "redir-port", "tproxy-port", "mixed-port", "bind-address",
++        "mode", "log-level", "ipv6", "allow-lan", "skip-auth-prefixes", "authentication",
++        "unified-delay", "tcp-concurrent", "interface-name", "routing-mark", "find-process-mode",
++        "global-client-fingerprint", "keep-alive-idle", "keep-alive-interval",
++        "external-controller", "external-controller-cors", "external-controller-pipe",
++        "external-controller-unix", "external-doh-server", "external-ui", "external-ui-url",
++        "external-ui-name", "secret", "geox-url", "geo-auto-update", "geo-update-interval",
++        "geodata-mode", "geodata-loader", "geo-auto-private-network",
++        "tun", "ebpf", "dns", "sniffer", "hosts", "ntp", "profile", "script", "experimental", "tls",
++        "iptables", "listeners", "proxies", "proxy-groups", "rules", "sub-rules",
++        "rule-providers", "proxy-providers", "clash-for-android", "auto-redirect",
++    )
++
++    // ==================== 行形态解析 ====================
++
++    fun parseDefLine(line: String): DefLineShape? {
++        val m = DefLineRegex.find(line) ?: return null
++        return DefLineShape(
++            indent = m.groupValues[1].length,
++            dash = m.groupValues[2].isNotEmpty(),
++            key = unquote(m.groupValues[3].trim()),
++            keyRaw = m.groupValues[3].trim(),
++            name = m.groupValues[4],
++            value = m.groupValues[5].trim(),
++        )
++    }
++
++    /** 引用行形态：`<<: *x` 或 `键: *x`（整行只引用一个锚点）。形态复杂时返回 null。 */
++    fun parseRefLine(line: String): RefLineShape? {
++        MergeRefRegex.find(line)?.let { m ->
++            return RefLineShape(m.groupValues[1], null, m.groupValues[3].trimEnd())
++        }
++        ValueRefRegex.find(line)?.let { m ->
++            return RefLineShape(m.groupValues[1], m.groupValues[2].trim(), m.groupValues[4].trimEnd())
++        }
++        return null
++    }
++
++    /** 该行引用的锚点名（裸文本，可能多个；形态复杂时返回空表）。 */
++    fun refNamesOnLine(line: String): List<String> = AnchorScan.tokensOnLine(line).refs
++
++    // ==================== 手术 ====================
++
++    /** 级联改名：所有裸文本里的 `&旧` / `*旧` 一起改（引号内与注释后的同名文本不动）。 */
++    fun renameAnchor(text: String, from: String, to: String): String {
++        if (from == to) return text
++        return text.split('\n').joinToString("\n") { replaceTokenInLine(it, from, to) }
++    }
++
++    /** 只改定义行的顶层键（引用不动）。 */
++    fun renameDefKey(text: String, defLine1: Int, newKeyRaw: String): String? {
++        val lines = text.split('\n').toMutableList()
++        val idx = defLine1 - 1
++        val shape = lines.getOrNull(idx)?.let { parseDefLine(it) } ?: return null
++        val comment = AnchorScan.trailingComment(lines[idx])
++        val value = AnchorScan.withoutComment(shape.value).trimEnd() // 注释已单独取出，别拼两遍
++        val sb = StringBuilder()
++        sb.append(" ".repeat(shape.indent))
++        if (shape.dash) sb.append("- ")
++        sb.append(newKeyRaw).append(": &").append(shape.name)
++        if (value.isNotEmpty()) sb.append(' ').append(value)
++        if (comment.isNotEmpty()) sb.append(' ').append(comment)
++        lines[idx] = sb.toString()
++        return lines.joinToString("\n")
++    }
++
++    /** 删除整行（清除 `<<: *x` 继承、删除悬空引用行）。 */
++    fun deleteLine(text: String, line1: Int): String {
++        val lines = text.split('\n').toMutableList()
++        if (line1 - 1 !in lines.indices) return text
++        lines.removeAt(line1 - 1)
++        return lines.joinToString("\n")
++    }
++
++    /** 改绑引用行：[newName] 为 null 时等于删除该行（`<<:` 行的「不继承」）。 */
++    fun rebindRefLine(text: String, line1: Int, newName: String?): String? {
++        val lines = text.split('\n').toMutableList()
++        val idx = line1 - 1
++        val raw = lines.getOrNull(idx) ?: return null
++        val shape = parseRefLine(raw) ?: return null
++        if (newName == null) {
++            if (shape.key != null) return null // 值引用没有「清除」语义：要么换绑，要么删掉整个键
++            lines.removeAt(idx)
++            return lines.joinToString("\n")
++        }
++        val comment = if (shape.comment.isEmpty()) "" else " " + shape.comment
++        lines[idx] = if (shape.key == null) {
++            shape.indent + "<<: *" + newName + comment
++        } else {
++            shape.indent + shape.key + ": *" + newName + comment
++        }
++        return lines.joinToString("\n")
++    }
++
++    /**
++     * 删除锚点定义。内核配置段只摘 `&名`（块是配置本身，不能删）；自建容器整块删。
++     * 有多处定义时拒绝（无法确定删哪个），由面板提示用户去源码处理。
++     */
++    fun dropAnchor(text: String, name: String): DropAnchorResult {
++        val lines = text.split('\n')
++        val defIndexes = lines.indices.filter { AnchorScan.tokensOnLine(lines[it]).defs.contains(name) }
++        if (defIndexes.isEmpty()) return DropAnchorResult.NotFound
++        if (defIndexes.size > 1) return DropAnchorResult.Ambiguous(defIndexes.size)
++        val index = defIndexes.first()
++        // 只有「缩进 0 的 键: &名」才算顶层定义块；解析不出顶层键（流式根、序列项…）
++        // 一律只摘 &名，不猜块边界。
++        val topKey = parseDefLine(lines[index])?.takeIf { it.indent == 0 && !it.dash }?.key
++        if (topKey == null || topKey in MIHOMO_TOP_KEYS) {
++            val out = lines.toMutableList()
++            out[index] = stripAnchorToken(lines[index], name)
++            return DropAnchorResult.KeptBlock(out.joinToString("\n"))
++        }
++        // 自建容器（为挂 &名 而建的顶层条目）整块删。空行处理与 mihomo_box 一致：
++        // 删的是文件里第一块有内容的定义 → 连块后的空行一起收（文件头不留空白）；
++        // 否则块尾空行留在原地当段落间距，只收掉块前多出来的那一行空行。
++        var sectionStart = lines.size
++        for (i in index + 1 until lines.size) {
++            val line = lines[i]
++            if (line.isBlank()) continue
++            if (!line[0].isWhitespace()) {
++                sectionStart = i
++                break
++            }
++        }
++        val firstContent = index == 0 || lines.subList(0, index).all { it.isBlank() }
++        var cut = sectionStart
++        if (firstContent) {
++            while (cut < lines.size && lines[cut].isBlank()) cut++
++        } else {
++            while (cut > index + 1 && lines[cut - 1].isBlank()) cut--
++        }
++        val out = lines.toMutableList()
++        repeat(cut - index) { out.removeAt(index) }
++        if (firstContent) {
++            while (out.isNotEmpty() && out[0].isBlank()) out.removeAt(0)
++        } else if (index > 0 && out[index - 1].isBlank() && (index >= out.size || out[index].isBlank())) {
++            out.removeAt(index - 1)
++        }
++        // 删行数按**实际**差值报（含收掉的空行），别用 cut-index：折叠空行时那个数会偏小
++        return DropAnchorResult.RemovedBlock(out.joinToString("\n"), lines.size - out.size)
++    }
++
++    /** 用 [replacement] 替换 [startLine1]..[endLine1] 整块（行级替换，其余原文不动）。 */
++    fun replaceLines(text: String, startLine1: Int, endLine1: Int, replacement: String): String {
++        val lines = text.split('\n')
++        val start = (startLine1 - 1).coerceIn(0, lines.size)
++        val end = (endLine1 - 1).coerceIn(0, lines.size - 1)
++        if (end < start) return text
++        val out = ArrayList<String>(lines.size + 4)
++        out.addAll(lines.subList(0, start))
++        if (replacement.isNotEmpty()) out.addAll(replacement.split('\n'))
++        if (end + 1 <= lines.lastIndex) out.addAll(lines.subList(end + 1, lines.size))
++        return out.joinToString("\n")
++    }
++
++    /** 新块插到文件头（mihomo_box 的 `newtop` 同行为：定义块集中放文件开头，便于各处 `<<:` 引用）。 */
++    fun insertTopBlock(text: String, block: String): String {
++        val body = block.trim('\n')
++        if (body.isEmpty()) return text
++        return if (text.isBlank()) "$body\n" else "$body\n$text"
++    }
++
++    /** 顶层键是否已被占用（含刚录入、尚未保存的手工编辑）。 */
++    fun hasTopLevelKey(text: String, key: String): Boolean {
++        val regex = Regex("^" + Regex.escape(key) + "\\s*:(\\s|$|#)")
++        return text.split('\n').any { regex.containsMatchIn(it) }
++    }
++
++    /** 现有顶层键清单（缩进 0 的 `键:` 行），用于新建/改名时的重名检查。 */
++    fun topLevelKeys(text: String): List<String> {
++        val regex = Regex("^([^\\s:#][^:]*?)\\s*:")
++        return text.split('\n').mapNotNull { line ->
++            if (line.isEmpty() || line[0] == ' ' || line[0] == '\t' || line[0] == '#') return@mapNotNull null
++            regex.find(line)?.groupValues?.get(1)?.trim()?.removeSurrounding("\"")?.removeSurrounding("'")
++        }.distinct()
++    }
++
++    // ==================== 内部工具 ====================
++
++    /** 把裸文本里的 `&name` / `*name` 换成同名新锚点。 */
++    private fun replaceTokenInLine(line: String, name: String, to: String): String {
++        if (line.indexOf('&') < 0 && line.indexOf('*') < 0) return line
++        val mask = AnchorScan.bareMask(line)
++        val sb = StringBuilder(line.length + 8)
++        var i = 0
++        while (i < line.length) {
++            val c = line[i]
++            if ((c == '&' || c == '*') && mask[i]) {
++                val end = i + 1 + name.length
++                if (end <= line.length && line.regionMatches(i + 1, name, 0, name.length) && isTokenEnd(line, end)) {
++                    sb.append(c).append(to)
++                    i = end
++                    continue
++                }
++            }
++            sb.append(c)
++            i++
++        }
++        return sb.toString()
++    }
++
++    /** 锚点 token 的结束边界，与 mihomo_box 的 `(?=$|[\s,[\]{}#])` 一致。 */
++    private fun isTokenEnd(line: String, index: Int): Boolean {
++        if (index >= line.length) return true
++        return when (val c = line[index]) {
++            ' ', '\t', ',', '[', ']', '{', '}', '#' -> true
++            else -> c.isWhitespace()
++        }
++    }
++
++    /**
++     * 摘掉定义行上的 `&名`，顺带修好留下的空格：`键: &名 值` → `键: 值`、`键: &名` → `键:`。
++     * 序列项（`- &名 {…}`）同样处理。
++     */
++    private fun stripAnchorToken(line: String, name: String): String {
++        val mask = AnchorScan.bareMask(line)
++        var tokenStart = -1
++        for (i in line.indices) {
++            if (line[i] != '&' || !mask[i]) continue
++            val end = i + 1 + name.length
++            if (end <= line.length && line.regionMatches(i + 1, name, 0, name.length) && isTokenEnd(line, end)) {
++                tokenStart = i
++                val head = line.substring(0, i)
++                var tail = line.substring(end)
++                if (head.trimEnd().endsWith(":")) {
++                    // 锚点后面原本就是值（或注释），补一个空格把它接回键上
++                    val rest = tail.trimStart(' ')
++                    return if (rest.isEmpty()) head.trimEnd() else head.trimEnd() + " " + rest
++                }
++                tail = tail.trimStart(' ')
++                return if (tail.isEmpty()) head.trimEnd() else head + tail
++            }
++        }
++        return if (tokenStart < 0) line else line
++    }
++
++    private fun unquote(raw: String): String =
++        raw.removeSurrounding("\"").removeSurrounding("'").trim()
++}
++
++/**
++ * 单行 YAML 值的规范化与自检。参数框里的值按「标量或行内 flow」处理：
++ * 行尾注释剥掉（与 mihomo_box 的 js-yaml 往返同理），形态明显写坏的直接拒绝并让 UI 报错，
++ * 不把半截值写进配置。
++ */
++object YamlValue {
++
++    fun normalize(raw: String): String? {
++        val trimmed = raw.trim()
++        if (trimmed.isEmpty()) return ""
++        if (trimmed.startsWith("&")) return null // 值里的锚点定义请用「文本」模式写
++        if (trimmed.startsWith("|") || trimmed.startsWith(">")) return null // 块标量不是单行值
++        val body = stripComment(trimmed).trim()
++        if (body.isEmpty()) return ""
++        if (!balanced(body)) return null
++        val flow = body.startsWith("{") || body.startsWith("[")
++        if (!flow) {
++            // 裸文本里的 `: `（或结尾 `:`）会被 YAML 读成嵌套键，必须让用户加引号或改成 flow。
++            // 引号里的 `: ` 不算——`"a: b"` 是合法单行标量。
++            if (bareKeyColonAt(body) >= 0) return null
++            if (body.startsWith("!") || body.startsWith("%") || body.startsWith("&")) return null
++        }
++        return body
++    }
++
++    /** 只在「行首或空白之后的 `#`」处切注释——YAML 的注释规则，URL 里的 `#frag` 不该被切掉。 */
++    private fun stripComment(text: String): String {
++        var quote: Char? = null
++        var i = 0
++        while (i < text.length) {
++            val c = text[i]
++            if (quote != null) {
++                if (c == quote) {
++                    if (i + 1 < text.length && text[i + 1] == quote) {
++                        i += 2
++                        continue
++                    }
++                    quote = null
++                }
++            } else when (c) {
++                '"', '\'' -> quote = c
++                '#' -> if (i == 0 || text[i - 1].isWhitespace()) return text.substring(0, i)
++            }
++            i++
++        }
++        return text
++    }
++
++    /**
++     * 裸文本里第一个「会被读成键值分隔」的 `:` 的下标（0 基），没有则 -1。
++     * 判定：不在引号内，且 `:` 后面是空白或到行尾——`"a: b"` / `http://x` / `1:30` 都不算。
++     */
++    private fun bareKeyColonAt(text: String): Int {
++        var quote: Char? = null
++        var i = 0
++        while (i < text.length) {
++            val c = text[i]
++            if (quote != null) {
++                if (c == quote) {
++                    if (i + 1 < text.length && text[i + 1] == quote) {
++                        i += 2
++                        continue
++                    }
++                    quote = null
++                }
++            } else when (c) {
++                '"', '\'' -> quote = c
++                ':' -> if (i == text.lastIndex || text[i + 1].isWhitespace()) return i
++            }
++            i++
++        }
++        return -1
++    }
++
++    /** 引号与 `{}` / `[]` 平衡。圆括号不检查：mihomo 的规则与正则里大量出现 `(` `)`。 */
++    private fun balanced(text: String): Boolean {
++        var quote: Char? = null
++        var square = 0
++        var curly = 0
++        var i = 0
++        while (i < text.length) {
++            val c = text[i]
++            if (quote != null) {
++                if (c == quote) {
++                    if (i + 1 < text.length && text[i + 1] == quote) {
++                        i += 2
++                        continue
++                    }
++                    quote = null
++                }
++            } else when (c) {
++                '"', '\'' -> quote = c
++                '[' -> square++
++                ']' -> {
++                    square--
++                    if (square < 0) return false
++                }
++
++                '{' -> curly++
++                '}' -> {
++                    curly--
++                    if (curly < 0) return false
++                }
++            }
++            i++
++        }
++        return quote == null && square == 0 && curly == 0
++    }
++
++    /** 键名校验：不能含 YAML 特殊字符，不能为空。 */
++    fun normalizeKey(raw: String): String? {
++        val key = raw.trim()
++        if (key.isEmpty()) return null
++        if (key.any { it == ':' || it == '#' || it == '&' || it == '*' || it == '!' || it == '|' || it == '>' }) return null
++        if (key.first().isWhitespace() || key.last().isWhitespace()) return null
++        return key
++    }
++
++    /** 顶层条目名的额外限制（mihomo_box 同规则：不能含空格与 YAML 特殊符号）。 */
++    fun normalizeTopKey(raw: String): String? {
++        val key = raw.trim()
++        if (key.isEmpty()) return null
++        if (key.any { it.isWhitespace() || it in "#:&*!|>%@`" }) return null
++        return key
++    }
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
+new file mode 100644
+index 0000000..f4a174d
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
+@@ -0,0 +1,641 @@
++package top.yukonga.mishka.custom.anchor
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.Immutable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.font.FontFamily
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import top.yukonga.mishka.R
++import top.yukonga.mishka.platform.showToast
++import top.yukonga.mishka.ui.theme.StatusColors
++import top.yukonga.mishka.ui.util.sheetContentSafePadding
++import top.yukonga.mishka.ui.util.sheetHeightTransition
++import top.yukonga.miuix.kmp.basic.BasicComponent
++import top.yukonga.miuix.kmp.basic.Card
++import top.yukonga.miuix.kmp.basic.CardDefaults
++import top.yukonga.miuix.kmp.basic.Icon
++import top.yukonga.miuix.kmp.basic.IconButton
++import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.basic.TextButton
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Close
++import top.yukonga.miuix.kmp.theme.LocalDismissState
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++import top.yukonga.miuix.kmp.window.WindowBottomSheet
++import top.yukonga.scripta.editor.CodeEditorController
++import top.yukonga.scripta.editor.text.TextPosition
++
++/**
++ * 锚点面板（自定义功能，见 mishka-custom/patches）：mihomo_box「工具页 → 锚点面板」的 Android 版。
++ *
++ * 它治的是同一类事故：订阅配置里 `&定义` 与 `*引用` 只存在于**原文**，YAML 一展开就再也看不见，
++ * 而 mihomo 对悬空别名（引用了不存在的锚点）是直接拒绝启动的。面板把原文里的锚点图景摊开——
++ * 每个锚点定义在哪、被谁继承、有没有人引用了却没定义——并给出行级的改名 / 改绑 / 删定义手术。
++ *
++ * 三条硬约定（与 mihomo_box 参考实现一致，也是本功能的全部安全边界）：
++ *  1. **只动锚点语法**：`&` / `*` 只在「裸文本」区间（不在引号内、不在 `#` 注释后）才算锚点，
++ *     手术只重写目标行/目标块的字符范围，其余字节一个都不动（含 CRLF、行尾空格、注释）。
++ *  2. **改动先落在编辑器草稿里**：所有编辑都经 [CodeEditorController.replaceRange] 整篇替换，
++ *     形成一个撤销单元；真正写盘仍走编辑器顶栏的保存（内核校验 + 失败回滚），所以面板写坏配置
++ *     的唯一后果是「保存被拒」，文件不会被改坏。
++ *  3. **悬空别名当场可见**：每次改动后立刻重扫，出现悬空引用会 toast 点名，面板里常驻列出。
++ *
++ * @param visible 是否展示面板（由编辑屏顶栏的入口按钮控制）
++ * @param controller 编辑器控制器：面板读写它的文档与版本号
++ * @param fileName 当前文件名，用来判定 YAML 与显示
++ * @param onClose 关闭面板（调用方收起状态）
++ */
++@Composable
++fun MishkaAnchorPanel(
++    visible: Boolean,
++    controller: CodeEditorController,
++    fileName: String,
++    onClose: () -> Unit,
++) {
++    // 面板只在打开时读文档：documentVersion 是快照 state，编辑器里改一笔、面板里改一笔都会重扫
++    val version = if (visible) controller.documentVersion else -1
++    val text = remember(version) { if (visible) controller.getText() else "" }
++    val graph = remember(text) { if (text.isEmpty()) AnchorGraph() else AnchorScan.scan(text) }
++    val isYaml = remember(fileName) { fileName.isEmpty() || isYamlFile(fileName) }
++
++    var defEdit by remember { mutableStateOf<DefEditTarget?>(null) }
++    var refEdit by remember { mutableStateOf<RefEditTarget?>(null) }
++    var rename by remember { mutableStateOf<RenameTarget?>(null) }
++    var drop by remember { mutableStateOf<AnchorInfo?>(null) }
++    var creating by remember { mutableStateOf(false) }
++
++    /**
++     * 面板唯一的落地通道：整篇替换（一个撤销单元）→ 跳到改动处 → 一句结果提示。
++     * 有悬空引用时提示会带上名字——这类错误 mihomo 会直接拒绝加载，必须在写盘前就被看见。
++     */
++    fun apply(newText: String, toast: String, revealLine1: Int? = null) {
++        if (newText == text) {
++            showToast(toast)
++            return
++        }
++        val lines = newText.split('\n')
++        controller.replaceRange(
++            TextPosition(0, 0),
++            TextPosition(lines.lastIndex, lines[lines.lastIndex].length),
++            newText,
++        )
++        // 同一事件回调里紧接着跳转：keep-in-view 只对最终位置露出一次，不会先滚到文末
++        if (revealLine1 != null) controller.jumpToLine((revealLine1 - 1).coerceAtLeast(0))
++        // 两类「保存会被内核拒绝」的问题当场点名：悬空别名、以及被 `<<:` 合并却不再是映射的锚点。
++        val after = AnchorScan.scan(newText)
++        val dangling = after.danglers
++        val badMerge = after.anchors.firstOrNull { anchor ->
++            anchor.refs.any { it.merge } && !isMergeableAnchor(newText, anchor)
++        }?.name
++        val warning = when {
++            dangling.isNotEmpty() -> "*${dangling.first().name} 现在没有定义"
++            badMerge != null -> "&$badMerge 被 <<: 继承，但它已经不是映射，内核会拒绝"
++            else -> null
++        }
++        showToast(
++            message = if (warning == null) toast else "$toast（注意：$warning）",
++            long = warning != null,
++        )
++    }
++
++    fun locate(line1: Int) {
++        onClose()
++        controller.jumpToLine((line1 - 1).coerceAtLeast(0))
++    }
++
++    /**
++     * 可换绑的目标锚点。两条硬规则都来自 YAML 本身（性质测试里被真解析器验证过）：
++     *  1. **定义必须在引用行之前**——YAML 没有前向别名，指向后面的 `&定义` 直接解析失败；
++     *  2. **`<<:` 合并继承只能指向映射**——指到标量/序列上会被解析器判成非法合并。
++     */
++    fun refCandidates(ref: AnchorRefLoc): List<String> =
++        graph.anchors
++            .filter { anchor -> anchor.defs.any { it.line < ref.line } }
++            .filter { anchor -> !ref.merge || isMergeableAnchor(text, anchor) }
++            .map { it.name }
++
++    /** 定义块：面板上点「编辑」时按当前文本重新解析，保证拿到的是最新行范围。 */
++    fun blockOf(name: String, line1: Int): DefBlock? {
++        val lines = text.split('\n')
++        val index = line1 - 1
++        if (index !in lines.indices) return null
++        return AnchorBlock.parse(lines, index, AnchorScan.blockEndIndex(lines, index, name), name)
++    }
++
++    WindowBottomSheet(
++        show = visible,
++        title = "锚点面板",
++        onDismissRequest = onClose,
++        endAction = {
++            val dismiss = LocalDismissState.current
++            IconButton(onClick = { dismiss?.invoke() }) {
++                Icon(
++                    imageVector = MiuixIcons.Close,
++                    contentDescription = stringResource(R.string.common_close),
++                    tint = MiuixTheme.colorScheme.onBackground,
++                )
++            }
++        },
++    ) {
++        Box(
++            modifier = Modifier
++                .fillMaxWidth()
++                .sheetContentSafePadding()
++                .heightIn(min = 200.dp)
++                .sheetHeightTransition(),
++        ) {
++            Column(modifier = Modifier.fillMaxWidth()) {
++                if (!isYaml) {
++                    PanelHint("当前文件不是 YAML（.yaml / .yml），锚点面板只对 YAML 配置有意义。")
++                } else {
++                    PanelSummaryRow(
++                        graph = graph,
++                        onCreate = { creating = true },
++                    )
++                    LazyColumn(
++                        modifier = Modifier.fillMaxWidth(),
++                        contentPadding = PaddingValues(bottom = 12.dp),
++                        verticalArrangement = Arrangement.spacedBy(12.dp),
++                    ) {
++                        if (graph.isEmpty) {
++                            item(key = "empty") {
++                                PanelHint(
++                                    "还没有扫到 `&定义` / `*引用`。给一段共用参数挂上 `&名字`（例如 `proxies: &proxies`），" +
++                                        "别处就能用 `<<: *proxies` 继承它；也可以点右上「新建」。",
++                                )
++                            }
++                        }
++                        items(items = graph.anchors, key = { "anchor:" + it.name }) { anchor ->
++                            AnchorCard(
++                                anchor = anchor,
++                                onLocate = ::locate,
++                                onEditDef = { line ->
++                                    val block = blockOf(anchor.name, line)
++                                    if (block == null) {
++                                        // 定义块被改成拆不动的形态（flow 根、嵌套过深…）：不猜，交给编辑器
++                                        showToast("这个定义块不是可可视化编辑的形态，请在编辑器里改这一段", long = true)
++                                    } else {
++                                        defEdit = DefEditTarget(anchor.name, block)
++                                    }
++                                },
++                                onRename = {
++                                    rename = RenameTarget(anchor, anchor.primaryDef?.let { text.split('\n').getOrNull(it.line - 1) }.orEmpty())
++                                },
++                                onDrop = { drop = anchor },
++                                onEditRef = { ref -> refEdit = RefEditTarget(anchor.name, ref, refCandidates(ref)) },
++                                onDeleteRef = { ref ->
++                                    apply(
++                                        newText = AnchorEdit.deleteLine(text, ref.line),
++                                        toast = "已删除第 ${ref.line} 行（*${anchor.name} 少一处引用）",
++                                    )
++                                },
++                            )
++                        }
++                        items(items = graph.danglers, key = { "dangling:" + it.name }) { dangling ->
++                            DanglingCard(
++                                dangling = dangling,
++                                onLocate = ::locate,
++                                onEditRef = { ref -> refEdit = RefEditTarget(dangling.name, ref, refCandidates(ref)) },
++                                onDeleteRef = { ref ->
++                                    apply(
++                                        newText = AnchorEdit.deleteLine(text, ref.line),
++                                        toast = "已删除第 ${ref.line} 行悬空引用",
++                                    )
++                                },
++                            )
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    // ==================== 子对话框：算好新文本再回面板统一落地 ====================
++
++    creating.takeIf { it }?.let {
++        AnchorCreateDialog(
++            existingNames = graph.names,
++            existingTopKeys = remember(text) { AnchorEdit.topLevelKeys(text) },
++            onDismiss = { creating = false },
++            onApply = { topKey, anchorName, rows ->
++                apply(
++                    newText = AnchorEdit.insertTopBlock(text, AnchorBlock.buildTopBlock(topKey, anchorName, rows)),
++                    toast = "已新建 &$anchorName（插在文件头）",
++                    revealLine1 = 1,
++                )
++                creating = false
++            },
++        )
++    }
++
++    defEdit?.let { target ->
++        AnchorDefEditDialog(
++            block = target.block,
++            onDismiss = { defEdit = null },
++            onApply = { newBlock ->
++                val start = target.block.startLine1
++                val end = start + target.block.lineCount - 1
++                apply(
++                    newText = AnchorEdit.replaceLines(text, start, end, newBlock),
++                    toast = "已更新 &${target.name} 的定义块（${target.block.lineCount} 行）",
++                    revealLine1 = start,
++                )
++                defEdit = null
++            },
++        )
++    }
++
++    refEdit?.let { target ->
++        AnchorRefEditDialog(
++            anchor = target.name,
++            ref = target.ref,
++            names = graph.names,
++            candidates = target.candidates,
++            onDismiss = { refEdit = null },
++            onRebind = { newName ->
++                when (val result = AnchorEdit.rebindRefLine(text, target.ref.line, newName)) {
++                    null -> showToast("这一行不是 `*单个锚点` 的简单形态，请直接在编辑器里改", long = true)
++                    else -> apply(
++                        newText = result,
++                        toast = if (newName == null) {
++                            "已清除第 ${target.ref.line} 行的继承"
++                        } else {
++                            "第 ${target.ref.line} 行已改绑到 *$newName"
++                        },
++                        revealLine1 = target.ref.line,
++                    )
++                }
++                refEdit = null
++            },
++            onApplyText = { line ->
++                apply(
++                    newText = AnchorEdit.replaceLines(text, target.ref.line, target.ref.line, line),
++                    toast = "已改写第 ${target.ref.line} 行",
++                    revealLine1 = target.ref.line,
++                )
++                refEdit = null
++            },
++        )
++    }
++
++    rename?.let { target ->
++        AnchorRenameDialog(
++            anchor = target.anchor,
++            defLineRaw = target.defLine,
++            knownNames = graph.names,
++            existingTopKeys = remember(text) { AnchorEdit.topLevelKeys(text) },
++            onDismiss = { rename = null },
++            onApply = { newName, newKeyRaw ->
++                var newText = text
++                val notes = mutableListOf<String>()
++                if (newName != null) {
++                    newText = AnchorEdit.renameAnchor(newText, target.anchor.name, newName)
++                    notes += "&${target.anchor.name} → &$newName（${target.anchor.refs.size} 处引用一起改）"
++                }
++                if (newKeyRaw != null) {
++                    val line = target.anchor.primaryDef?.line ?: -1
++                    val renamed = AnchorEdit.renameDefKey(newText, line, newKeyRaw)
++                    if (renamed == null) {
++                        showToast("定义行形态无法解析，请在编辑器里直接改这个键", long = true)
++                        rename = null
++                        return@AnchorRenameDialog
++                    }
++                    newText = renamed
++                    notes += "条目名 → $newKeyRaw"
++                }
++                if (newText != text) {
++                    apply(
++                        newText = newText,
++                        toast = "已改名：" + notes.joinToString("；"),
++                        revealLine1 = target.anchor.primaryDef?.line,
++                    )
++                }
++                rename = null
++            },
++        )
++    }
++
++    drop?.let { target ->
++        AnchorDropDialog(
++            anchor = target,
++            onDismiss = { drop = null },
++            onConfirm = {
++                when (val result = AnchorEdit.dropAnchor(text, target.name)) {
++                    is DropAnchorResult.KeptBlock -> apply(
++                        newText = result.text,
++                        toast = "已摘掉 &${target.name}：这个键是 mihomo 配置段，块体保留",
++                        revealLine1 = target.primaryDef?.line,
++                    )
++
++                    is DropAnchorResult.RemovedBlock -> apply(
++                        newText = result.text,
++                        toast = "已删除 &${target.name} 的定义块（${result.removedLines} 行）",
++                        revealLine1 = target.primaryDef?.line,
++                    )
++
++                    DropAnchorResult.NotFound -> showToast("找不到 &${target.name} 的定义行，可能已被改动", long = true)
++
++                    is DropAnchorResult.Ambiguous -> showToast(
++                        "&${target.name} 有 ${result.count} 处定义，无法确定删哪个，请在编辑器里处理",
++                        long = true,
++                    )
++                }
++                drop = null
++            },
++        )
++    }
++}
++
++@Immutable
++private data class DefEditTarget(val name: String, val block: DefBlock)
++
++@Immutable
++private data class RefEditTarget(val name: String, val ref: AnchorRefLoc, val candidates: List<String>)
++
++@Immutable
++private data class RenameTarget(val anchor: AnchorInfo, val defLine: String)
++
++private fun isYamlFile(fileName: String): Boolean =
++    fileName.endsWith(".yaml", ignoreCase = true) || fileName.endsWith(".yml", ignoreCase = true)
++
++// ==================== 面板头部 ====================
++
++@Composable
++private fun PanelSummaryRow(graph: AnchorGraph, onCreate: () -> Unit) {
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(start = 4.dp, end = 4.dp, bottom = 8.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Column(modifier = Modifier.weight(1f)) {
++            Text(
++                text = if (graph.anchors.isEmpty()) {
++                    "配置里还没有锚点"
++                } else {
++                    buildString {
++                        append("锚点 ${graph.anchors.size} 个")
++                        val refs = graph.anchors.sumOf { it.refs.size }
++                        if (refs > 0) append(" · 引用 $refs 处")
++                        if (graph.danglers.isNotEmpty()) append(" · 悬空引用 ${graph.danglers.size} 处")
++                    }
++                },
++                fontSize = 14.sp,
++                fontWeight = FontWeight.Medium,
++                color = MiuixTheme.colorScheme.onSurface,
++            )
++            // 复用 mihomo_box 的约定：任何改动都先落在草稿里，保存时由内核校验把关
++            Text(
++                text = "改动先落在编辑器里，点顶栏保存才写文件",
++                fontSize = 11.sp,
++                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++            )
++        }
++        TextButton(
++            text = "新建",
++            onClick = onCreate,
++            minWidth = 0.dp,
++            minHeight = 36.dp,
++            insideMargin = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
++            textStyle = MiuixTheme.textStyles.button.copy(fontSize = 14.sp),
++        )
++    }
++}
++
++// ==================== 锚点卡 ====================
++
++@Composable
++private fun AnchorCard(
++    anchor: AnchorInfo,
++    onLocate: (Int) -> Unit,
++    onEditDef: (Int) -> Unit,
++    onRename: () -> Unit,
++    onDrop: () -> Unit,
++    onEditRef: (AnchorRefLoc) -> Unit,
++    onDeleteRef: (AnchorRefLoc) -> Unit,
++) {
++    val def = anchor.primaryDef
++    Card(
++        modifier = Modifier.fillMaxWidth(),
++        cornerRadius = 12.dp,
++        insideMargin = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
++        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.04f)),
++    ) {
++        Row(verticalAlignment = Alignment.CenterVertically) {
++            Text(
++                text = "&" + anchor.name,
++                fontFamily = FontFamily.Monospace,
++                fontSize = 16.sp,
++                fontWeight = FontWeight.SemiBold,
++                color = MiuixTheme.colorScheme.onSurface,
++                maxLines = 1,
++                overflow = TextOverflow.Ellipsis,
++                modifier = Modifier.weight(1f, fill = false),
++            )
++            Spacer(Modifier.width(8.dp))
++            if (anchor.defs.size > 1) {
++                Badge(text = "定义 ×${anchor.defs.size}", color = StatusColors.warning)
++                Spacer(Modifier.width(6.dp))
++            }
++            if (anchor.refs.isEmpty()) {
++                Badge(text = "无人引用", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
++            } else {
++                Badge(text = "继承 ${anchor.mergeCount} · 引用 ${anchor.aliasCount}", color = MiuixTheme.colorScheme.primary)
++            }
++        }
++        if (def == null) {
++            Text(
++                text = "只见引用、没有定义：mihomo 会因 unknown anchor 拒绝加载",
++                modifier = Modifier.padding(top = 6.dp),
++                fontSize = 12.sp,
++                color = StatusColors.danger,
++            )
++        } else {
++            BasicComponent(
++                modifier = Modifier.padding(top = 4.dp),
++                title = "定义在 L${def.line}",
++                summary = def.path + " · " + def.text.trim(),
++                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 6.dp),
++                endActions = {
++                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditDef(def.line) }
++                },
++                onClick = { onLocate(def.line) },
++            )
++        }
++        anchor.refs.forEach { ref ->
++            BasicComponent(
++                title = if (ref.merge) "继承 L${ref.line}" else "引用 L${ref.line}",
++                summary = ref.path + " · " + ref.text.trim(),
++                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
++                endActions = {
++                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditRef(ref) }
++                    CompactTextButton(text = "删行") { onDeleteRef(ref) }
++                },
++                onClick = { onLocate(ref.line) },
++            )
++        }
++        Row(
++            modifier = Modifier
++                .fillMaxWidth()
++                .padding(top = 6.dp),
++            horizontalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            CompactTextButton(
++                text = "定位",
++                modifier = Modifier.weight(1f),
++                enabled = def != null,
++            ) { def?.let { onLocate(it.line) } }
++            CompactTextButton(text = "改名", modifier = Modifier.weight(1f)) { onRename() }
++            CompactTextButton(
++                text = stringResource(R.string.common_delete),
++                modifier = Modifier.weight(1f),
++                enabled = def != null && anchor.refs.isEmpty(),
++            ) { onDrop() }
++        }
++        if (anchor.refs.isNotEmpty()) {
++            Text(
++                text = "要删定义得先清空引用：把引用改绑到别的锚点，或删掉引用行。",
++                modifier = Modifier.padding(top = 6.dp),
++                fontSize = 11.sp,
++                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++            )
++        }
++    }
++}
++
++@Composable
++private fun DanglingCard(
++    dangling: DanglingAnchor,
++    onLocate: (Int) -> Unit,
++    onEditRef: (AnchorRefLoc) -> Unit,
++    onDeleteRef: (AnchorRefLoc) -> Unit,
++) {
++    Card(
++        modifier = Modifier.fillMaxWidth(),
++        cornerRadius = 12.dp,
++        insideMargin = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
++        colors = CardDefaults.defaultColors(color = StatusColors.danger.copy(alpha = 0.10f)),
++    ) {
++        Row(verticalAlignment = Alignment.CenterVertically) {
++            Text(
++                text = "*" + dangling.name,
++                fontFamily = FontFamily.Monospace,
++                fontSize = 16.sp,
++                fontWeight = FontWeight.SemiBold,
++                color = StatusColors.danger,
++                maxLines = 1,
++                overflow = TextOverflow.Ellipsis,
++                modifier = Modifier.weight(1f, fill = false),
++            )
++            Spacer(Modifier.width(8.dp))
++            Badge(text = "悬空引用", color = StatusColors.danger)
++        }
++        Text(
++            text = "配置里引用了 *${dangling.name}，却没有任何 `&${dangling.name}` 定义。可以改绑到已有锚点，或删掉这些引用行。",
++            modifier = Modifier.padding(top = 4.dp),
++            fontSize = 12.sp,
++            color = MiuixTheme.colorScheme.onSurfaceSecondary,
++        )
++        dangling.refs.forEach { ref ->
++            BasicComponent(
++                title = "L${ref.line}",
++                summary = ref.path + " · " + ref.text.trim(),
++                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
++                endActions = {
++                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditRef(ref) }
++                    CompactTextButton(text = "删行") { onDeleteRef(ref) }
++                },
++                onClick = { onLocate(ref.line) },
++            )
++        }
++    }
++}
++
++// ==================== 小组件 ====================
++
++@Composable
++private fun CompactTextButton(
++    text: String,
++    modifier: Modifier = Modifier,
++    enabled: Boolean = true,
++    onClick: () -> Unit,
++) {
++    TextButton(
++        text = text,
++        modifier = modifier,
++        enabled = enabled,
++        onClick = onClick,
++        minWidth = 0.dp,
++        minHeight = 32.dp,
++        insideMargin = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
++        textStyle = MiuixTheme.textStyles.button.copy(fontSize = 13.sp),
++    )
++}
++
++@Composable
++private fun Badge(text: String, color: Color) {
++    Text(
++        text = text,
++        modifier = Modifier
++            .clip(RoundedCornerShape(6.dp))
++            .padding(horizontal = 6.dp, vertical = 1.dp),
++        fontSize = 11.sp,
++        color = color,
++    )
++}
++
++/**
++ * 这个锚点能不能被 `<<:` 合并继承。只有「能确定不是映射」的形态才拦：
++ * 序列、以及正文非 flow 映射的单值标量；拆不动的形态（Unknown）不拦——挨个拦会把
++ * `d1: &d1 {a: 1, b: 2}` 这种合法的行内映射挡在外面。
++ */
++internal fun isMergeableAnchor(text: String, anchor: AnchorInfo): Boolean {
++    val def = anchor.primaryDef ?: return false
++    val lines = text.split('\n')
++    val index = def.line - 1
++    if (index !in lines.indices) return false
++    val block = AnchorBlock.parse(lines, index, AnchorScan.blockEndIndex(lines, index, anchor.name), anchor.name)
++        ?: return false
++    return when (block.kind) {
++        DefKind.Map -> true
++        DefKind.Seq -> false
++        DefKind.Scalar -> block.headerValue.trimStart().startsWith("{")
++        DefKind.Unknown -> block.lines.drop(1).firstOrNull { it.isNotBlank() }?.trimStart()?.startsWith("{") == true
++    }
++}
++
++@Composable
++internal fun PanelHint(text: String) {
++    Text(
++        text = text,
++        modifier = Modifier
++            .fillMaxWidth()
++            .padding(horizontal = 4.dp, vertical = 8.dp),
++        fontSize = 13.sp,
++        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++    )
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
+new file mode 100644
+index 0000000..6c24053
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
+@@ -0,0 +1,244 @@
++package top.yukonga.mishka.custom.anchor
++
++import androidx.compose.runtime.Immutable
++
++/**
++ * YAML 锚点扫描：mihomo_box「工具页 → 锚点面板」里 `scanAnchorGraph` 的等价实现。
++ *
++ * 结论全部来自**原始文本**，不引 YAML 解析库：`&定义` / `*引用` / `<<:` 合并继承在
++ * 任何解析器展开之后都不再存在（展开后只剩值），要看锚点本身就只能扫原文。
++ *
++ * 「裸文本」= 不在引号内、不在 `#` 注释之后的字符区间：`"&x"` 与 `# &x` 都不算锚点语法。
++ * 这一约定与 mihomo_box 的 `bareMask` 完全一致——`&` / `*` 在 mihomo 配置里大量出现在
++ * 正则、URL 与 proxy 名里，误判会直接把用户的配置改坏。
++ *
++ * 行号一律 **1 基**（面板显示与「定位到行」直接用它），下标一律 0 基。
++ */
++
++@Immutable
++data class AnchorDefLoc(val line: Int, val path: String, val text: String)
++
++@Immutable
++data class AnchorRefLoc(val line: Int, val path: String, val merge: Boolean, val text: String)
++
++@Immutable
++data class AnchorInfo(
++    val name: String,
++    val defs: List<AnchorDefLoc>,
++    val refs: List<AnchorRefLoc>,
++) {
++    val mergeCount: Int get() = refs.count { it.merge }
++    val aliasCount: Int get() = refs.size - mergeCount
++    val primaryDef: AnchorDefLoc? get() = defs.firstOrNull()
++}
++
++/** 有引用、没有对应 `&定义` 的悬空别名。mihomo 会直接报 unidentified alias，必须能看见。 */
++@Immutable
++data class DanglingAnchor(val name: String, val refs: List<AnchorRefLoc>)
++
++@Immutable
++data class AnchorGraph(
++    val anchors: List<AnchorInfo> = emptyList(),
++    val danglers: List<DanglingAnchor> = emptyList(),
++) {
++    val isEmpty: Boolean get() = anchors.isEmpty() && danglers.isEmpty()
++    val names: List<String> get() = anchors.map { it.name }
++}
++
++@Immutable
++data class LineTokens(val defs: List<String>, val refs: List<String>) {
++    val isEmpty: Boolean get() = defs.isEmpty() && refs.isEmpty()
++}
++
++object AnchorScan {
++
++    /** 锚点名合法性：与 mihomo_box 的 `ANCHOR_NAME_OK` 同规则（YAML 锚点也比这更宽，收紧更安全）。 */
++    private val NameRegex = Regex("^[A-Za-z_][A-Za-z0-9_.\\-]*$")
++
++    private val DefTokenRegex = Regex("&([^\\s,\\[\\]{}#]+)")
++    private val RefTokenRegex = Regex("\\*([^\\s,\\[\\]{}#]+)")
++    private val MergeLineRegex = Regex("^\\s*<<\\s*:")
++    private val NameKeyRegex = Regex("^\\s*(?:-\\s+)?(?:name|\"name\"|'name')\\s*:\\s*([^\\s,}]+)")
++    private val KeyRegex = Regex("^\\s*(?:-\\s+)?(?:&\\S+\\s+)?([^:#]+?)\\s*:(?:\\s|$)")
++
++    fun isValidName(name: String): Boolean = NameRegex.matches(name)
++
++    fun isMergeLine(line: String): Boolean = MergeLineRegex.containsMatchIn(line)
++
++    /** 前导空白宽度。制表符按 1 个字符算——与 mihomo_box 的 `^\s*` 长度一致，YAML 本身也禁用 tab 缩进。 */
++    fun indentOf(line: String): Int = line.takeWhile { it == ' ' || it == '\t' }.length
++
++    /**
++     * 裸文本掩码：true = 该位置的 `&` / `*` / `#` 具有语法意义。
++     * 引号内的成对引号（`''` / `""`）算作转义、连续跳过；`#` 之后整行不再是裸文本。
++     */
++    fun bareMask(line: String): BooleanArray {
++        val mask = BooleanArray(line.length) { true }
++        var quote: Char? = null
++        var i = 0
++        while (i < line.length) {
++            val c = line[i]
++            if (quote != null) {
++                mask[i] = false
++                if (c == quote) {
++                    if (i + 1 < line.length && line[i + 1] == quote) {
++                        mask[i + 1] = false
++                        i += 2
++                        continue
++                    }
++                    quote = null
++                }
++            } else when (c) {
++                '"', '\'' -> {
++                    mask[i] = false
++                    quote = c
++                }
++
++                '#' -> {
++                    for (j in i until line.length) mask[j] = false
++                    break
++                }
++            }
++            i++
++        }
++        return mask
++    }
++
++    /** 行内的 `&定义` / `*引用` 名（裸文本限定）。 */
++    fun tokensOnLine(line: String): LineTokens {
++        if (line.indexOf('&') < 0 && line.indexOf('*') < 0) return LineTokens(emptyList(), emptyList())
++        val mask = bareMask(line)
++        val defs = DefTokenRegex.findAll(line)
++            .filter { it.range.first < mask.size && mask[it.range.first] }
++            .map { it.groupValues[1] }
++            .toList()
++        val refs = RefTokenRegex.findAll(line)
++            .filter { it.range.first < mask.size && mask[it.range.first] }
++            .map { it.groupValues[1] }
++            .toList()
++        return LineTokens(defs, refs)
++    }
++
++    fun scan(text: String): AnchorGraph {
++        val lines = text.split('\n')
++        val defs = LinkedHashMap<String, MutableList<AnchorDefLoc>>()
++        val refs = LinkedHashMap<String, MutableList<AnchorRefLoc>>()
++        for (index in lines.indices) {
++            val line = lines[index]
++            val tokens = tokensOnLine(line)
++            if (tokens.isEmpty) continue
++            // 路径是重活（每行回溯最多 4 层）：只为真的带锚点的行算
++            val path = pathOf(lines, index)
++            val merge = isMergeLine(line)
++            tokens.defs.forEach { name ->
++                defs.getOrPut(name) { mutableListOf() } += AnchorDefLoc(index + 1, path, line)
++            }
++            tokens.refs.forEach { name ->
++                refs.getOrPut(name) { mutableListOf() } += AnchorRefLoc(index + 1, path, merge, line)
++            }
++        }
++        val anchors = defs.map { (name, locations) ->
++            AnchorInfo(name, locations.toList(), refs[name]?.toList().orEmpty())
++        }
++        val danglers = refs.entries
++            .filter { !defs.containsKey(it.key) }
++            .map { DanglingAnchor(it.key, it.value.toList()) }
++        return AnchorGraph(anchors, danglers)
++    }
++
++    /**
++     * 锚点定义块的结束行（0 基，含）。缩进语义：定义行 + 所有缩进更深的行；
++     * 序列项从 `- ` 那行起算，`- ` 与键行缩进不同也照收（以定义行自身缩进为基准）。
++     */
++    fun blockEndIndex(lines: List<String>, startIndex: Int, name: String? = null): Int {
++        val base = indentOf(lines[startIndex])
++        var end = startIndex + 1
++        while (end < lines.size) {
++            val line = lines[end]
++            if (line.isNotBlank() && indentOf(line) <= base) break
++            end++
++        }
++        if (name != null) end = flowExtend(lines, startIndex, end)
++        while (end > startIndex + 1 && lines[end - 1].isBlank()) end--
++        return end - 1
++    }
++
++    /**
++     * 跨行 flow 的闭括号可以与定义行同级（`&x {\n  a: 1\n}`），纯缩进判定会漏掉闭括号、把
++     * 后面的配置键一起吞进块里。按裸文本括号平衡往后补足；到文件尾仍未闭合时**不**扩到底
++     * （宁可少删也不把整份配置当块删掉）。
++     */
++    private fun flowExtend(lines: List<String>, startIndex: Int, end0: Int): Int {
++        var balance = 0
++        var i = startIndex
++        while (i < lines.size) {
++            val line = lines[i]
++            val mask = bareMask(line)
++            for (k in line.indices) {
++                if (!mask[k]) continue
++                when (line[k]) {
++                    '{', '[' -> balance++
++                    '}', ']' -> balance--
++                }
++            }
++            if (balance <= 0 && i >= end0 - 1) break
++            i++
++        }
++        if (i >= lines.size && balance > 0) return end0
++        return maxOf(end0, minOf(i + 1, lines.size))
++    }
++
++    /**
++     * 上下文路径（面板上每条定义/引用的「在哪」）。逐行回溯：更深的 `name:` 值算一层，
++     * 更浅的 `键:` 算一层，最多 4 层——与 mihomo_box 的 `ctxOf` 同算法，输出可直接对照。
++     */
++    fun pathOf(lines: List<String>, index: Int): String {
++        val stack = ArrayDeque<String>()
++        var want = indentOf(lines[index])
++        for (j in index downTo 0) {
++            if (stack.size >= 4) break
++            val line = lines[j]
++            if (line.isBlank() || line.trimStart().startsWith("#")) continue
++            val ind = indentOf(line)
++            if (j != index) {
++                val nameMatch = NameKeyRegex.find(line)
++                if (nameMatch != null && ind >= want) {
++                    stack.addFirst(unquote(nameMatch.groupValues[1].trimEnd(',', '}', ']')))
++                    want = ind
++                    continue
++                }
++            }
++            val keyMatch = KeyRegex.find(line)
++            if (keyMatch != null && (ind < want || j == index)) {
++                stack.addFirst(unquote(keyMatch.groupValues[1].trim()))
++                want = minOf(want, ind)
++                if (ind == 0) break
++            }
++        }
++        return stack.joinToString(" → ").ifEmpty { "(顶层)" }
++    }
++
++    private fun unquote(raw: String): String =
++        raw.removeSurrounding("\"").removeSurrounding("'").trim()
++
++    /** 注释起点下标（0 基），没有注释返回 -1。只在裸文本区判定，引号里的 `#` 不算。 */
++    fun commentIndex(line: String): Int {
++        val mask = bareMask(line)
++        for (i in line.indices) {
++            if (line[i] == '#' && mask[i]) return i
++        }
++        return -1
++    }
++
++    /** 行尾注释（含 `#` 到行尾，已 trimEnd），无则空串。 */
++    fun trailingComment(line: String): String {
++        val at = commentIndex(line)
++        return if (at < 0) "" else line.substring(at).trimEnd()
++    }
++
++    /** 去掉行尾注释后的行内容（保留结尾空格，调用方按需 trim）。 */
++    fun withoutComment(line: String): String {
++        val at = commentIndex(line)
++        return if (at < 0) line else line.substring(0, at)
++    }
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
+index b1b2479..54d9d51 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
+@@ -31,6 +31,7 @@ import top.yukonga.mishka.platform.ProfileFileManager
+ import top.yukonga.mishka.platform.showToast
+ import top.yukonga.mishka.ui.component.blur.BlurredBar
+ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
++import top.yukonga.mishka.custom.anchor.MishkaAnchorPanel
+ import top.yukonga.mishka.ui.theme.LocalAppDarkMode
+ import top.yukonga.mishka.ui.util.horizontalCutoutPadding
+ import top.yukonga.mishka.viewmodel.SubscriptionViewModel
+@@ -44,6 +45,7 @@ import top.yukonga.miuix.kmp.basic.Text
+ import top.yukonga.miuix.kmp.blur.layerBackdrop
+ import top.yukonga.miuix.kmp.icon.MiuixIcons
+ import top.yukonga.miuix.kmp.icon.extended.Back
++import top.yukonga.miuix.kmp.icon.extended.Link
+ import top.yukonga.miuix.kmp.icon.extended.Ok
+ import top.yukonga.miuix.kmp.theme.MiuixTheme
+ import top.yukonga.scripta.editor.CodeEditor
+@@ -63,6 +65,7 @@ fun FileManagerEditorScreen(
+     val scope = rememberCoroutineScope()
+     val context = LocalContext.current
+     var isSaving by remember { mutableStateOf(false) }
++    var showAnchorPanel by remember { mutableStateOf(false) }
+ 
+     LaunchedEffect(uuid, relativePath, fileManager) {
+         val content = withContext(Dispatchers.IO) {
+@@ -96,6 +99,16 @@ fun FileManagerEditorScreen(
+                         }
+                     },
+                     actions = {
++                        // [mishka-custom] YAML 配置的锚点面板入口：&定义 / *引用 可视化编辑
++                        if (isYamlPath(relativePath)) {
++                            IconButton(onClick = { showAnchorPanel = true }) {
++                                Icon(
++                                    imageVector = MiuixIcons.Link,
++                                    contentDescription = "锚点面板",
++                                    tint = MiuixTheme.colorScheme.onSurface,
++                                )
++                            }
++                        }
+                         val canSave = controller.isModified && !isSaving && fileManager != null
+                         IconButton(
+                             enabled = canSave,
+@@ -192,6 +205,14 @@ fun FileManagerEditorScreen(
+                         .weight(1f),
+                 )
+             }
++
++            // [mishka-custom] 锚点面板：改动只落在编辑器草稿里，保存仍走顶栏 Ok（内核校验 + 失败回滚）
++            MishkaAnchorPanel(
++                visible = showAnchorPanel,
++                controller = controller,
++                fileName = relativePath,
++                onClose = { showAnchorPanel = false },
++            )
+         }
+     }
+ }

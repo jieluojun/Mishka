@@ -1,0 +1,19 @@
+{
+  "_doc": "check_api.py 的依赖源码路径（沙箱/本机皆可；路径不存在会被记为「未核对」）",
+  "repo_root": "/home/user/deliver",
+  "sources": {
+    "miuix-ui": "/home/user/work/mvn/uisrc/commonMain",
+    "miuix-preference": "/home/user/work/mvn/prefsrc/commonMain",
+    "mishka-app": "/home/user/work/mishka_upstream/app/src/main/kotlin",
+    "scripta-editor": "/home/user/work/scripta/editor/src/commonMain/kotlin"
+  },
+  "class_dirs": {
+    "miuix-icons": "/home/user/work/mvn/icons/cls/top/yukonga/miuix/kmp/icon/extended",
+    "miuix-icons-base": "/home/user/work/mvn/icons/cls/top/yukonga/miuix/kmp/icon"
+  },
+  "class_dirs_packages": {
+    "miuix-icons": "top.yukonga.miuix.kmp.icon.extended",
+    "miuix-icons-base": "top.yukonga.miuix.kmp.icon"
+  },
+  "android_res": "/home/user/work/mishka_upstream/app/src/main/res"
+}

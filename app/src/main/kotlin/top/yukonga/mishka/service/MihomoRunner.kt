@@ -1,0 +1,339 @@
+package top.yukonga.mishka.service
+
+import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import top.yukonga.mishka.R
+import top.yukonga.mishka.platform.PlatformStorage
+import top.yukonga.mishka.platform.StorageKeys
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+
+class MihomoRunner(private val context: Context) {
+
+    private var childPid: Int = -1
+    private var isRootMode = false
+    val pid: Int get() = childPid
+    var secret: String = ""
+    var externalController: String = "127.0.0.1:9090"
+    var activeSubscriptionId: String? = null
+        private set
+    var errorMessage: String = ""
+        private set
+
+    /**
+     * 进程是否仍在。两条分支代价差一个量级：VPN 走 `waitpid(WNOHANG)`（本进程亲生子，
+     * 顺带收僵尸，基本免费），**ROOT 每次调用都要 fork 一个 su**——`/proc` 在 Android 10+
+     * 是 hidepid，app 根本读不到 root 进程，判活只能借 root shell。轮询它的地方要自己控频。
+     */
+    val isRunning: Boolean
+        get() = childPid > 0 && if (isRootMode) RootHelper.isAliveAsRoot(childPid) else isProcessAlive(childPid)
+
+    /**
+     * 尝试重连已持久化的 mihomo 进程。三重校验任一失败均返回 false：
+     *   1. PID 存活（kill -0）
+     *   2. cmdline 含 libmihomo_runner.so（防 PID 复用撞其他 root 进程）
+     *   3. stored secret 能通过 /configs 鉴权（防 secret 漂移导致 UI 假 Running）
+     * 校验阶段**不**修改任何 field，三条全过之后才落状态。
+     * 订阅一致性由调用方在此之前校验（persisted subscriptionId vs 请求的 subscriptionId）。
+     */
+    fun attachToExisting(
+        pid: Int,
+        secret: String,
+        externalController: String,
+        subscriptionId: String?,
+    ): Boolean {
+        if (pid <= 0 || !RootHelper.isAliveAsRoot(pid)) {
+            Log.w(TAG, "Attach failed: pid dead (pid=$pid)")
+            return false
+        }
+        val cmdline = RootHelper.readRootCmdline(pid)
+        if (!cmdline.contains("libmihomo_runner.so")) {
+            Log.w(TAG, "Attach failed: wrong cmdline (pid=$pid, cmdline=${cmdline.take(64)})")
+            return false
+        }
+        if (!isApiAuthorized(secret, externalController)) {
+            Log.w(TAG, "Attach failed: auth failed (pid=$pid)")
+            return false
+        }
+        childPid = pid
+        isRootMode = true
+        this.secret = secret
+        this.externalController = externalController
+        activeSubscriptionId = subscriptionId
+        Log.i(TAG, "Attached to existing mihomo process: pid=$pid")
+        return true
+    }
+
+    suspend fun start(
+        subscriptionId: String? = null,
+        useRoot: Boolean = false,
+        overrideJsonPath: String,
+        secret: String,
+        externalController: String,
+        ageSecretKey: String = "",
+        transformPath: String? = null,
+        preferTransformMixedPort: Boolean = false,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (isRunning) {
+            Log.w(TAG, "mihomo already running")
+            return@withContext true
+        }
+
+        val binary = getMihomoBinary() ?: run {
+            errorMessage = context.getString(R.string.error_mihomo_not_found)
+            Log.e(TAG, errorMessage)
+            return@withContext false
+        }
+
+        isRootMode = useRoot
+        activeSubscriptionId = subscriptionId
+        this@MihomoRunner.secret = secret
+        this@MihomoRunner.externalController = externalController
+
+        // ROOT 模式走独立 runtime/{uuid}/ 沙箱（mihomo 会以 uid=0 写 provider 缓存，不能污染 imported/）；
+        // 调用方（MishkaRootService）必须在 start 之前调 ProfileFileOps.prepareRootRuntime 准备好内容。
+        val workDir = when {
+            useRoot && subscriptionId != null -> ProfileFileOps.getRuntimeDir(context, subscriptionId)
+            subscriptionId != null -> ProfileFileOps.getSubscriptionDir(context, subscriptionId)
+            else -> ConfigGenerator.getWorkDir(context)
+        }
+        // 订阅原文 config.yaml 作为主配置；override 通过 --override-json 在 mihomo 内存中注入，
+        // 订阅 YAML 全程不被 Kotlin 改写
+        val configFile = File(workDir, "config.yaml")
+
+        // ROOT 模式的 geodata 链接已在 prepareRootRuntime 内建立；VPN 模式首启时需要建立
+        if (!useRoot) {
+            ProfileFileOps.ensureGeodataLinks(context, workDir)
+        }
+
+        try {
+            // age 加密订阅：config.yaml 加密落盘，运行时用 --age-secret-key 让 mihomo 加载时解密
+            val args = buildList {
+                add("-d"); add(workDir.absolutePath)
+                add("-f"); add(configFile.absolutePath)
+                add("--override-json"); add(overrideJsonPath)
+                if (transformPath != null) {
+                    add("--transform"); add(transformPath)
+                    if (preferTransformMixedPort) add("--prefer-transform-mixed-port")
+                }
+                add("--secret"); add(secret)
+                add("--ext-ctl"); add(externalController)
+                if (ageSecretKey.isNotEmpty()) {
+                    add("--age-secret-key"); add(ageSecretKey)
+                }
+            }.toTypedArray()
+            val logFile = File(workDir, "mihomo.log")
+
+            childPid = if (useRoot) {
+                RootHelper.startAsRoot(
+                    binary.absolutePath,
+                    args,
+                    workDir.absolutePath,
+                    logFile.absolutePath
+                )
+            } else {
+                ProcessHelper.nativeForkExec(
+                    binary.absolutePath,
+                    args,
+                    workDir.absolutePath,
+                    logFile.absolutePath,
+                )
+            }
+
+            if (childPid <= 0) {
+                errorMessage =
+                    if (useRoot) context.getString(R.string.error_root_start_failed) else context.getString(R.string.error_fork_failed)
+                Log.e(TAG, errorMessage)
+                return@withContext false
+            }
+
+            Log.i(TAG, "mihomo child pid=$childPid (root=$useRoot)")
+
+            // 轮询 API 确认 mihomo 真正就绪，进程退出则快速失败
+            val result = waitForReady(useRoot, workDir)
+            if (result != null) {
+                errorMessage = result
+                Log.e(TAG, errorMessage)
+                stop() // kill 子进程 + waitpid 回收，防止孤儿进程占用端口
+                return@withContext false
+            }
+
+            errorMessage = ""
+            Log.i(TAG, "mihomo started: pid=$childPid (root=$useRoot)")
+            true
+        } catch (e: Exception) {
+            errorMessage = context.getString(R.string.error_generic_start_failed, e.message ?: "")
+            Log.e(TAG, "Failed to start mihomo", e)
+            false
+        }
+    }
+
+    fun stop() {
+        if (childPid > 0) {
+            Log.i(TAG, "Stopping mihomo pid=$childPid (root=$isRootMode)")
+            if (isRootMode) {
+                val tunDevice = PlatformStorage(context).getString(StorageKeys.ROOT_TUN_DEVICE, "Mishka")
+                val killed = RootHelper.killAsRoot(childPid, tunDevice)
+                if (!killed) {
+                    RootHelper.killMihomoByName(tunDevice)
+                }
+            } else {
+                ProcessHelper.nativeKill(childPid, force = false)
+                // SIGTERM 后 mihomo 要关 TUN、断全部连接；等不到就升级，绝不无限期等
+                if (ProcessHelper.nativeWaitpid(childPid, GRACEFUL_STOP_TIMEOUT_MS) < 0) {
+                    Log.w(TAG, "mihomo pid=$childPid ignored SIGTERM, escalating to SIGKILL")
+                    ProcessHelper.nativeKill(childPid, force = true)
+                    ProcessHelper.nativeWaitpid(childPid, FORCE_STOP_TIMEOUT_MS)
+                }
+            }
+            childPid = -1
+        }
+        secret = ""
+        isRootMode = false
+    }
+
+    /**
+     * 轮询等待 mihomo 就绪。返回 null 表示成功，返回错误消息表示失败。
+     * 每轮先检查进程是否存活（快速失败），再尝试 API 连接。
+     * API 就绪后再扫描日志检查 TUN init —— mihomo TUN 失败走 log.Errorln 不退出，
+     * 其他 inbound 仍响应 /version，只有日志能区分 silent failure。
+     */
+    private suspend fun waitForReady(useRoot: Boolean, workDir: File): String? {
+        repeat(20) { round ->
+            delay(500)
+            // API 响应则就绪 —— 但还需要确认 TUN inbound 也成功
+            if (isApiReady()) {
+                // 额外等待让 mihomo 完成 TUN init 并输出日志
+                delay(500)
+                return scanLogForTunError(useRoot, workDir)
+            }
+            // 进程退出则快速失败。ROOT 下 /proc 是 hidepid，判活要 fork 一次 su，
+            // 故降到 2s 一次——总预算 10s，晚 1.5s 发现死亡不影响诊断
+            if (round % LIVENESS_CHECK_EVERY != 0) return@repeat
+            val alive = if (useRoot) RootHelper.isAliveAsRoot(childPid) else isProcessAlive(childPid)
+            if (!alive) {
+                val logContent = readStartupLog(useRoot, workDir)
+                return if (logContent.isNotBlank()) {
+                    Log.e(TAG, "mihomo log:\n$logContent")
+                    context.getString(R.string.error_mihomo_start_failed, extractErrorMessage(logContent))
+                } else {
+                    context.getString(R.string.error_mihomo_exited)
+                }
+            }
+        }
+        // 超时：尝试读取日志辅助诊断
+        val logContent = readStartupLog(useRoot, workDir)
+        return if (logContent.isNotBlank()) {
+            Log.w(TAG, "API timeout, mihomo log:\n$logContent")
+            context.getString(R.string.error_api_not_ready) + "\n" + extractErrorMessage(logContent)
+        } else {
+            context.getString(R.string.error_api_not_ready)
+        }
+    }
+
+    /**
+     * 扫描 mihomo 启动日志，识别 TUN inbound 初始化失败。
+     * 与 mihomo listener.ReCreateTun / PatchInboundListeners 的 log.Errorln 对齐：
+     *   - "Start TUN listening error"（listener.go:497-534 ReCreateTun 主路径）
+     *   - "configure tun interface"（sing_tun/server.go TUN 创建失败）
+     *   - "create NetworkUpdateMonitor"（netlink 监听器创建失败）
+     * 固定模式比泛匹配更精准，误报率低。
+     */
+    private fun scanLogForTunError(useRoot: Boolean, workDir: File): String? {
+        val log = readStartupLog(useRoot, workDir)
+        if (log.isBlank()) return null
+        val tunErrorPatterns = listOf(
+            "Start TUN listening error",
+            "configure tun interface",
+            "create NetworkUpdateMonitor",
+        )
+        val errorLine = log.lines().firstOrNull { line ->
+            (line.contains("level=error") || line.contains("level=fatal")) &&
+                    tunErrorPatterns.any { line.contains(it, ignoreCase = true) }
+        } ?: return null
+        Log.e(TAG, "TUN init failed: $errorLine")
+        return context.getString(R.string.error_tun_init_failed, extractErrorMessage(errorLine))
+    }
+
+    /**
+     * 统一读取 mihomo 启动日志。
+     * 取 200 行足以容纳 Go panic stack（通常 30-50 行）+ panic 前的 log.Errorln / stderr 输出，
+     * 避免"panic stack 占满 20 行" 把真正的 first error 挤出来。
+     */
+    private fun readStartupLog(useRoot: Boolean, workDir: File): String {
+        return if (useRoot) {
+            RootHelper.readLogFile(File(workDir, "mihomo.log").absolutePath)
+        } else {
+            File(workDir, "mihomo.log").readLastLines(STARTUP_LOG_LINES)
+        }
+    }
+
+    /** 从日志中提取 level=error/fatal 的错误消息 */
+    private fun extractErrorMessage(logContent: String): String {
+        val errorLines = logContent.lines().filter {
+            it.contains("level=error") || it.contains("level=fatal")
+        }
+        if (errorLines.isEmpty()) return logContent.lines().takeLast(5).joinToString("\n")
+
+        val msgRegex = Regex("""msg="(.+?)"""")
+        val messages = errorLines.mapNotNull { msgRegex.find(it)?.groupValues?.get(1) }
+        return if (messages.isNotEmpty()) messages.joinToString("\n") else errorLines.joinToString("\n")
+    }
+
+    private fun isApiReady(): Boolean {
+        return try {
+            val conn = URL("http://$externalController/version").openConnection() as HttpURLConnection
+            conn.connectTimeout = 500
+            conn.readTimeout = 500
+            conn.responseCode // 任何响应（200/401 等）都说明 API 已就绪
+            conn.disconnect()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 带 Bearer secret 鉴权地探测 /configs（/configs 在 mihomo 各版本均强制鉴权，
+     * /version 在部分版本免鉴权不可靠）。仅 2xx 视为鉴权通过。
+     */
+    private fun isApiAuthorized(secret: String, externalController: String, timeoutMs: Int = 1500): Boolean {
+        return try {
+            val conn = URL("http://$externalController/configs").openConnection() as HttpURLConnection
+            conn.connectTimeout = timeoutMs
+            conn.readTimeout = timeoutMs
+            conn.setRequestProperty("Authorization", "Bearer $secret")
+            val code = conn.responseCode
+            conn.disconnect()
+            code in 200..299
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isProcessAlive(pid: Int): Boolean = ProcessHelper.nativeIsAlive(pid)
+
+    private fun getMihomoBinary(): File? {
+        val nativeDir = context.applicationInfo.nativeLibraryDir
+        val binary = File(nativeDir, "libmihomo_runner.so")
+        if (binary.exists()) return binary
+        return null
+    }
+
+    companion object {
+        private const val TAG = "MihomoRunner"
+
+        /** waitForReady 每几轮（每轮 500ms）做一次判活 */
+        private const val LIVENESS_CHECK_EVERY = 4
+
+        private const val GRACEFUL_STOP_TIMEOUT_MS = 3000
+        private const val FORCE_STOP_TIMEOUT_MS = 500
+
+        /** 足以容纳 Go panic stack（30-50 行）+ panic 前的 first error，不被 stack 挤掉 */
+        private const val STARTUP_LOG_LINES = 200
+    }
+}

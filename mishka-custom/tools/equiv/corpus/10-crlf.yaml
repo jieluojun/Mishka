@@ -1,0 +1,4 @@
+# 10 CRLF 行尾
+a: &crlf 1
+b: *crlf
+c: 2

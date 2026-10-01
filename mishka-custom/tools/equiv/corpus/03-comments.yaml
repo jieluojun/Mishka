@@ -1,0 +1,6 @@
+# 03 整行注释与行尾注释
+# def: &ghost
+x: &x1 1
+y: 2 # def: &ghost2 ref: *ghost3
+z: *x1 # 这是引用 x1
+w: &w1 "v" # 行尾注释里有 *ghost4

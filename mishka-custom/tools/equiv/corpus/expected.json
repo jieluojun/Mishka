@@ -1,0 +1,412 @@
+{
+  "01-basic.yaml": {
+    "note": "基本定义/引用/合并；`<<:` 判为 merge，`MATCH,*base` 为普通引用",
+    "anchors": {
+      "base": {
+        "defs": [
+          [
+            2,
+            "base"
+          ]
+        ],
+        "refs": [
+          [
+            6,
+            "proxies → name → <<",
+            true
+          ],
+          [
+            8,
+            "rules",
+            false
+          ]
+        ]
+      },
+      "solo": {
+        "defs": [
+          [
+            9,
+            "unused"
+          ]
+        ],
+        "refs": []
+      }
+    },
+    "danglers": {}
+  },
+  "02-quotes.yaml": {
+    "note": "引号内 / 注释后的 & 与 * 一律不算锚点；单引号内 '' 视为转义",
+    "anchors": {
+      "real": {
+        "defs": [
+          [
+            2,
+            "a"
+          ]
+        ],
+        "refs": [
+          [
+            7,
+            "b",
+            false
+          ]
+        ]
+      }
+    },
+    "danglers": {}
+  },
+  "03-comments.yaml": {
+    "note": "整行注释与行尾注释都不产生锚点",
+    "anchors": {
+      "x1": {
+        "defs": [
+          [
+            3,
+            "x"
+          ]
+        ],
+        "refs": [
+          [
+            5,
+            "z",
+            false
+          ]
+        ]
+      },
+      "w1": {
+        "defs": [
+          [
+            6,
+            "w"
+          ]
+        ],
+        "refs": []
+      }
+    },
+    "danglers": {}
+  },
+  "04-flow.yaml": {
+    "note": "flow 映射/序列内的引用；token 在 `,` `]` `}` 处结束",
+    "anchors": {
+      "d1": {
+        "defs": [
+          [
+            2,
+            "d1"
+          ]
+        ],
+        "refs": [
+          [
+            4,
+            "use1",
+            false
+          ],
+          [
+            5,
+            "use2",
+            false
+          ]
+        ]
+      },
+      "d2": {
+        "defs": [
+          [
+            3,
+            "d2"
+          ]
+        ],
+        "refs": [
+          [
+            4,
+            "use1",
+            false
+          ],
+          [
+            5,
+            "use2",
+            false
+          ]
+        ]
+      },
+      "d3": {
+        "defs": [
+          [
+            6,
+            "empty"
+          ]
+        ],
+        "refs": []
+      }
+    },
+    "danglers": {}
+  },
+  "05-paths.yaml": {
+    "note": "路径回溯：name 值优先（proxy-groups 条目），其次键；最多 4 层",
+    "anchors": {
+      "common": {
+        "defs": [
+          [
+            15,
+            "sub-rules → common"
+          ]
+        ],
+        "refs": [
+          [
+            13,
+            "rules",
+            false
+          ]
+        ]
+      },
+      "nameservers": {
+        "defs": [
+          [
+            21,
+            "nameservers"
+          ]
+        ],
+        "refs": [
+          [
+            20,
+            "dns → nameserver-policy",
+            false
+          ]
+        ]
+      }
+    },
+    "danglers": {}
+  },
+  "06-dangling.yaml": {
+    "note": "只有引用没有定义 → 悬空；不做任何自动修复",
+    "anchors": {},
+    "danglers": {
+      "nope": [
+        3
+      ],
+      "nope2": [
+        4
+      ],
+      "gone": [
+        6
+      ]
+    }
+  },
+  "07-multi-def.yaml": {
+    "note": "同名多次定义：两处都列出来（面板标「定义×2」）",
+    "anchors": {
+      "dup": {
+        "defs": [
+          [
+            2,
+            "x"
+          ],
+          [
+            4,
+            "y → z"
+          ]
+        ],
+        "refs": [
+          [
+            5,
+            "u",
+            false
+          ]
+        ]
+      }
+    },
+    "danglers": {}
+  },
+  "08-names.yaml": {
+    "note": "名字字符集；`&9bad` 仍算定义（扫描不校验合法性，只有新建/改名才校验）",
+    "anchors": {
+      "a.b-c_d": {
+        "defs": [
+          [
+            2,
+            "p1"
+          ]
+        ],
+        "refs": [
+          [
+            4,
+            "p3",
+            false
+          ]
+        ]
+      },
+      "_x": {
+        "defs": [
+          [
+            3,
+            "p2"
+          ]
+        ],
+        "refs": []
+      },
+      "9bad": {
+        "defs": [
+          [
+            6,
+            "not-anchor"
+          ]
+        ],
+        "refs": []
+      }
+    },
+    "danglers": {
+      "x": [
+        5
+      ]
+    }
+  },
+  "09-realistic.yaml": {
+    "note": "真实片段：URL 里的 `#`/`&` 在引号内不算；`- <<: *rp` 行首不是 `<<` 故 merge=false（与参考实现一致）",
+    "anchors": {
+      "proxies": {
+        "defs": [
+          [
+            4,
+            "proxies"
+          ]
+        ],
+        "refs": [
+          [
+            19,
+            "proxy-groups → 手动 → name → proxies",
+            false
+          ]
+        ]
+      },
+      "rp": {
+        "defs": [
+          [
+            21,
+            "rule-providers"
+          ]
+        ],
+        "refs": [
+          [
+            35,
+            "dns → fallback → <<",
+            false
+          ]
+        ]
+      }
+    },
+    "danglers": {}
+  },
+  "10-crlf.yaml": {
+    "note": "CRLF 行尾：token 以 \\s 结束，\\r 不粘进名字",
+    "anchors": {
+      "crlf": {
+        "defs": [
+          [
+            2,
+            "a"
+          ]
+        ],
+        "refs": [
+          [
+            3,
+            "b",
+            false
+          ]
+        ]
+      }
+    },
+    "danglers": {}
+  },
+  "11-drop-cases.yaml": {
+    "note": "删锚点两条路径：dnsSection/tun0 是 mihomo 配置段（只摘 &名），pub/tail 是自建容器（整块删）",
+    "anchors": {
+      "dnsSection": {
+        "defs": [
+          [
+            2,
+            "dns"
+          ]
+        ],
+        "refs": []
+      },
+      "pub": {
+        "defs": [
+          [
+            6,
+            "代理合集"
+          ]
+        ],
+        "refs": [
+          [
+            12,
+            "使用",
+            false
+          ]
+        ]
+      },
+      "tail": {
+        "defs": [
+          [
+            9,
+            "后置"
+          ]
+        ],
+        "refs": []
+      }
+    },
+    "danglers": {}
+  },
+  "12-head.yaml": {
+    "note": "嵌套项（dns-hijack 带子行）不参与可视化编辑；tun 是配置段锚点",
+    "anchors": {
+      "pub": {
+        "defs": [
+          [
+            2,
+            "代理合集"
+          ]
+        ],
+        "refs": [
+          [
+            14,
+            "use",
+            false
+          ]
+        ]
+      },
+      "tmp": {
+        "defs": [
+          [
+            6,
+            "临时集"
+          ]
+        ],
+        "refs": []
+      },
+      "tun0": {
+        "defs": [
+          [
+            10,
+            "tun"
+          ]
+        ],
+        "refs": []
+      }
+    },
+    "danglers": {}
+  },
+  "13-first.yaml": {
+    "note": "定义块就在文件头：删除后连块后的空行一起收（firstContent 路径）",
+    "anchors": {
+      "tmp": {
+        "defs": [
+          [
+            1,
+            "临时集"
+          ]
+        ],
+        "refs": []
+      }
+    },
+    "danglers": {}
+  }
+}
