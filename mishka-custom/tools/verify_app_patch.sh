@@ -61,7 +61,10 @@ done < <(grep -E '^blob_(new|after)=' "$BASELINE" | sed 's/^blob_[a-z]*=/x /')
 
 echo "--- apply -R（反向） ---"
 git -C "$REPO" apply -R "$PATCH"
-[[ -d "$custom_dir" ]] && { echo "FAIL 反向应用后仍残留 $custom_dir" >&2; fail=1; } || echo "ok  新增目录已移除"
+# 注意：目录已被反向应用删掉时 find 会退出 1，set -e + pipefail 下必须兜住
+leftover="$(find "$custom_dir" -name '*.kt' 2>/dev/null | wc -l | tr -d ' ' || true)"
+[[ "$leftover" == "0" ]] && echo "ok  新增源码已移除" || {
+  echo "FAIL 反向应用后仍残留 $leftover 个 .kt（忽略规则会隐藏它们，git status 不可靠）" >&2; fail=1; }
 if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
   echo "FAIL 反向应用后工作区不干净：" >&2
   git -C "$REPO" status --porcelain >&2

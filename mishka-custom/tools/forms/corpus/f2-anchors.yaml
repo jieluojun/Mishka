@@ -1,0 +1,20 @@
+dns: &dnsbase
+  enable: true
+  nameserver: [223.5.5.5]
+
+tun:
+  enable: true
+  stack: system
+  dns-hijack: ['any:53']
+
+proxies:
+  - name: a
+    type: ss
+    server: 1.2.3.4
+    port: 443
+
+proxy-groups:
+  - name: g
+    type: select
+    use: [p]
+    <<: *dnsbase

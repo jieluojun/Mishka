@@ -51,13 +51,16 @@ step "离线自检"
 
 if "$PY" -c "import tree_sitter, tree_sitter_language_pack" >/dev/null 2>&1; then
   run "Kotlin 语法门（tree-sitter）" \
-    "$PY" "$DELIVER/tools/check_kotlin.py" "$DELIVER/app/src/main/kotlin/top/yukonga/mishka/custom/anchor"
+    "$PY" "$DELIVER/tools/check_kotlin.py" "$DELIVER/app/src/main/kotlin/top/yukonga/mishka/custom"
 else
   skip "Kotlin 语法门" "缺依赖：pip install tree-sitter tree-sitter-language-pack"
 fi
 
 if "$PY" -c "import yaml" >/dev/null 2>&1; then
-  run "编辑层性质测试（PyYAML 真解析）" "$PY" "$DELIVER/tools/equiv/edit_props.py"
+  run "锚点编辑层性质测试（PyYAML 真解析）" "$PY" "$DELIVER/tools/equiv/edit_props.py"
+  if [[ -f "$DELIVER/tools/forms/forms_props.py" ]]; then
+    run "配置表单 YAML 引擎性质测试（保真契约）" "$PY" "$DELIVER/tools/forms/forms_props.py"
+  fi
 else
   skip "编辑层性质测试" "缺 pyyaml"
 fi
@@ -76,6 +79,18 @@ else
     warn "Kotlin 转写运行失败"
     fail=$((fail + 1))
   fi
+fi
+
+if [[ -f "$DELIVER/tools/forms/gen_specs.py" ]]; then
+  run "表单规格生成物与字段表同步" "$PY" "$DELIVER/tools/forms/gen_specs.py" --check
+fi
+
+# Kotlin 引擎的「行为」验证：现编译 + 与 Python 规范逐字节对拍。
+# kotlinc 不进快照（见 VERIFY.md），没有就跳过；改过 YamlEngine.kt 后这一项必须跑。
+if command -v kotlinc >/dev/null 2>&1 || [[ -x "$HOME/.cache/kt/kotlinc/bin/kotlinc" ]]; then
+  run "Kotlin↔Python 引擎逐字节对拍" bash "$DELIVER/tools/forms/run_engine_diff.sh"
+else
+  skip "Kotlin↔Python 引擎逐字节对拍" "没有 kotlinc（装了以后这一项会自动跑；改过 YamlEngine.kt 必须跑）"
 fi
 
 # API / 具名实参核对需要依赖源码路径（tools/api_paths.json）；缺路径会记「未核对」，不算失败

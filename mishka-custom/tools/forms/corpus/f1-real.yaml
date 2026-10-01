@@ -1,0 +1,26 @@
+# 真实感配置：注释、锚点、嵌套、列表、flow
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+
+# DNS 段
+dns:
+  enable: true
+  nameserver:
+    - 223.5.5.5
+    - https://dns.alidns.com/dns-query
+  fallback:
+    - tls://1.1.1.1:853
+  fake-ip-filter:
+    - '*.lan'
+    - +.mcdn.bilivideo.cn
+
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies: [DIRECT, REJECT]
+
+rules:
+  - DOMAIN-SUFFIX,google.com,节点选择  # 注释尾
+  - GEOIP,CN,DIRECT

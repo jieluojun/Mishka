@@ -1,0 +1,11 @@
+mode: rule            # 行尾注释
+geox-url: {geoip: "https://a/b.dat", geosite: "https://a/c.dat"}
+profile:
+  store-selected: true
+  store-fake-ip: false
+experimental:
+  quic-go-disable-gso: true
+  dialer:
+    default-timeout: 3s
+rules:
+  - DOMAIN,example.com,DIRECT
