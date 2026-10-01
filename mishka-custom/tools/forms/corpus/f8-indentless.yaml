@@ -1,0 +1,73 @@
+# P2 语料：无缩进序列（PyYAML / 多数订阅转换器的默认输出）
+port: 7890
+socks-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+external-controller: 127.0.0.1:9090
+proxies:
+- name: 节点A
+  type: ss
+  server: a.example.com
+  port: 443
+  cipher: chacha20-ietf-poly1305
+  password: abc
+- name: 节点B
+  type: vless
+  server: b.example.com
+  port: 443
+  uuid: 2a2e2a2e-0000-4000-8000-000000000000
+  network: grpc
+  tls: true
+  servername: b.example.com
+  grpc-opts:
+    grpc-service-name: grpc
+  client-fingerprint: chrome
+- name: 节点C
+  type: hysteria2
+  server: c.example.com
+  port: 443
+  password: hy2pass
+  sni: c.example.com
+  skip-cert-verify: true
+proxy-groups:
+- name: PROXY
+  type: select
+  proxies:
+  - AUTO
+  - 节点A
+  - 节点B
+  - 节点C
+- name: AUTO
+  type: url-test
+  proxies:
+  - 节点A
+  - 节点B
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+- name: Smart
+  type: smart
+  include-all: true
+  policy-priority: "节点A:0.9;节点B:1.1"
+  uselightgbm: false
+  collectdata: false
+rule-providers:
+  cn:
+    type: http
+    behavior: domain
+    format: mrs
+    url: https://example.com/cn.mrs
+    path: ./rules/cn.mrs
+    interval: 86400
+rules:
+- DOMAIN-SUFFIX,local,DIRECT
+- IP-CIDR,127.0.0.0/8,DIRECT
+- IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+- RULE-SET,cn,DIRECT
+- GEOIP,CN,DIRECT
+- MATCH,PROXY
+dns:
+  enable: true
+  nameserver:
+  - 223.5.5.5
+  - 119.29.29.29

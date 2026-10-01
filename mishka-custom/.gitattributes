@@ -1,6 +1,9 @@
 # 这个样本必须保留 CRLF：它测的就是「锚点手术不碰行尾」，
 # 而仓库根目录的 `* text=auto` 会在提交时把它转成 LF，测试就白跑了。
 tools/equiv/corpus/10-crlf.yaml -text
+# 配置表单引擎的 CRLF 语料同理（f4 曾被这条规则悄悄转成 LF，P2 时发现并补上）
+tools/forms/corpus/f4-crlf.yaml -text
+tools/forms/corpus/f9-flow-crlf.yaml -text
 
 # 补丁文件按原样存：git apply 依赖逐字节内容，别让任何归一化插进来
 patches/**/*.patch -text

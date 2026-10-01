@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -23,17 +22,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.mishka.platform.showToast
-import top.yukonga.mishka.ui.theme.StatusColors
 import top.yukonga.mishka.ui.util.sheetContentSafePadding
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
+import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Switch
@@ -54,15 +55,16 @@ import top.yukonga.scripta.editor.text.TextPosition
  * 配置表单面板（自定义功能，见 mishka-custom/FORMS.md）：mihomo_box「配置页」的 Android 版。
  *
  * 与锚点面板同一套约定：
- *  1. **只改被编辑的那个键**：写回走 [YamlPatch] 的三层策略（手术式 → 块级 → 拒绝），
+ *  1. **只改被编辑的那个键 / 那一项**：写回走 [YamlPatch] 的三层策略（手术式 → 块级 → 拒绝），
  *     其它顶层块逐字节不动，锚点/别名/注释/CRLF 全部保留（由 tools/forms 的性质测试 + 双引擎对拍保证）。
  *  2. **改动先落在编辑器草稿里**：经 [CodeEditorController.replaceRange] 整篇替换，形成一个撤销单元；
  *     真正写盘仍走编辑器顶栏的保存（内核校验 + 失败回滚）。
- *  3. **不做的事**：路径落在序列/标量下面的字段一律拒绝（[YamlDoc.canSet]），宁可不动也不写坏配置。
+ *  3. **不做的事**：路径落在纯值下面的字段一律拒绝（[YamlDoc.canSet]），宁可不动也不写坏配置。
  *
- * P1 覆盖：hub 13 格 + 全局配置 / DNS / 域名嗅探 / 入站（端口 + TUN + eBPF）/ NTP / 实验性 的
- * 布尔 / 下拉 / 文本 / 数字 / 列表 / 多行文本字段；其余类型（DNS 构建器、应用多选、规则集选择器…）
- * 在 P3 落地前先只读显示，点按会明确提示。
+ * P1：hub 13 格 + 全局配置 / DNS / 域名嗅探 / 入站 / NTP / 实验性 的字段页。
+ * P2（本文件 + [FlowFormPages.kt]）：出站代理 / 代理集合 / 代理组 / 路由规则 / 规则集合 / 子规则 / 流量隧道
+ * 七个「列表 → 详情」页，列表项的增删挪改走序列级补丁（[YamlPatch.insertItem] 等）。
+ * 其余类型（DNS 构建器、应用多选、规则集选择器…）在 P3 落地前先只读显示，点按会明确提示。
  */
 @Composable
 fun MishkaConfigFormPanel(
@@ -74,7 +76,8 @@ fun MishkaConfigFormPanel(
     val version = if (visible) controller.documentVersion else -1
     val text = remember(version) { if (visible) controller.getText() else "" }
     val doc = remember(version, text) { YamlDoc.parse(text) }
-    var page by remember(version) { mutableStateOf<String?>(null) }
+    // 导航栈只在面板重新打开时重置：每次写回都会换一份 doc，页面位置得留住
+    val nav = remember(visible) { FormNav() }
 
     fun apply(newText: String, toast: String, revealLine1: Int?) {
         if (newText == text) {
@@ -91,27 +94,15 @@ fun MishkaConfigFormPanel(
         showToast(toast)
     }
 
-    fun setValue(path: String, value: Any?, label: String) {
-        if (!doc.canSet(path)) {
-            showToast("$label 不在可编辑位置（该路径下面是列表或纯值），请在编辑器里直接改", long = true)
-            return
-        }
-        val out = YamlPatch.setValue(doc, path, value)
-        val line = lineOfPath(out, path)
-        apply(out.dump(), "已写入 $label", line)
-    }
-
-    fun clearValue(path: String, label: String) {
-        val out = YamlPatch.removeKey(doc, path)
-        apply(out.dump(), "已清空 $label", null)
-    }
+    val host = remember(doc) { FormHost(doc, ::apply) }
+    val route = nav.current
 
     WindowBottomSheet(
         show = visible,
-        title = if (page == null) "配置表单" else pageTitle(page!!),
+        title = route?.let { routeTitle(it, doc) } ?: "配置表单",
         onDismissRequest = onClose,
-        startAction = if (page == null) null else {
-            { IconButton(onClick = { page = null }) { Icon(MiuixIcons.Back, "返回", tint = MiuixTheme.colorScheme.onBackground) } }
+        startAction = if (route == null) null else {
+            { IconButton(onClick = { nav.pop() }) { Icon(MiuixIcons.Back, "返回", tint = MiuixTheme.colorScheme.onBackground) } }
         },
         endAction = {
             val dismiss = LocalDismissState.current
@@ -125,48 +116,240 @@ fun MishkaConfigFormPanel(
                 .fillMaxWidth()
                 .sheetContentSafePadding(),
         ) {
-            val current = page
-            if (current == null) {
-                FormHub(
-                    doc = doc,
-                    fileName = fileName,
-                    onOpen = { page = it },
-                )
-            } else {
-                FormPage(
-                    key = current,
-                    doc = doc,
-                    onSet = ::setValue,
-                    onClear = ::clearValue,
-                    onUnsupported = { showToast("$it 的专用编辑器在 P3 落地，先用编辑器直接改这一段原文", long = true) },
-                )
+            when (route) {
+                null -> FormHub(doc = doc, fileName = fileName, onOpen = { nav.push(it) })
+                is FormRoute.Section -> SectionsPage(sections = sectionsOf(route.key), base = emptyList(), host = host)
+                else -> FlowFormPage(route = route, host = host, nav = nav)
             }
         }
     }
 }
 
+// ---------------------------------------------------------------- 路由 / 导航
+
+/** 面板里的页面。P1 的六个分区页是 [Section]；其余都是 P2 的「列表 → 详情」。 */
+internal sealed class FormRoute {
+    class Section(val key: String) : FormRoute()
+    /** 节点列表：`proxies` 或某个 inline 代理集合的 `payload`。 */
+    class Proxies(val seqPath: YPath, val title: String) : FormRoute()
+    class Proxy(val seqPath: YPath, val index: Int) : FormRoute()
+    object Providers : FormRoute()
+    class Provider(val name: String) : FormRoute()
+    object Groups : FormRoute()
+    class Group(val index: Int) : FormRoute()
+    /** 规则列表：`rules` 或 `sub-rules.<name>`。 */
+    class Rules(val seqPath: YPath, val title: String) : FormRoute()
+    object RuleProviders : FormRoute()
+    class RuleProvider(val name: String) : FormRoute()
+    object SubRules : FormRoute()
+    object Tunnels : FormRoute()
+    class Tunnel(val index: Int) : FormRoute()
+}
+
+internal class FormNav {
+    val stack = mutableStateListOf<FormRoute>()
+    val current: FormRoute? get() = stack.lastOrNull()
+    fun push(route: FormRoute) { stack.add(route) }
+    fun pop() { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) }
+    fun replaceTop(route: FormRoute) { pop(); push(route) }
+}
+
+private fun routeTitle(route: FormRoute, doc: YamlDoc): String = when (route) {
+    is FormRoute.Section -> pageTitle(route.key)
+    is FormRoute.Proxies -> route.title
+    is FormRoute.Proxy -> FormValues.readRaw(doc, route.seqPath + route.index + "name")?.ifBlank { null } ?: "节点 #${route.index + 1}"
+    FormRoute.Providers -> "代理集合"
+    is FormRoute.Provider -> route.name
+    FormRoute.Groups -> "代理组"
+    is FormRoute.Group -> FormValues.readRaw(doc, listOf("proxy-groups", route.index, "name"))?.ifBlank { null } ?: "代理组 #${route.index + 1}"
+    is FormRoute.Rules -> route.title
+    FormRoute.RuleProviders -> "规则集合"
+    is FormRoute.RuleProvider -> route.name
+    FormRoute.SubRules -> "子规则"
+    FormRoute.Tunnels -> "流量隧道"
+    is FormRoute.Tunnel -> "隧道 #${route.index + 1}"
+}
+
+// ---------------------------------------------------------------- 写回
+
+/**
+ * 一次表单会话里的文档 + 写回。所有写操作都从这里过：统一做可写性检查、「没改动」提示、写后定位。
+ * 每个方法返回是否真的改了文本（页面据此决定要不要跳转 / 返回）。
+ */
+internal class FormHost(
+    val doc: YamlDoc,
+    private val applyText: (newText: String, toast: String, revealLine1: Int?) -> Unit,
+) {
+    private fun refuse(label: String) {
+        // 引擎拒绝（路径下面是纯值 / 别名、flow 里装不下的集合或多行文本…）：宁可不动
+        showToast("$label 未改动：这个位置不能这样写，请在编辑器里直接改这一段", long = true)
+    }
+
+    private fun commit(out: YamlDoc, label: String, verb: String, reveal: YPath?): Boolean {
+        if (out === doc) {
+            refuse(label)
+            return false
+        }
+        val dumped = out.dump()
+        if (dumped == doc.dump()) {
+            showToast("$label 没有变化")
+            return false
+        }
+        applyText(dumped, "$verb $label", reveal?.let { lineOfPath(out, it) })
+        return true
+    }
+
+    fun set(path: YPath, value: Any?, label: String): Boolean {
+        if (!doc.canSet(path)) {
+            showToast("$label 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
+            return false
+        }
+        return commit(YamlPatch.setValue(doc, path, value), label, "已写入", path)
+    }
+
+    fun clear(path: YPath, label: String): Boolean {
+        if (doc.get(path) == null) {
+            showToast("$label 本来就没有设置")
+            return false
+        }
+        return commit(YamlPatch.removeKey(doc, path), label, "已清空", null)
+    }
+
+    fun insertItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean =
+        commit(YamlPatch.insertItem(doc, seqPath, index, value), label, "已新增", seqPath + index)
+
+    fun setItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean =
+        commit(YamlPatch.setItem(doc, seqPath, index, value), label, "已写入", seqPath + index)
+
+    fun removeItem(seqPath: YPath, index: Int, label: String): Boolean =
+        commit(YamlPatch.removeItem(doc, seqPath, index), label, "已删除", null)
+
+    fun moveItem(seqPath: YPath, from: Int, to: Int, label: String): Boolean =
+        commit(YamlPatch.moveItem(doc, seqPath, from, to), label, "已移动", seqPath + to)
+
+    fun rename(path: YPath, newKey: String, label: String): Boolean {
+        val parent = doc.get(path.dropLast(1))
+        if (parent != null && doc.findEntry(parent, newKey) != null) {
+            showToast("已经有叫「$newKey」的了，换个名字", long = true)
+            return false
+        }
+        return commit(YamlPatch.renameKey(doc, path, newKey), label, "已改名", path.dropLast(1) + newKey)
+    }
+
+    /**
+     * 一次写多处（改名同步引用 / 切换类型时的连带清理 / 「其他参数」整块替换…）：按顺序应用，
+     * 任一步被引擎拒绝就整批放弃、文档不动——不会出现「名字改了、引用没跟上」的半成品。
+     * [BatchOp.Remove] 对不存在的键是空操作。
+     */
+    fun batch(ops: List<BatchOp>, label: String, verb: String = "已写入", reveal: YPath? = null): Boolean {
+        var cur = doc
+        var touched = false
+        for (op in ops) {
+            val next = when (op) {
+                is BatchOp.Set -> {
+                    if (!cur.canSet(op.path)) {
+                        showToast("$label 未改动：${pathText(op.path)} 不在可编辑位置（下面是纯值 / 别名）", long = true)
+                        return false
+                    }
+                    YamlPatch.setValue(cur, op.path, op.value)
+                }
+                is BatchOp.Remove -> if (cur.get(op.path) == null) continue else YamlPatch.removeKey(cur, op.path)
+                is BatchOp.SetItem -> YamlPatch.setItem(cur, op.seqPath, op.index, op.value)
+                is BatchOp.Rename -> {
+                    val parent = cur.get(op.path.dropLast(1))
+                    if (parent != null && cur.findEntry(parent, op.newKey) != null) {
+                        showToast("已经有叫「${op.newKey}」的了，换个名字", long = true)
+                        return false
+                    }
+                    YamlPatch.renameKey(cur, op.path, op.newKey)
+                }
+            }
+            if (next === cur) {
+                refuse(label)
+                return false
+            }
+            cur = next
+            touched = true
+        }
+        if (!touched) {
+            showToast("$label 没有变化")
+            return false
+        }
+        return commit(cur, label, verb, reveal)
+    }
+
+    // ---- 动态候选（下拉 / 多选里的节点名、代理组名、集合名）
+
+    fun seqNames(seqPath: YPath): List<String> {
+        val seq = doc.get(seqPath) ?: return emptyList()
+        if (seq.kind != YamlNode.Kind.SEQ) return emptyList()
+        return seq.items.mapNotNull { item -> FormValues.scalarText(doc, doc.findEntry(item, "name")?.node)?.ifBlank { null } }
+    }
+
+    fun mapKeys(mapPath: YPath): List<String> {
+        val map = doc.get(mapPath) ?: return emptyList()
+        if (map.kind != YamlNode.Kind.MAP) return emptyList()
+        return map.entries.filter { !it.isMerge }.map { it.key }
+    }
+
+    /**
+     * 选择池（参考实现 pages-config.js policyOptions / pages-flow.js outboundOptions）：
+     *  - `policies`：内置策略（带说明）+ 代理组 + 节点 + GLOBAL —— 代理组成员、规则目标、隧道出口用；
+     *  - `outbound`：DIRECT + 代理组 + 节点 —— 下载出口 / 链式出口用；
+     *  - `providers` / `rule-providers` / `sub-rules`：对应映射的键。
+     * `exclude` 去掉自己（代理组不能把自己当成员）；`current` 里不在池中的值也列出来并标「当前值」，保证已有配置可见、可保留。
+     */
+    fun candidates(kind: String, exclude: Set<String> = emptySet(), current: Collection<String> = emptyList()): List<FormOption> {
+        val seen = HashSet<String>()
+        val out = ArrayList<FormOption>()
+        fun add(v: String, label: String) {
+            if (v.isEmpty() || v in exclude || !seen.add(v)) return
+            out.add(FormOption(v, label))
+        }
+        when (kind) {
+            "policies" -> {
+                for (o in BUILTIN_POLICIES) add(o.value, o.label)
+                for (n in seqNames(listOf("proxy-groups"))) add(n, "代理组")
+                for (n in seqNames(listOf("proxies"))) add(n, "节点")
+                add("GLOBAL", "内置的全局代理组")
+            }
+            "outbound" -> {
+                add("DIRECT", "DIRECT（直连）")
+                for (n in seqNames(listOf("proxy-groups"))) add(n, "代理组")
+                for (n in seqNames(listOf("proxies"))) add(n, "节点")
+            }
+            "proxies" -> for (n in seqNames(listOf("proxies"))) add(n, "节点")
+            "providers" -> for (n in mapKeys(listOf("proxy-providers"))) add(n, "代理集合")
+            "rule-providers" -> for (n in mapKeys(listOf("rule-providers"))) add(n, "规则集合")
+            "sub-rules" -> for (n in mapKeys(listOf("sub-rules"))) add(n, "子规则")
+        }
+        for (c in current) if (c.isNotEmpty() && c !in seen) { seen.add(c); out.add(FormOption(c, "当前值")) }
+        return out
+    }
+}
+
 // ---------------------------------------------------------------- hub
 
-private class HubEntry(val title: String, val key: String?, val countPath: String?, val countUnit: String)
+private class HubEntry(val title: String, val route: FormRoute, val countPath: String?, val countUnit: String)
 
 private val HUB: List<HubEntry> = listOf(
-    HubEntry("全局配置", "general", null, ""),
-    HubEntry("DNS", "dns", "dns.enable", ""),
-    HubEntry("域名嗅探", "sniff", "sniffer.enable", ""),
-    HubEntry("入站", "inbound", "listeners", " 个监听器"),
-    HubEntry("出站代理", null, "proxies", " 个节点"),
-    HubEntry("代理集合", null, "proxy-providers", " 个订阅"),
-    HubEntry("代理组", null, "proxy-groups", " 个代理组"),
-    HubEntry("路由规则", null, "rules", " 条规则"),
-    HubEntry("规则集合", null, "rule-providers", " 个规则集"),
-    HubEntry("子规则", null, "sub-rules", " 组子规则"),
-    HubEntry("流量隧道", null, "tunnels", " 条隧道"),
-    HubEntry("NTP", "ntp", "ntp.enable", ""),
-    HubEntry("实验性配置", "experimental", "experimental", ""),
+    HubEntry("全局配置", FormRoute.Section("general"), null, ""),
+    HubEntry("DNS", FormRoute.Section("dns"), "dns.enable", ""),
+    HubEntry("域名嗅探", FormRoute.Section("sniff"), "sniffer.enable", ""),
+    HubEntry("入站", FormRoute.Section("inbound"), "listeners", " 个监听器"),
+    HubEntry("出站代理", FormRoute.Proxies(listOf("proxies"), "出站代理"), "proxies", " 个节点"),
+    HubEntry("代理集合", FormRoute.Providers, "proxy-providers", " 个订阅"),
+    HubEntry("代理组", FormRoute.Groups, "proxy-groups", " 个代理组"),
+    HubEntry("路由规则", FormRoute.Rules(listOf("rules"), "路由规则"), "rules", " 条规则"),
+    HubEntry("规则集合", FormRoute.RuleProviders, "rule-providers", " 个规则集"),
+    HubEntry("子规则", FormRoute.SubRules, "sub-rules", " 组子规则"),
+    HubEntry("流量隧道", FormRoute.Tunnels, "tunnels", " 条隧道"),
+    HubEntry("NTP", FormRoute.Section("ntp"), "ntp.enable", ""),
+    HubEntry("实验性配置", FormRoute.Section("experimental"), "experimental", ""),
 )
 
 @Composable
-private fun FormHub(doc: YamlDoc, fileName: String, onOpen: (String) -> Unit) {
+private fun FormHub(doc: YamlDoc, fileName: String, onOpen: (FormRoute) -> Unit) {
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
         contentPadding = PaddingValues(bottom = 16.dp),
@@ -182,43 +365,26 @@ private fun FormHub(doc: YamlDoc, fileName: String, onOpen: (String) -> Unit) {
         }
         items(HUB) { entry ->
             val count = entry.countPath?.let { countOf(doc, it) }
+            val key = (entry.route as? FormRoute.Section)?.key
             val sub = buildString {
-                append(entry.countUnit.trimStart())
-                if (isNotEmpty() && count != null) append(" · ")
                 if (count != null) {
-                    when {
-                        entry.key == "dns" -> append(if (count > 0) "已启用" else "未启用")
-                        entry.key == "sniff" -> append(if (count > 0) "已启用" else "未启用")
-                        entry.key == "ntp" -> append(if (count > 0) "已启用" else "未启用")
-                        entry.key == "experimental" -> append("$count 项已开")
-                        entry.key == "inbound" -> append("$count 个监听器")
+                    when (key) {
+                        "dns", "sniff", "ntp" -> append(if (count > 0) "已启用" else "未启用")
+                        "experimental" -> append("$count 项已开")
                         else -> append("$count${entry.countUnit}")
                     }
                 }
-                if (entry.key == null) append("（P2）")
             }
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.defaultColors(),
-                onClick = {
-                    val key = entry.key
-                    if (key == null) {
-                        showToast("「${entry.title}」的界面在 P2 落地（表单引擎已就绪）", long = true)
-                    } else {
-                        onOpen(key)
-                    }
-                },
+                onClick = { onOpen(entry.route) },
             ) {
                 BasicComponent(
                     title = entry.title,
                     summary = sub,
                     endActions = {
-                        Text(
-                            text = if (entry.key == null) "P2" else "编辑",
-                            fontSize = 13.sp,
-                            color = if (entry.key == null) MiuixTheme.colorScheme.onSurfaceVariantSummary
-                            else MiuixTheme.colorScheme.primary,
-                        )
+                        Text(text = "编辑", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
                     },
                 )
             }
@@ -246,44 +412,78 @@ private fun sectionsOf(key: String): List<FormSection> = when (key) {
     else -> emptyList()
 }
 
-// ---------------------------------------------------------------- 分区页
+// ---------------------------------------------------------------- 分区页（字段表 → 行）
 
+/** 运行时候选钩子：详情页按字段 / 路径给出选择池（代理组排除自己、默认选中只列本组成员…）；返回 null 走通用规则。 */
+internal typealias DynamicOptions = (field: FormField, path: YPath) -> List<FormOption>?
+
+/**
+ * 写入拦截钩子：详情页对个别字段做连带处理（切传输层顺手清掉别的 *-opts、开 TLS 补 servername、
+ * 切集合类型删掉 file 用不到的键…）。`value == null` 表示「删键」；返回 true 表示已处理，FieldRow 不再写。
+ */
+internal typealias FieldInterceptor = (field: FormField, path: YPath, value: Any?) -> Boolean
+
+/**
+ * 把若干小节渲染成一页。`base` 是这些字段的根（P1 为空 = 顶层；P2 为 `proxies[3]` 这类项路径），
+ * `onlyType` 给出当前项的 type 时，带 `only` 的字段按它过滤（代理组 / 集合的类型专属字段）；
+ * 和参考实现一样，类型不匹配但配置里已经有值的字段仍然显示（能看见、能删，不会被静默藏起来）。
+ */
 @Composable
-private fun FormPage(
-    key: String,
-    doc: YamlDoc,
-    onSet: (String, Any?, String) -> Unit,
-    onClear: (String, String) -> Unit,
-    onUnsupported: (String) -> Unit,
+internal fun SectionsPage(
+    sections: List<FormSection>,
+    base: YPath,
+    host: FormHost,
+    onlyType: String? = null,
+    header: (@Composable () -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,
+    customRow: (@Composable (FormCustomRow) -> Unit)? = null,
+    dynamicOptions: DynamicOptions? = null,
+    hide: ((FormField) -> Boolean)? = null,
+    intercept: FieldInterceptor? = null,
 ) {
-    val sections = remember(key) { sectionsOf(key) }
+    val doc = host.doc
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (header != null) item(key = "header") { header() }
         for (section in sections) {
-            item(key = "h-${section.title}") {
-                Text(
-                    text = section.title,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = 2.dp),
-                )
-            }
-            items(section.fields) { row ->
+            val rows = section.fields.filter { row ->
                 when (row) {
-                    is FormCustomRow -> CustomRow(row, onUnsupported)
-                    is FormField -> FieldRow(row, doc, onSet, onClear, onUnsupported)
+                    is FormCustomRow -> true
+                    is FormField -> (hide == null || !hide(row)) && (
+                        row.only.isEmpty() || (onlyType != null && onlyType in row.only) ||
+                            FormValues.hasValue(doc, base + YamlDoc.splitPath(row.path))
+                        )
+                }
+            }
+            if (rows.isEmpty()) continue
+            item(key = "h-${section.title}") { SectionHeader(section.title) }
+            items(rows) { row ->
+                when (row) {
+                    is FormCustomRow -> if (customRow != null) customRow(row) else CustomRow(row)
+                    is FormField -> FieldRow(row, base, host, dynamicOptions, intercept)
                 }
             }
         }
+        if (footer != null) item(key = "footer") { footer() }
     }
 }
 
 @Composable
-private fun CustomRow(row: FormCustomRow, onUnsupported: (String) -> Unit) {
+internal fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium,
+        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = 2.dp),
+    )
+}
+
+@Composable
+private fun CustomRow(row: FormCustomRow) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.defaultColors(),
@@ -291,22 +491,131 @@ private fun CustomRow(row: FormCustomRow, onUnsupported: (String) -> Unit) {
         BasicComponent(
             title = "专门控件：${row.kind}",
             summary = "P3 实现（eBPF 角色开关等由代码定制的行）",
-            onClick = { onUnsupported(row.kind) },
+            onClick = { showToast("${row.kind} 的专用编辑器在 P3 落地，先用编辑器直接改这一段原文", long = true) },
         )
     }
 }
 
+/** 一行普通内容卡（列表页里的项）。 */
 @Composable
-private fun FieldRow(
-    field: FormField,
-    doc: YamlDoc,
-    onSet: (String, Any?, String) -> Unit,
-    onClear: (String, String) -> Unit,
-    onUnsupported: (String) -> Unit,
+internal fun RowCard(
+    title: String,
+    summary: String?,
+    onClick: (() -> Unit)?,
+    endActions: @Composable () -> Unit = {},
 ) {
-    val editable = doc.canSet(field.path)
-    var dialog by remember(field.path) { mutableStateOf(false) }
-    val summary = FormValues.describe(doc, field)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.defaultColors(),
+    ) {
+        BasicComponent(
+            title = title,
+            summary = summary,
+            endActions = { endActions() },
+            onClick = onClick,
+        )
+    }
+}
+
+/** 列表页顶部的说明 + 操作按钮行。 */
+@Composable
+internal fun ListHeader(summary: String, actions: @Composable () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
+        Text(
+            text = summary,
+            fontSize = 12.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) { actions() }
+    }
+}
+
+private val P3_ONLY = setOf(
+    FormFieldType.DNSLIST, FormFieldType.APPLIST, FormFieldType.FAKEIPRULE, FormFieldType.RULESETPICK,
+    FormFieldType.CHECKBOX, FormFieldType.FILE, FormFieldType.BUTTON,
+)
+
+/** 简版映射列表编辑器知道怎么编辑的 MAPLIST：字段路径 → 各列（键，标签）。其它 MAPLIST 仍是 P3。 */
+private val MAPLIST_COLUMNS: Map<String, List<Pair<String, String>>> = mapOf(
+    "override.proxy-name" to listOf("pattern" to "匹配正则 pattern", "target" to "替换为 target"),
+)
+
+/** 字段表没写 optionsDynamic 时的兜底：节点自己的 dialer-proxy 用出站池（详情页一般会用 dynamicOptions 钩子再排除自己）。 */
+private fun dynamicKind(field: FormField): String? =
+    field.optionsDynamic ?: if (field.options.isEmpty() && field.type == FormFieldType.SELECT &&
+        field.path.endsWith("dialer-proxy")
+    ) "outbound" else null
+
+private fun isP3(field: FormField): Boolean =
+    field.type in P3_ONLY || (field.type == FormFieldType.MAPLIST && field.path !in MAPLIST_COLUMNS)
+
+/** 文本输入要写回的值：数字字段写数字（整数优先），其余照字符串写。 */
+internal fun typedInput(field: FormField, v: String): Any? =
+    if (field.type == FormFieldType.NUMBER || field.numeric) (v.toLongOrNull() ?: v.toDoubleOrNull() ?: v) else v
+
+/** 下拉选中值要写回的类型（参考实现 fieldRow：`num` → 数字，`bool` → 布尔）。 */
+private fun selectValue(field: FormField, v: String): Any? = when {
+    field.numeric -> v.toLongOrNull() ?: v.toDoubleOrNull() ?: v
+    field.boolKind != null -> v == "true"
+    else -> v
+}
+
+private val LIST_TYPES = setOf(FormFieldType.LIST, FormFieldType.NUMLIST, FormFieldType.USERLIST, FormFieldType.PICKLIST)
+
+/** 三态布尔（参考实现：声明了默认值、tri、或 boolAs=pick 的开关都走「默认 / 开 / 关」弹窗）。 */
+private fun isTriBool(field: FormField): Boolean =
+    field.type == FormFieldType.BOOL && !field.asSwitch && (field.default != null || field.tri || field.boolAs == "pick")
+
+/**
+ * 一个字段一行：标题 + 当前值摘要 + 右侧控件（开关 / 编辑）。字段的真实路径 = `base` + 字段表里的相对路径。
+ * 行为对齐参考实现 fields.js 的 fieldRow（见各分支注释）。
+ */
+@Composable
+internal fun FieldRow(
+    field: FormField,
+    base: YPath,
+    host: FormHost,
+    dynamicOptions: DynamicOptions? = null,
+    intercept: FieldInterceptor? = null,
+) {
+    val doc = host.doc
+    val path: YPath = remember(field.path, base) { base + YamlDoc.splitPath(field.path) }
+    val editable = doc.canSet(path)
+    val hasVal = FormValues.hasValue(doc, path)
+    var dialog by remember(field.path, base) { mutableStateOf(false) }
+    val p3 = isP3(field)
+    val tri = isTriBool(field)
+
+    /** 统一出口：先问详情页的拦截钩子，没人管再按「null = 删键，其余 = 写值」落到 FormHost。 */
+    fun write(value: Any?): Boolean {
+        if (intercept != null && intercept(field, path, value)) return true
+        return if (value == null) host.clear(path, field.label) else host.set(path, value, field.label)
+    }
+    val summary = when {
+        field.type == FormFieldType.BOOL -> {
+            val v = FormValues.readBool(doc, path)
+            when {
+                hasVal && v != null -> if (v) "开" else "关"
+                hasVal -> FormValues.readRaw(doc, path).orEmpty().take(40)
+                field.asSwitch -> "未设置（默认${if (field.default == true) "开" else "关"}）"
+                field.default != null -> "默认（不覆写，内核默认${if (field.default) "开" else "关"}）"
+                else -> if (tri) "默认（不覆写）" else "未设置"
+            }
+        }
+        else -> FormValues.describe(doc, field, path)
+    }
+
+    fun openEditor() {
+        when {
+            p3 -> showToast("${field.label} 的专用编辑器在 P3 落地，先用编辑器直接改这一段原文", long = true)
+            !editable -> showToast("${field.label} 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
+            else -> dialog = true
+        }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -317,390 +626,188 @@ private fun FieldRow(
             summary = buildString {
                 if (summary.isNotEmpty()) append(summary)
                 field.desc?.let { if (isNotEmpty()) append(" · "); append(it) }
-                if (!editable) { if (isNotEmpty()) append(" · "); append("该路径下面是列表/纯值，不能在这里改") }
+                if (!editable) { if (isNotEmpty()) append(" · "); append("该路径下面是纯值/别名，不能在这里改") }
                 field.tag?.let { if (isNotEmpty()) append(" · "); append(it) }
             },
             endActions = {
-                when (field.type) {
-                    FormFieldType.BOOL -> {
-                        val cur = FormValues.readBool(doc, field.path)
+                when {
+                    field.type == FormFieldType.BOOL && field.asSwitch -> {
+                        // 内核默认「开」这类布尔：显示态跟随默认（未写 = 默认）；拨回默认且配置里本没这个键 → 不写
+                        val dflt = field.default == true
+                        val shown = if (hasVal) FormValues.readBool(doc, path) == true else dflt
                         Switch(
-                            checked = cur == true,
-                            onCheckedChange = { onSet(field.path, it, field.label) },
+                            checked = shown,
+                            onCheckedChange = { v ->
+                                if (v == dflt && !hasVal) showToast("${field.label} 本来就是默认值")
+                                else write(v)
+                            },
                             enabled = editable,
                         )
                     }
-                    FormFieldType.SELECT, FormFieldType.TEXT, FormFieldType.NUMBER,
-                    FormFieldType.PASSWORD, FormFieldType.TEXTAREA,
-                    FormFieldType.LIST, FormFieldType.NUMLIST, FormFieldType.USERLIST,
-                    -> {
-                        TextButton(
-                            text = "编辑",
-                            onClick = { if (editable) dialog = true else onUnsupported(field.label) },
+                    field.type == FormFieldType.BOOL && !tri -> {
+                        // 两态（不写 = 关）：关掉时若配置里本来就没有这个键，保持不存在
+                        val shown = hasVal && FormValues.readBool(doc, path) == true
+                        Switch(
+                            checked = shown,
+                            onCheckedChange = { v ->
+                                if (!v && field.optional && !hasVal) showToast("${field.label} 本来就没有设置")
+                                else write(v)
+                            },
+                            enabled = editable,
                         )
                     }
-                    else -> {
-                        Text(
-                            text = "P3",
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        )
-                    }
+                    p3 -> Text(text = "P3", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    else -> TextButton(text = if (tri) "选择" else "编辑", onClick = { openEditor() })
                 }
             },
-            onClick = {
-                when (field.type) {
-                    FormFieldType.BOOL -> Unit
-                    FormFieldType.SELECT, FormFieldType.TEXT, FormFieldType.NUMBER,
-                    FormFieldType.PASSWORD, FormFieldType.TEXTAREA,
-                    FormFieldType.LIST, FormFieldType.NUMLIST, FormFieldType.USERLIST,
-                    -> if (editable) dialog = true else onUnsupported(field.label)
-                    else -> onUnsupported(field.label)
-                }
-            },
+            onClick = { if (field.type != FormFieldType.BOOL || tri) openEditor() },
         )
     }
 
     if (dialog) {
-        when (field.type) {
-            FormFieldType.SELECT -> SelectDialog(
+        val close = { dialog = false }
+        when {
+            tri -> TriBoolDialog(
+                title = field.label,
+                desc = field.desc,
+                current = if (hasVal) FormValues.readBool(doc, path) else null,
+                onDismiss = close,
+                onPick = { v ->
+                    close()
+                    if (v == null) { if (hasVal) write(null) else showToast("${field.label} 本来就是默认") }
+                    else write(v)
+                },
+            )
+            field.type == FormFieldType.SELECT -> SelectDialog(
                 field = field,
-                current = FormValues.readRaw(doc, field.path),
-                onDismiss = { dialog = false },
+                current = FormValues.readRaw(doc, path),
+                candidates = dynamicOptions?.invoke(field, path)
+                    ?: dynamicKind(field)?.let { host.candidates(it, current = listOfNotNull(FormValues.readRaw(doc, path))) }
+                    ?: emptyList(),
+                onDismiss = close,
                 onPick = { value ->
-                    dialog = false
-                    if (value == null) onClear(field.path, field.label)
-                    else onSet(field.path, value, field.label)
+                    close()
+                    if (value == null) write(null)
+                    else write(selectValue(field, value))
                 },
             )
-            FormFieldType.LIST, FormFieldType.NUMLIST, FormFieldType.USERLIST -> ListDialog(
+            field.type in LIST_TYPES -> {
+                val current = FormValues.readListField(doc, field, path)
+                val kind = dynamicKind(field)
+                val candidates = dynamicOptions?.invoke(field, path)
+                    ?: kind?.let { host.candidates(it, current = current) }
+                    ?: field.options
+                // 参考实现：带候选清单（datalist / 动态池）的列表只能挑选，不能手填
+                val pickOnly = field.type == FormFieldType.PICKLIST || kind != null || field.options.isNotEmpty() || dynamicOptions?.invoke(field, path) != null
+                ListDialog(
+                    field = field,
+                    current = current,
+                    candidates = candidates,
+                    pickOnly = pickOnly,
+                    onDismiss = close,
+                    onConfirm = { picked ->
+                        close()
+                        val items = picked.distinct()
+                        when {
+                            items.isEmpty() && field.optional -> write(null)
+                            field.join != null -> write(items.joinToString(field.join))
+                            field.type == FormFieldType.NUMLIST -> write(items.map { it.toLongOrNull() ?: it })
+                            else -> write(items)
+                        }
+                    },
+                )
+            }
+            field.type == FormFieldType.MAPTEXT || field.type == FormFieldType.HEADERS -> MapDialog(
                 field = field,
-                current = FormValues.readList(doc, field.path),
-                onDismiss = { dialog = false },
+                current = FormValues.readMap(doc, path),
+                onDismiss = close,
+                onConfirm = { map ->
+                    close()
+                    if (map.isEmpty() && field.optional) write(null)
+                    else write(map)
+                },
+            )
+            field.type == FormFieldType.MAPLIST -> MapListDialog(
+                field = field,
+                columns = MAPLIST_COLUMNS[field.path].orEmpty(),
+                current = FormValues.readMapList(doc, path),
+                onDismiss = close,
                 onConfirm = { items ->
-                    dialog = false
-                    if (items.isEmpty() && field.optional) onClear(field.path, field.label)
-                    else onSet(field.path, items, field.label)
+                    close()
+                    if (items.isEmpty() && field.optional) write(null)
+                    else write(items)
                 },
             )
-            FormFieldType.TEXTAREA -> TextValueDialog(
-                field = field,
-                current = FormValues.readRaw(doc, field.path).orEmpty(),
+            field.type == FormFieldType.TEXTAREA -> TextValueDialog(
+                title = field.label,
+                summary = pathText(path) + (field.hint?.let { " · $it" } ?: ""),
+                desc = field.desc ?: field.placeholder?.let { "例：$it" },
+                current = FormValues.readRaw(doc, path).orEmpty(),
                 multiLine = true,
-                onDismiss = { dialog = false },
+                onDismiss = close,
                 onConfirm = { v ->
-                    dialog = false
-                    if (v.isBlank() && field.optional) onClear(field.path, field.label)
-                    else onSet(field.path, v, field.label)
+                    close()
+                    // 参考实现：空 → 可选字段删键，必填字段写 ''
+                    if (v.isBlank()) { if (field.optional) write(null) else write("") }
+                    else write(v)
                 },
             )
             else -> TextValueDialog(
-                field = field,
-                current = FormValues.readRaw(doc, field.path).orEmpty(),
+                title = field.label,
+                summary = pathText(path) + (field.hint?.let { " · $it" } ?: ""),
+                desc = field.desc ?: field.placeholder?.let { "例：$it" },
+                current = FormValues.readRaw(doc, path).orEmpty(),
                 multiLine = false,
-                onDismiss = { dialog = false },
+                onDismiss = close,
                 onConfirm = { v ->
-                    dialog = false
-                    if (v.isBlank() && field.optional) onClear(field.path, field.label)
-                    else onSet(field.path, if (field.type == FormFieldType.NUMBER) (v.toDoubleOrNull() ?: v) else v, field.label)
+                    close()
+                    when {
+                        v.isEmpty() -> if (field.optional) write(null) else write("")
+                        (field.type == FormFieldType.NUMBER || field.numeric) && v.toLongOrNull() == null && v.toDoubleOrNull() == null ->
+                            showToast("${field.label} 需要是数字，已忽略", long = true)
+                        else -> write(typedInput(field, v))
+                    }
                 },
             )
         }
     }
 }
 
-// ---------------------------------------------------------------- 弹层
-
-@Composable
-private fun SelectDialog(
-    field: FormField,
-    current: String?,
-    onDismiss: () -> Unit,
-    onPick: (String?) -> Unit,
-) {
-    if (field.options.isEmpty()) {
-        // 选项是运行时算的（代理名 / 策略名）→ P2 起从模型里现取，这里先给文本输入
-        TextValueDialog(field, current.orEmpty(), false, onDismiss) { v ->
-            onPick(v.ifBlank { null })
-        }
-        return
-    }
-    WindowDialog(
-        show = true,
-        title = field.label,
-        summary = "`${field.path}`" + (field.desc?.let { " · $it" } ?: ""),
-        onDismissRequest = onDismiss,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 320.dp)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            for (option in field.options) {
-                BasicComponent(
-                    title = option.label,
-                    summary = option.value,
-                    endActions = {
-                        if (option.value == current) {
-                            Text("当前", fontSize = 12.sp, color = MiuixTheme.colorScheme.primary)
-                        }
-                    },
-                    onClick = { onPick(option.value) },
-                )
-            }
-            if (field.allowEmpty) {
-                BasicComponent(
-                    title = "（未设置）",
-                    summary = "删掉这个键，回到内核默认",
-                    onClick = { onPick(null) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TextValueDialog(
-    field: FormField,
-    current: String,
-    multiLine: Boolean,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    var draft by remember { mutableStateOf(current) }
-    WindowDialog(
-        show = true,
-        title = field.label,
-        summary = "`${field.path}`" + (field.hint?.let { " · $it" } ?: ""),
-        onDismissRequest = onDismiss,
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            TextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = if (multiLine) "值（可多行）" else "值",
-            )
-            if (multiLine) {
-                Text(
-                    text = "多行内容会按 | 块写入（YAML 里保留换行）",
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-            field.desc?.let {
-                Text(
-                    text = it,
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                TextButton(text = "取消", onClick = onDismiss)
-                Spacer(Modifier.width(8.dp))
-                TextButton(text = "确定", onClick = { onConfirm(draft.trim()) })
-            }
-        }
-    }
-}
-
-@Composable
-private fun ListDialog(
-    field: FormField,
-    current: List<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (List<String>) -> Unit,
-) {
-    val items = remember { mutableStateListOf<String>().also { it.addAll(current) } }
-    var draft by remember { mutableStateOf("") }
-    WindowDialog(
-        show = true,
-        title = field.label,
-        summary = "`${field.path}` · ${items.size} 项" + (field.hint?.let { " · $it" } ?: ""),
-        onDismissRequest = onDismiss,
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 260.dp)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                items.forEachIndexed { index, item ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = (index + 1).toString().padStart(2),
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            modifier = Modifier.width(28.dp),
-                        )
-                        Text(
-                            text = item,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(text = "上移", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-                            if (index > 0) {
-                                val v = items.removeAt(index)
-                                items.add(index - 1, v)
-                            }
-                        })
-                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { items.removeAt(index) })
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    modifier = Modifier.weight(1f),
-                    label = field.hint ?: "新增一项",
-                )
-                Spacer(Modifier.width(8.dp))
-                TextButton(text = "添加", onClick = {
-                    val v = draft.trim()
-                    if (v.isNotEmpty()) {
-                        items.add(v)
-                        draft = ""
-                    }
-                })
-            }
-            field.desc?.let {
-                Text(
-                    text = it,
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                TextButton(text = "取消", onClick = onDismiss)
-                Spacer(Modifier.width(8.dp))
-                TextButton(text = "确定", onClick = { onConfirm(items.toList()) })
-            }
-        }
+/** 路径的可读形式：`proxies[3].ws-opts.path`。 */
+internal fun pathText(path: YPath): String = buildString {
+    for (seg in path) {
+        if (seg is Int) append('[').append(seg).append(']')
+        else { if (isNotEmpty()) append('.'); append(YamlDoc.quoteSeg(seg.toString())) }
     }
 }
 
 // ---------------------------------------------------------------- 取值 / 计数
-
-/**
- * 从文档里读表单需要的值。全部走 [YamlDoc] 的行模型（不改文本、不建副本），
- * 与写回侧的路径语义严格一致——读得到的路径才写得进。
- */
-object FormValues {
-
-    fun readRaw(doc: YamlDoc, path: String): String? {
-        val n = doc.get(path) ?: return null
-        if (n.kind == YamlNode.Kind.MAP || n.kind == YamlNode.Kind.SEQ) {
-            val text = doc.lines[n.start]
-            return if (n.flow) text.substring(n.flowStart, n.flowEnd.coerceAtMost(text.length)) else null
-        }
-        val line = doc.lines[n.start]
-        val raw = line.substring(
-            n.valueStart.coerceAtLeast(0).coerceAtMost(line.length),
-            n.valueEnd.coerceAtLeast(0).coerceAtMost(line.length),
-        )
-        return unquote(raw.trim())
-    }
-
-    fun readBool(doc: YamlDoc, path: String): Boolean? = when (readRaw(doc, path)?.lowercase()) {
-        "true", "yes", "on" -> true
-        "false", "no", "off" -> false
-        else -> null
-    }
-
-    /** 块序列或 flow 序列里的标量项；不是序列则 null。 */
-    fun readList(doc: YamlDoc, path: String): List<String> {
-        val n = doc.get(path) ?: return emptyList()
-        if (n.kind != YamlNode.Kind.SEQ) return emptyList()
-        return n.items.mapNotNull { item ->
-            if (item.inline) {
-                val line = doc.lines[item.start]
-                unquote(
-                    line.subSequence(
-                        item.valueStart.coerceAtLeast(0).coerceAtMost(line.length),
-                        item.valueEnd.coerceAtLeast(0).coerceAtMost(line.length),
-                    ).toString().trim(),
-                )
-            } else null
-        }
-    }
-
-    fun count(doc: YamlDoc, path: String): Int {
-        val n = doc.get(path) ?: return 0
-        return when (n.kind) {
-            YamlNode.Kind.MAP -> n.entries.size
-            YamlNode.Kind.SEQ -> n.items.size
-            else -> 1
-        }
-    }
-
-    /** 字段当前状态的一行摘要（列表显示 N 项、布尔显示 开/关/未设置）。 */
-    fun describe(doc: YamlDoc, field: FormField): String {
-        val n = doc.get(field.path)
-        if (n == null || doc.isNullText(n)) return "未设置"
-        return when (field.type) {
-            FormFieldType.BOOL -> if (readBool(doc, field.path) == true) "开" else "关"
-            FormFieldType.LIST, FormFieldType.NUMLIST, FormFieldType.USERLIST ->
-                "${readList(doc, field.path).size} 项"
-            FormFieldType.SELECT -> readRaw(doc, field.path)?.let { v ->
-                field.options.firstOrNull { it.value == v }?.label ?: v
-            } ?: "未设置"
-            FormFieldType.MAPTEXT, FormFieldType.MAPLIST, FormFieldType.HEADERS ->
-                "${count(doc, field.path)} 项"
-            else -> readRaw(doc, field.path).orEmpty().take(60)
-        }
-    }
-
-    private fun unquote(s: String): String {
-        if (s.length >= 2 && (s[0] == '\'' || s[0] == '"') && s.last() == s[0]) {
-            return s.substring(1, s.length - 1).replace("''", "'")
-        }
-        return s
-    }
-}
 
 private fun countOf(doc: YamlDoc, path: String): Int {
     val n = doc.get(path) ?: return 0
     return when (n.kind) {
         YamlNode.Kind.MAP -> n.entries.size
         YamlNode.Kind.SEQ -> n.items.size
-        else -> if (FormValues.readBool(doc, path) == true) 1 else 0
+        else -> if (FormValues.readBool(doc, YamlDoc.splitPath(path)) == true) 1 else 0
     }
 }
 
-/** 写入后定位到该键所在行（1 起），找不到就返回 null。 */
-private fun lineOfPath(doc: YamlDoc, path: String): Int? {
-    val parts = YamlDoc.splitPath(path)
+/** 写入后定位到该路径所在行（1 起），找不到就返回 null。 */
+private fun lineOfPath(doc: YamlDoc, path: YPath): Int? {
     var node: YamlNode? = doc.root
-    var entry: YamlEntry? = null
-    for (part in parts) {
+    var line: Int? = null
+    for (part in path) {
         val n = node ?: break
-        if (n.kind == YamlNode.Kind.MAP && n.flow) {
-            return n.start + 1
+        if (n.flow) return n.start + 1
+        if (part is Int) {
+            if (n.kind != YamlNode.Kind.SEQ || part < 0 || part >= n.items.size) return line?.plus(1)
+            node = n.items[part]
+            line = node.start
+        } else {
+            val entry = doc.findEntry(n, part.toString()) ?: return line?.plus(1)
+            line = entry.line
+            node = entry.node
         }
-        entry = doc.findEntry(n, part) ?: return null
-        node = entry.node
     }
-    return entry?.line?.plus(1)
+    return line?.plus(1)
 }

@@ -25,15 +25,15 @@ bash mishka-custom/scripts/build-release.sh --repo .
 | 路径 | 内容 |
 | --- | --- |
 | `scripts/` | `setup.sh`（装配）、`apply-patches.sh` / `revert-patches.sh`（重打/还原）、`build-release.sh`（只出 release）、`gen-keystore.sh`（签名） |
-| `patches/app/` | app 侧补丁 `0001-anchor-panel.patch`（8 个新文件 + 编辑器入口，9 files / 5198 insertions）+ 基线 `BASELINE.txt` |
+| `patches/app/` | app 侧补丁 `0001-anchor-panel.patch`（14 个新文件 + 编辑器入口，15 files / 11327 insertions）+ 基线 `BASELINE.txt` |
 | `patches/mihomo/` | 内核 4 个补丁（`0001`…`0004`）+ 基线 `BASELINE.txt`（含基线 commit 与逐文件 blob） |
 | `kernel/` | `go.work` + `go.work.sum`：让「换了分支的内核」不依赖改仓库 `go.mod`/`go.sum` 就能编译 |
 | `init/` | `no-debug.init.gradle`：构建 debug 变体时直接失败（默认只出 release） |
 | `ci/` | `build-release.yml`：只出 release 的 GitHub Actions 工作流（新增文件，不动上游 `build.yml`） |
 | `app/src/main/kotlin/top/yukonga/mishka/custom/anchor/` | 锚点面板的 5 个 Kotlin 源文件（方便直接阅读；补丁里也含同一份） |
-| `app/src/main/kotlin/top/yukonga/mishka/custom/forms/` | 配置表单的 3 个 Kotlin 源文件：`YamlEngine.kt`（保真写回引擎 876 行）、`FormSpecs.kt`（152 字段表，生成物 1212 行）、`ConfigFormPanel.kt`（界面 710 行） |
+| `app/src/main/kotlin/top/yukonga/mishka/custom/forms/` | 配置表单的 9 个 Kotlin 源文件：`YamlEngine.kt`（保真写回引擎 1124 行）、`FormSpecs.kt`（P1 152 字段表，生成物 1223 行）、`FormSpecsP2.kt`（P2 266 字段 + 37 种规则 + 27 种协议模板，从参考实现源码提取后生成，2188 行）、`ConfigFormPanel.kt`（hub + 导航 + 写回宿主 + 字段行 + P1 分区页 813 行）、`FormDialogs.kt`（两期共用弹层 660 行）、`FormValues.kt`（行树读值 138 行）、`FlowFormPages.kt`（P2 七个流程页 2110 行）、`ConfigRefs.kt`（删除前引用检查 + 改名级联 547 行）、`FlowText.kt`（规则 / 隧道字符串语法 120 行） |
 | `tools/` | 自检工具：补丁双向校验、语法门、API/具名参数核对、锚点算法三方可对拍、性质测试、模型新鲜度、表单引擎双实现对拍、可复现打包（`pack_deliver.sh`） |
-| `README.md` / `CUSTOMIZATION.md` / `BUILD.md` / `INSTALL.md` / `VERIFY.md` / `FORMS.md` / `FORMS-P1.md` | 交付说明、定制详解、构建、安装与回滚、已验证事实、配置表单设计与字段清单 |
+| `README.md` / `CUSTOMIZATION.md` / `BUILD.md` / `INSTALL.md` / `VERIFY.md` / `FORMS.md` / `FORMS-P1.md` / `FORMS-P2.md` | 交付说明、定制详解、构建、安装与回滚、已验证事实、配置表单设计与 P1 / P2 字段清单 |
 
 ## 三块定制做了什么事（细节见 `CUSTOMIZATION.md`）
 
@@ -70,7 +70,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
 `README.md` / `CUSTOMIZATION.md` / `BUILD.md` / `INSTALL.md` / `VERIFY.md`、
 `scripts/` 里其余脚本（`build-release.sh`、`apply-patches.sh`、`revert-patches.sh`、`gen-keystore.sh`、`verify.sh`）、
 `tools/` 其余（`check_kotlin.py`、`check_api.py`、`api_paths.json`、`export_app_patch.sh`、`verify_app_patch.sh`、`equiv/` 全套）、
-`app/src/main/kotlin/top/yukonga/mishka/custom/`（anchor 5 个 + forms 3 个源文件，供阅读；注意 `tools/` 的离线自检读的正是这里，两个目录要一起传）、
+`app/src/main/kotlin/top/yukonga/mishka/custom/`（anchor 5 个 + forms 6 个源文件，供阅读；注意 `tools/` 的离线自检读的正是这里，两个目录要一起传）、
 `kernel/go.work`（模板）、`kernel/README.md`、`ci/build-release.yml`。
 
 合起来不到 600 KB，全传最省心。

@@ -1,0 +1,165 @@
+# 引用关系语料：删除保护 / 改名同步对拍用（ConfigRefs / RenameSync 与参考实现 config-references.js 对拍）
+# 顺带放了几种引擎回归形态：带冒号的裸键（nameserver-policy）、`|` 多行块、`key: &锚点 [flow]`、`*别名` 成员列表
+mode: rule
+banner: |
+  line one
+  line two
+
+experimental:
+  note: |-
+    -----BEGIN-----
+    abc
+    -----END-----
+
+dns:
+  enable: true
+  fake-ip-filter-mode: blacklist
+  fake-ip-filter:
+    - rule-set:fakeip-filter, local-domains
+    - "+.lan"
+    - RULE-SET,dns-skip,DIRECT
+    - AND,((DOMAIN-SUFFIX,x.y),(RULE-SET,and-set)),DIRECT
+  nameserver:
+    - https://dns.google/dns-query#节点选择
+    - https://1.1.1.1/dns-query#RULES
+    - https://doh.pub/dns-query#%E9%A6%99%E6%B8%AF%2001&h3=true
+  nameserver-policy:
+    rule-set:policy-set,other-set: [https://dns.alidns.com/dns-query]
+    geosite:cn: 223.5.5.5
+  proxy-server-nameserver: [https://dns.google/dns-query#落地 04]
+  direct-nameserver: [https://dns.google/dns-query#DIRECT]
+
+tun:
+  enable: true
+  route-address-set: [cn-cidr]
+  route-exclude-address-set:
+    - private-cidr
+  bypass-rule-set: solo-set
+
+proxies:
+  - name: 香港 01
+    type: ss
+    server: hk1.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: x
+  - name: 日本 02
+    type: vmess
+    server: jp.example.com
+    port: 443
+    uuid: 0f8b4a5e-1c2d-4e3f-9a8b-7c6d5e4f3a2b
+    dialer-proxy: 香港 01
+  - name: 落地 04
+    type: socks5
+    server: 10.0.0.2
+    port: 1080
+    dialer-proxy: 节点选择
+  - name: 重名
+    type: direct
+  - name: 重名
+    type: reject
+  - {name: 美国 03, type: trojan, server: us.example.com, port: 443, password: p, dialer-proxy: 日本 02}
+
+proxy-providers:
+  机场A:
+    type: http
+    url: https://sub.example.com/a
+    path: ./providers/a.yaml
+    proxy: 节点选择
+    override:
+      dialer-proxy: 落地 04
+  机场B:
+    type: file
+    path: ./b.yaml
+  闲置集合:
+    type: inline
+    payload:
+      - {name: 内联节点, type: ss, server: 1.2.3.4, port: 1, cipher: aes-128-gcm, password: y, dialer-proxy: 香港 01}
+
+common-members: &members
+  - 香港 01
+  - 日本 02
+shared-use: &use [机场B]
+
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies: [自动选择, 香港 01, DIRECT, 美国 03]
+    use: [机场A]
+  - name: 自动选择
+    type: url-test
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    proxies: *members
+    use:
+      - 机场A
+      - 机场B
+  - name: 别名组
+    type: fallback
+    proxies: *members
+    use: *use
+  - name: 自环组
+    type: select
+    proxies: [自环组, 节点选择]
+  - name: 坏成员
+    type: select
+    proxies: 节点选择
+  - name: 空组
+    type: select
+
+rule-providers:
+  reject:
+    type: http
+    behavior: domain
+    url: https://cdn.example.com/reject.txt
+    path: ./ruleset/reject.yaml
+    proxy: 落地 04
+  direct:
+    type: file
+    behavior: classical
+    path: ./ruleset/direct.yaml
+  fakeip-filter: {type: file, behavior: domain, path: ./f.yaml}
+  local-domains: {type: file, behavior: domain, path: ./l.yaml}
+  dns-skip: {type: file, behavior: domain, path: ./d.yaml}
+  and-set: {type: file, behavior: domain, path: ./a.yaml}
+  policy-set: {type: file, behavior: domain, path: ./p.yaml}
+  other-set: {type: file, behavior: domain, path: ./o.yaml}
+  cn-cidr: {type: file, behavior: ipcidr, path: ./c.yaml}
+  private-cidr: {type: file, behavior: ipcidr, path: ./pc.yaml}
+  solo-set: {type: file, behavior: ipcidr, path: ./s.yaml}
+  unused-set: {type: file, behavior: domain, path: ./u.yaml}
+  nested-set: {type: file, behavior: domain, path: ./n.yaml}
+
+sub-rules:
+  流媒体:
+    - DOMAIN-SUFFIX,netflix.com,节点选择
+    - RULE-SET,nested-set,自动选择,no-resolve
+    - MATCH,DIRECT
+  坏子规则:
+    - AND,((DOMAIN,a.com),(NETWORK,UDP
+    - 42
+
+rules:
+  - DOMAIN-SUFFIX,google.com,节点选择
+  - RULE-SET,reject,REJECT
+  - RULE-SET,direct,DIRECT,no-resolve
+  - "RULE-SET,'reject',自动选择"
+  - IP-CIDR,192.168.0.0/16,别名组,no-resolve
+  - SRC-IP-CIDR,10.0.0.0/8,香港 01,src
+  - AND,((DOMAIN-SUFFIX,a.com),(RULE-SET,nested-set)),落地 04
+  - OR,((NOT,((DOMAIN-REGEX,(a|b)\.c))),(SUB-RULE,(DOMAIN,x.com),流媒体)),自动选择
+  - NOT,((RULE-SET,and-set)),DIRECT,no-resolve
+  - SUB-RULE,(DOMAIN-KEYWORD,video),流媒体
+  - GEOIP,CN,"日本 02",no-resolve
+  - IN-NAME,ss,PASS
+  - MATCH,节点选择
+
+tunnels:
+  - tcp/udp,127.0.0.1:6553,8.8.8.8:53,节点选择
+  - udp,127.0.0.1:6554,1.1.1.1:53
+  - tcp,127.0.0.1:6555,example.com:80,"美国 03"
+  - network: [tcp]
+    address: 127.0.0.1:6556
+    target: example.org:443
+    proxy: 落地 04
+  - tcp,(broken

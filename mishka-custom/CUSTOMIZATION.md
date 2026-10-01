@@ -26,7 +26,7 @@
 
 ### 文件与入口
 
-新增 8 个文件（`patches/app/0001-anchor-panel.patch`，共 9 files / 5198 insertions）：
+新增 14 个文件（`patches/app/0001-anchor-panel.patch`，共 15 files / 11327 insertions）：
 
 | 文件 | 职责 |
 | --- | --- |
@@ -36,8 +36,14 @@
 | `custom/anchor/AnchorDialogs.kt` | 5 个子对话框（定义编辑 / 引用编辑 / 新建 / 改名 / 删除确认） |
 | `custom/anchor/AnchorPanel.kt` | 面板本体：总览卡片、悬空卡片、子对话框编排、**唯一落地通道** `apply()` |
 | `custom/forms/YamlEngine.kt` | 配置表单的保真写回引擎（行树解析 + 三层写回 + 值渲染），与 `tools/forms/forms_model.py` 逐字节对拍 |
-| `custom/forms/FormSpecs.kt` | 152 个字段的声明表（由 `tools/forms/gen_specs.py` 从 `fields.json` 生成，勿手改） |
-| `custom/forms/ConfigFormPanel.kt` | 配置表单面板：hub 13 格 + 6 个分区页 + 开关/下拉/文本/数字/多行/列表编辑 |
+| `custom/forms/FormSpecs.kt` | P1 的 152 个字段声明表（由 `tools/forms/gen_specs.py` 从 `fields.json` 生成，勿手改） |
+| `custom/forms/FormSpecsP2.kt` | P2 的字段表：27 种协议的参数 / 传输层 / TLS / 多路复用 / 通用字段与新建模板、代理组 / 代理集合 / 规则集合 / 隧道小节、37 种规则类型、内置策略与 override-expr 预设（`tools/forms/extract_flow.mjs` 从 mihomo_box `657e799778` 的 `pages-flow.js` / `pages-config.js` 求值提取成 `fields_p2.json`，再由 `gen_specs.py` 生成，勿手改） |
+| `custom/forms/ConfigFormPanel.kt` | 配置表单面板：hub 13 格、导航栈、写回宿主 `FormHost`（统一走 `YamlPatch`，含批量写回 `batch` 与候选池 `candidates`）、P1 的 6 个分区页、两期共用的字段行（开关 / 三态 / 下拉 / 多选 / 文本 / 数字 / 多行 / 列表 / 键值表 / 映射列表） |
+| `custom/forms/FormDialogs.kt` | 两期共用的弹层：下拉 / 三态 / 文本 / 列表 / 键值表 / 映射列表 / 改名 / 选项 / 项菜单 / 确认 / 「无法删除」说明 |
+| `custom/forms/FormValues.kt` | 从行树读值（原文 / 布尔 / 列表 / 映射 / 计数 / 摘要），表单与引用检查共用 |
+| `custom/forms/FlowFormPages.kt` | P2 的七个流程页：出站代理（含 inline payload、传输层 / TLS 连带处理、其他参数 YAML）、代理集合（健康检查三态、override-expr 可视化）、代理组、路由规则（规则对话框 + 文本模式）、规则集合、子规则、流量隧道；删除前引用检查 + 改名级联的编排 |
+| `custom/forms/ConfigRefs.kt` | `PlainYaml`（行树 → 展开后的普通对象，`<<:` / 锚点按 YAML 语义合并）、`ConfigRefs`（删除前引用检查，照 `config-references.js`）、`RenameSync`（改名级联计划，照各编辑器的同步片段），与参考 JS 对拍 153 例 0 差异 |
+| `custom/forms/FlowText.kt` | 规则串与隧道串的拆合（照内核 `ParseRulePayload` / `tunnel.UnmarshalText`），纯 Kotlin，可用 kotlinc 单独编译对拍 |
 
 入口只改一处（39 行，全部集中在 `ui/screen/settings/FileManagerEditorScreen.kt`）：
 顶栏 actions 里加两个图标按钮，仅 YAML 文件显示 —— `MiuixIcons.Link`（锚点面板）、`MiuixIcons.Tune`（配置表单）——

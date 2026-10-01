@@ -24,6 +24,8 @@ done
 
 DELIVER="$(deliver_root)"
 PY="python3"
+# 自检脚本会 import tools/ 下的模块；不让 Python 往仓库里写 __pycache__，否则后面的补丁校验会看到「工作区不干净」
+export PYTHONDONTWRITEBYTECODE=1
 command -v "$PY" >/dev/null 2>&1 || die "需要 python3"
 
 pass=0
@@ -91,6 +93,15 @@ if command -v kotlinc >/dev/null 2>&1 || [[ -x "$HOME/.cache/kt/kotlinc/bin/kotl
   run "Kotlin↔Python 引擎逐字节对拍" bash "$DELIVER/tools/forms/run_engine_diff.sh"
 else
   skip "Kotlin↔Python 引擎逐字节对拍" "没有 kotlinc（装了以后这一项会自动跑；改过 YamlEngine.kt 必须跑）"
+fi
+
+# 删除前引用检查 / 改名同步（ConfigRefs.kt）与参考实现 JS 的对拍：要 kotlinc + node + java；缺任一就跳过
+if [[ -f "$DELIVER/tools/forms/run_refs_diff.sh" ]]; then
+  if (command -v kotlinc >/dev/null 2>&1 || [[ -x "$HOME/.cache/kt/kotlinc/bin/kotlinc" ]]) && command -v node >/dev/null 2>&1 && command -v java >/dev/null 2>&1; then
+    run "引用检查 / 改名同步与参考实现对拍" bash "$DELIVER/tools/forms/run_refs_diff.sh"
+  else
+    skip "引用检查 / 改名同步与参考实现对拍" "需要 kotlinc + node + java"
+  fi
 fi
 
 # API / 具名实参核对需要依赖源码路径（tools/api_paths.json）；缺路径会记「未核对」，不算失败

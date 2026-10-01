@@ -1,0 +1,105 @@
+# P2 语料：出站代理 / 代理集合 / 代理组 / 规则 / 规则集合 / 子规则 / 隧道（缩进序列风格）
+mixed-port: 7890
+mode: rule
+
+proxies:
+  # 第一个节点
+  - name: 香港 01
+    type: ss
+    server: hk1.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: 'pass:word'   # 带冒号
+    udp: true
+  - name: 日本 02
+    type: vmess
+    server: jp.example.com
+    port: 443
+    uuid: 0f8b4a5e-1c2d-4e3f-9a8b-7c6d5e4f3a2b
+    alterId: 0
+    cipher: auto
+    tls: true
+    network: ws
+    ws-opts:
+      path: /ws
+      headers:
+        Host: jp.example.com
+  - {name: 美国 03, type: trojan, server: us.example.com, port: 443, password: trojan-pass, sni: us.example.com}
+  - name: 落地 04
+    type: socks5
+    server: 10.0.0.2
+    port: 1080
+    dialer-proxy: 香港 01
+
+proxy-providers:
+  机场A:
+    type: http
+    url: https://sub.example.com/a?token=abc
+    path: ./providers/a.yaml
+    interval: 3600
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+    override:
+      additional-prefix: "[A] "
+  local.file:
+    type: file
+    path: ./local.yaml
+
+proxy-groups:
+  - name: 节点选择
+    type: select
+    proxies:
+      - 自动选择
+      - 香港 01
+      - 日本 02
+      - DIRECT
+  - name: 自动选择
+    type: url-test
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    use: [机场A]
+    proxies: [香港 01, 日本 02, 美国 03]
+  - name: 负载
+    type: load-balance
+    strategy: consistent-hashing
+    include-all: true
+    filter: "(?i)香港|HK"
+
+rule-providers:
+  reject:
+    type: http
+    behavior: domain
+    url: https://cdn.example.com/reject.txt
+    path: ./ruleset/reject.yaml
+    interval: 86400
+  direct:
+    type: file
+    behavior: classical
+    path: ./ruleset/direct.yaml
+
+sub-rules:
+  媒体分流:
+    - DOMAIN-SUFFIX,netflix.com,节点选择
+    - MATCH,DIRECT
+  'cn.rules':
+    - GEOIP,CN,DIRECT
+
+rules:
+  - RULE-SET,reject,REJECT
+  # 国内直连
+  - DOMAIN-SUFFIX,cn,DIRECT
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR6,2400:3200::1/128,DIRECT,no-resolve   # IPv6 带冒号
+  - SUB-RULE,(DOMAIN-KEYWORD,netflix),媒体分流
+  - GEOIP,CN,DIRECT
+  - MATCH,节点选择
+
+tunnels:
+  - tcp/udp,127.0.0.1:6553,114.114.114.114:53,节点选择
+  - network: [tcp]
+    address: 127.0.0.1:6666
+    target: target.com:80
+    proxy: DIRECT

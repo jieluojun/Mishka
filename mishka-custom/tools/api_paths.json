@@ -1,6 +1,6 @@
 {
-  "_doc": "check_api.py 的依赖源码路径（沙箱/本机皆可；路径不存在会被记为「未核对」）",
-  "repo_root": "/home/user/deliver",
+  "_doc": "check_api.py 的依赖源码路径（沙箱/本机皆可；路径不存在会被记为「未核对」；repo_root 留空 = 按脚本位置自动找交付根目录）",
+  "repo_root": "",
   "sources": {
     "miuix-ui": "/home/user/work/mvn/uisrc/commonMain",
     "miuix-preference": "/home/user/work/mvn/prefsrc/commonMain",
