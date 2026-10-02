@@ -510,17 +510,18 @@ proxy-groups（序列，按下标编辑；带 only 的字段按组的 type 显�
 | `tolerance` | 切换容差(ms) | number | 仅 smart；延迟差小于该值不切换 |
 | `policy-priority` | 节点权重策略 | text | 仅 smart；提示：如 Premium:0.9;SG:1.3；<1 降权 >1 加权，正则/串匹配 |
 
-## 代理集合（PROXY_PROVIDER_SECTIONS，共 34 个字段）
+## 代理集合（PROXY_PROVIDER_SECTIONS，共 35 个字段）
 
 proxy-providers（映射，按名字编辑；only = http / inline 的字段在 file 类型隐藏）
 
-**基础**（8）
+**基础**（9）
 
 | 路径 | 标签 | 类型 | 说明 |
 | --- | --- | --- | --- |
 | `type` | 类型 | select | 取值：http / file / inline |
 | `url` | 订阅链接 | text | 仅 http / inline；http 类型必填 |
 | `path` | 保存路径 | text | 提示：默认 ./proxies/ 目录 |
+| — | （专门控件） | `provider-file-ops` | 由代码实现的定制行 |
 | `interval` | 自动更新间隔(秒) | number | 仅 http / inline |
 | `size-limit` | 订阅大小限制(字节) | number | 仅 http / inline；0 为不限制 |
 | `proxy` | 下载出口 | select | 仅 http / inline；候选：outbound（运行时从配置里收集）；下载订阅使用的出口 |
@@ -573,11 +574,11 @@ proxy-providers（映射，按名字编辑；only = http / inline 的字段在 f
 | --- | --- | --- | --- |
 | — | （专门控件） | `override-expr` | 由代码实现的定制行 |
 
-## 规则集合（RULE_PROVIDER_SECTIONS，共 8 个字段）
+## 规则集合（RULE_PROVIDER_SECTIONS，共 9 个字段）
 
 rule-providers（映射，按名字编辑；only = http / inline 的字段在 file 类型隐藏）
 
-**基础**（8）
+**基础**（9）
 
 | 路径 | 标签 | 类型 | 说明 |
 | --- | --- | --- | --- |
@@ -586,6 +587,7 @@ rule-providers（映射，按名字编辑；only = http / inline 的字段在 fi
 | `format` | 格式 | select | 取值：yaml / text / mrs |
 | `url` | 下载链接 | text | 仅 http / inline |
 | `path` | 本地路径 | text | 提示：默认 ./rules/ 目录 |
+| — | （专门控件） | `rule-provider-file-ops` | 由代码实现的定制行 |
 | `interval` | 更新间隔(秒) | number | 仅 http / inline |
 | `proxy` | 下载出口 | select | 仅 http / inline；候选：outbound（运行时从配置里收集）；下载规则集使用的出口 |
 | — | （专门控件） | `rule-provider-payload` | 由代码实现的定制行 |

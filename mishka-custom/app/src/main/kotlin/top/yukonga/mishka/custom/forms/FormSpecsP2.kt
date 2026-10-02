@@ -1833,6 +1833,7 @@ val PROXY_PROVIDER_SECTIONS: List<FormSection> by lazy {
                 placeholder = "默认 ./proxies/ 目录",
                 optional = true,
             ),
+            FormCustomRow("provider-file-ops"),
             FormField(
                 path = "interval",
                 label = "自动更新间隔(秒)",
@@ -2088,6 +2089,7 @@ val RULE_PROVIDER_SECTIONS: List<FormSection> by lazy {
                 placeholder = "默认 ./rules/ 目录",
                 optional = true,
             ),
+            FormCustomRow("rule-provider-file-ops"),
             FormField(
                 path = "interval",
                 label = "更新间隔(秒)",

@@ -354,6 +354,7 @@ private fun proxyName(doc: YamlDoc, node: YamlNode): String? =
 private fun ProxyListPage(host: FormHost, nav: FormNav, seqPath: YPath) {
     val doc = host.doc
     var picker by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<DeleteFlow?>(null) }
     var plainDelete by remember { mutableStateOf(-1) }
     val protectedList = seqPath == PROXIES_PATH
@@ -363,6 +364,8 @@ private fun ProxyListPage(host: FormHost, nav: FormNav, seqPath: YPath) {
         unit = "个节点",
         emptyHint = "还没有节点。点「新增节点」选协议，会按模板写入一项，再进详情页改服务器 / 端口 / 密码。",
         headerActions = {
+            // 「解析」= 粘贴分享链接 / YAML 节点批量导入（参考实现 openProxyUriImport）
+            TextButton(text = "解析", onClick = { importing = true })
             TextButton(text = "新增节点", onClick = { picker = true })
         },
         rowTitle = { i, node -> proxyName(doc, node) ?: "节点 #${i + 1}" },
@@ -413,6 +416,94 @@ private fun ProxyListPage(host: FormHost, nav: FormNav, seqPath: YPath) {
             onDismiss = { plainDelete = -1 },
             onConfirm = { plainDelete = -1; host.removeItem(seqPath, i, "节点 #${i + 1}") },
         )
+    }
+    if (importing) {
+        ProxyImportDialog(host = host, seqPath = seqPath, onDismiss = { importing = false })
+    }
+}
+
+/**
+ * 「解析节点」导入弹层（参考实现 proxy-uri-sheet.js）：URI 每行一条或整体 YAML 节点；
+ * 成功项一次批量写入并从输入框移除，失败行留在框里方便修正重试。只加入当前草稿，不进代理组。
+ */
+@Composable
+private fun ProxyImportDialog(host: FormHost, seqPath: YPath, onDismiss: () -> Unit) {
+    var input by remember { mutableStateOf("") }
+    var summary by remember { mutableStateOf<String?>(null) }
+    var details by remember { mutableStateOf<String?>(null) }
+
+    fun runImport() {
+        val text = input
+        val doc = host.doc
+        // 保留名池（参考实现）：内置策略 + 节点 + 代理组；再加目标序列自己的名字防重
+        val reserved = (BUILTIN_POLICIES.map { it.value } + host.seqNames(PROXIES_PATH) +
+            host.seqNames(GROUPS_PATH) + host.seqNames(seqPath)).distinct()
+        val result = try {
+            ProxyUri.parseAll(text, reserved)
+        } catch (e: ProxyUriError) {
+            summary = e.message
+            details = null
+            return
+        }
+        if (result.proxies.isNotEmpty()) {
+            val startIndex = seqSize(doc, seqPath)
+            val ops = result.proxies.mapIndexed { i, p -> BatchOp.InsertItem(seqPath, startIndex + i, p) }
+            val ok = host.batch(ops, "${result.proxies.size} 个节点", "已添加")
+            if (!ok) {
+                summary = "添加未应用，请先处理配置错误后重试；输入已保留。"
+                details = null
+                return
+            }
+            // 成功项移出输入框，重试失败项时不会再次追加已经导入的节点
+            input = result.errors.joinToString("\n") { it.input }
+            showToast("已添加 ${result.proxies.size} 个出站节点")
+        }
+        summary = "已添加 ${result.proxies.size} 个，失败 ${result.errors.size} 个，跳过重复 ${result.skipped} 个。" +
+            if (result.proxies.isNotEmpty()) " 请保存配置。" else " 未修改配置。"
+        details = (
+            result.added.map { item ->
+                "第 ${item.line} 行：已添加「${item.name}」" +
+                    (if (item.renamed) "（重名已加序号）" else "") +
+                    (if (item.warnings.isNotEmpty()) "\n  注意：${item.warnings.joinToString("；")}" else "")
+            } + result.errors.map { "第 ${it.line} 行：${it.message}" }
+            ).joinToString("\n").ifEmpty { null }
+    }
+
+    WindowDialog(
+        show = true,
+        title = "解析节点",
+        summary = "`" + pathText(seqPath) + "` · 只添加到当前配置草稿，不覆盖已有节点、不自动加入代理组",
+        onDismissRequest = onDismiss,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DialogNote("支持 URI（SS / VMess / VLESS / Trojan / Hysteria2 / TUIC）或 Clash/Mihomo YAML 节点（可不带 proxies:）。每批最多 500 个；同名自动加序号。")
+            TextField(
+                value = input,
+                onValueChange = { input = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = "URI 每行一个，或粘贴 YAML 节点（可不带 proxies:）",
+                useLabelAsPlaceholder = true,
+                minLines = 5,
+            )
+            summary?.let { DialogNote(it) }
+            details?.let { d ->
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState()),
+                ) {
+                    Text(text = d, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextButton(text = "关闭", onClick = onDismiss)
+                TextButton(text = "解析并添加", onClick = { if (input.isNotBlank()) runImport() })
+            }
+        }
     }
 }
 
@@ -864,13 +955,8 @@ private fun renameProvider(host: FormHost, old: String, new: String): Boolean {
     return ok
 }
 
-/** 读 override.override-expr：数组 / 单条字符串都规范成列表（参考实现 exprItems）。 */
-private fun exprItems(doc: YamlDoc, base: YPath): List<String> {
-    val path = base + "override" + "override-expr"
-    val n = doc.get(path) ?: return emptyList()
-    return if (n.kind == YamlNode.Kind.SEQ) FormValues.readList(doc, path).filter { it.isNotEmpty() }
-    else listOfNotNull(FormValues.scalarText(doc, n)?.trim()?.ifEmpty { null })
-}
+/** 读 override.override-expr（含锚点继承回落）：见 [FormValues.exprItems]；这里只取列表部分。 */
+private fun exprItems(doc: YamlDoc, base: YPath): List<String> = FormValues.exprItems(doc, base).first
 
 @Composable
 private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
@@ -911,18 +997,7 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
         onlyType = type,
         intercept = intercept,
         footer = {
-            Column {
-            if (type == "file") {
-                ProviderFileOpsRow(
-                    host = host,
-                    base = base,
-                    kind = "sub",
-                    defaultPath = "./proxies/${safeFileStem(name, "provider")}.yaml",
-                    newFileText = "proxies:\n  # - { name: node1, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: xxx }\n",
-                )
-            }
             AnchorSectionCard(host, "proxy-providers", base)
-            }
         },
         header = {
             DetailHeader(
@@ -963,13 +1038,28 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
                     endActions = { TextButton(text = "选择", onClick = { hcPick = true }) },
                 )
                 "override-expr" -> {
-                    val items = exprItems(doc, base)
+                    // 本地行 + 展开视图（锚点 `<<:` / 别名）一起读；继承来的值标「继承」，编辑即本地化
+                    val (items, inherited) = FormValues.exprItems(doc, base)
                     RowCard(
-                        title = if (items.isEmpty()) "未设置表达式" else "${items.size} 条表达式",
+                        title = when {
+                            items.isEmpty() -> "未设置表达式"
+                            inherited -> "${items.size} 条表达式（继承）"
+                            else -> "${items.size} 条表达式"
+                        },
                         summary = (if (items.isEmpty()) "" else items.joinToString(" · ").take(80) + " · ") +
-                            "yq v4 风格子集，逐条顺序执行，作用于单个节点；支持路径赋值 = / |= / del() / select",
+                            "yq v4 风格子集，逐条顺序执行，作用于单个节点；支持路径赋值 = / |= / del() / select" +
+                            (if (inherited && items.isNotEmpty()) "；当前值来自锚点继承，编辑后写入本条目" else ""),
                         onClick = { exprEditor = true },
                         endActions = { TextButton(text = "编辑", onClick = { exprEditor = true }) },
+                    )
+                }
+                "provider-file-ops" -> if (type == "file") {
+                    ProviderFileOpsRow(
+                        host = host,
+                        base = base,
+                        kind = "sub",
+                        defaultPath = "./proxies/${safeFileStem(name, "provider")}.yaml",
+                        newFileText = "proxies:\n  # - { name: node1, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: xxx }\n",
                     )
                 }
             }
@@ -1799,18 +1889,7 @@ private fun RuleProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
         onlyType = type,
         intercept = intercept,
         footer = {
-            Column {
-            if (type == "file") {
-                ProviderFileOpsRow(
-                    host = host,
-                    base = base,
-                    kind = "ep",
-                    defaultPath = "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(format)}",
-                    newFileText = "# 新建规则集文件（内容取决于 behavior）\n# domain：每行一个域名/后缀\n#   .google.com\n# ipcidr：每行一个 CIDR\n#   91.108.56.0/22\n# classical：YAML payload 规则列表\npayload:\n  # - DOMAIN-SUFFIX,example.com\n",
-                )
-            }
             AnchorSectionCard(host, "rule-providers", base)
-            }
         },
         header = {
             DetailHeader(
@@ -1834,14 +1913,25 @@ private fun RuleProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
             )
         },
         customRow = { row ->
-            if (row.kind == "rule-provider-payload" && type == "inline") {
-                val n = FormValues.count(doc, base + "payload")
-                RowCard(
-                    title = "内联规则 payload",
-                    summary = "$n 条 · 一行一条（按 behavior 写域名 / CIDR / 经典规则），不带目标策略",
-                    onClick = { payloadEditor = true },
-                    endActions = { TextButton(text = "编辑", onClick = { payloadEditor = true }) },
-                )
+            when (row.kind) {
+                "rule-provider-payload" -> if (type == "inline") {
+                    val n = FormValues.count(doc, base + "payload")
+                    RowCard(
+                        title = "内联规则 payload",
+                        summary = "$n 条 · 一行一条（按 behavior 写域名 / CIDR / 经典规则），不带目标策略",
+                        onClick = { payloadEditor = true },
+                        endActions = { TextButton(text = "编辑", onClick = { payloadEditor = true }) },
+                    )
+                }
+                "rule-provider-file-ops" -> if (type == "file") {
+                    ProviderFileOpsRow(
+                        host = host,
+                        base = base,
+                        kind = "ep",
+                        defaultPath = "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(format)}",
+                        newFileText = "# 新建规则集文件（内容取决于 behavior）\n# domain：每行一个域名/后缀\n#   .google.com\n# ipcidr：每行一个 CIDR\n#   91.108.56.0/22\n# classical：YAML payload 规则列表\npayload:\n  # - DOMAIN-SUFFIX,example.com\n",
+                    )
+                }
             }
         },
     )

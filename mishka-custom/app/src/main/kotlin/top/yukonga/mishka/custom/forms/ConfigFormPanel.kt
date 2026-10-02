@@ -272,6 +272,7 @@ internal class FormHost(
                 }
                 is BatchOp.Remove -> if (cur.get(op.path) == null) continue else YamlPatch.removeKey(cur, op.path)
                 is BatchOp.SetItem -> YamlPatch.setItem(cur, op.seqPath, op.index, op.value)
+                is BatchOp.InsertItem -> YamlPatch.insertItem(cur, op.seqPath, op.index, op.value)
                 is BatchOp.Rename -> {
                     val parent = cur.get(op.path.dropLast(1))
                     if (parent != null && cur.findEntry(parent, op.newKey) != null) {
@@ -441,16 +442,7 @@ private fun InboundPage(host: FormHost, nav: FormNav) {
     )
 }
 
-private val LISTENER_TYPES = listOf(
-    FormOption("mixed", "mixed 混合代理"),
-    FormOption("http", "http"),
-    FormOption("socks", "socks"),
-    FormOption("redirect", "redirect 透明代理"),
-    FormOption("tproxy", "tproxy 透明代理"),
-    FormOption("tun", "tun 接管（高级）"),
-    FormOption("tunnel", "tunnel 端口转发"),
-    FormOption("ebpf", "eBPF 透明入站（定制内核）"),
-)
+// LISTENER_TYPES / LISTENER_TEMPLATES / 各协议字段表在 ListenerSpecs.kt（对齐参考实现 IN_* 全量类型）
 
 private fun listenerName(doc: YamlDoc, index: Int): String =
     FormValues.readRaw(doc, listOf("listeners", index, "name")).orEmpty()
@@ -506,16 +498,11 @@ private fun uniqueListenerName(doc: YamlDoc, type: String): String {
 private fun listenerTemplate(doc: YamlDoc, type: String): Map<String, Any?> {
     val name = uniqueListenerName(doc, type)
     val nextPort = 7890L + (doc.get(listOf("listeners"))?.items?.size ?: 0)
-    return when (type) {
-        "ebpf" -> linkedMapOf(
-            "name" to name,
-            "type" to "ebpf",
-            "mode" to "local",
-        )
-        "tun" -> linkedMapOf("name" to name, "type" to "tun", "stack" to "system", "auto-route" to true, "auto-detect-interface" to true)
-        "tunnel" -> linkedMapOf("name" to name, "type" to "tunnel", "port" to nextPort, "listen" to "0.0.0.0", "network" to listOf("tcp", "udp"), "target" to "www.example.com:80")
-        else -> linkedMapOf("name" to name, "type" to type, "port" to nextPort, "listen" to "0.0.0.0")
-    }
+    val tpl = LinkedHashMap<String, Any?>(LISTENER_TEMPLATES[type] ?: linkedMapOf("type" to type))
+    tpl["name"] = name
+    // 基础监听协议：端口按「7890 + 已有个数」顺延防撞；其余协议保留模板默认端口，进详情页再改
+    if (type in LISTENER_BASIC_PORT_TYPES) tpl["port"] = nextPort
+    return tpl
 }
 
 @Composable
@@ -671,8 +658,12 @@ private fun ListenerDetailsPage(index: Int, host: FormHost, nav: FormNav) {
             intercept = nameGuard,
         )
     } else {
+        // 已知协议：按参考实现 IN_* 全量分组（基础 / 协议参数 / 传输层 / TLS / REALITY / 伪装 / Mux）；
+        // 没见过的 type 退回旧的通用小节
+        val sections = listenerSections(type) ?: COMMON_LISTENER_SECTIONS
+        var usersEdit by remember(type, base) { mutableStateOf(false) }
         SectionsPage(
-            sections = COMMON_LISTENER_SECTIONS,
+            sections = sections,
             base = base,
             host = host,
             header = header,
@@ -680,8 +671,53 @@ private fun ListenerDetailsPage(index: Int, host: FormHost, nav: FormNav) {
                 if (field.optionsDynamic == "outbound") host.candidates("outbound", current = listOfNotNull(FormValues.readRaw(doc, base + YamlDoc.splitPath(field.path)))) else null
             },
             intercept = nameGuard,
-            footer = { DialogNote("此页只编辑通用监听字段；协议专属 / TLS / 用户认证等高级参数保留在原 YAML，可用源码编辑器修改。") },
+            customRow = { row ->
+                if (row.kind == "in-users") {
+                    val count = FormValues.readMapList(doc, base + "users").size
+                    RowCard(
+                        title = "用户 users",
+                        summary = when {
+                            count > 0 -> "$count 个用户"
+                            type in LISTENER_USERS_REQUIRED -> "未设置（该协议必填，至少一个用户）"
+                            else -> "未设置"
+                        },
+                        onClick = { usersEdit = true },
+                        endActions = { TextButton(text = "编辑", onClick = { usersEdit = true }) },
+                    )
+                }
+            },
+            footer = { DialogNote("表单未覆盖的高级参数保留在原 YAML，可用源码编辑器修改。") },
         )
+        if (usersEdit) {
+            val usersField = FormField(
+                path = "users",
+                label = if (type in LISTENER_USERS_REQUIRED) "用户（必填，至少一个）" else "用户",
+                type = FormFieldType.MAPLIST,
+                desc = when (type) {
+                    "vmess" -> "UUID 为标准 36 位格式；alterId 新版填 0"
+                    "vless" -> "UUID 为标准 36 位格式；另需 TLS 证书或 reality-config，否则内核拒绝启动"
+                    "trojan" -> "另需 TLS 证书 / reality-config / ss-option 之一"
+                    "http", "socks", "mixed" -> "留空则沿用全局 authentication；添加后仅对本入站生效"
+                    else -> null
+                },
+                optional = type !in LISTENER_USERS_REQUIRED,
+            )
+            MapListDialog(
+                field = usersField,
+                columns = LISTENER_USERS_COLUMNS[type].orEmpty(),
+                current = FormValues.readMapList(doc, base + "users"),
+                onDismiss = { usersEdit = false },
+                onConfirm = { items ->
+                    usersEdit = false
+                    // alterId 等数字列按数字写回（内核要求 int，字符串会启动失败）
+                    val normalized = items.map { row ->
+                        row.mapValues { (k, v) -> if (k == "alterId") (v.toString().toLongOrNull() ?: v) else v }
+                    }
+                    if (normalized.isEmpty() && type !in LISTENER_USERS_REQUIRED) host.clear(base + "users", "用户")
+                    else host.set(base + "users", normalized, "用户")
+                },
+            )
+        }
     }
 }
 

@@ -17,6 +17,7 @@ private fun applyBatch(text: String, ops: List<BatchOp>): YamlDoc? {
                 YamlPatch.removeKey(current, op.path)
             }
             is BatchOp.SetItem -> YamlPatch.setItem(current, op.seqPath, op.index, op.value)
+            is BatchOp.InsertItem -> YamlPatch.insertItem(current, op.seqPath, op.index, op.value)
             is BatchOp.Rename -> {
                 val parent = current.get(op.path.dropLast(1))
                 if (parent != null && current.findEntry(parent, op.newKey) != null) return null
@@ -217,10 +218,45 @@ other: keep
     expect(buildMapListEditOps(path, listOf(unsupported), listOf(FormMapListEdit(unsupported, "complex", emptyList(), false))) == null, "unsupported nested values must not be rewritten")
 }
 
+private fun testExprItemsInheritance() {
+    val text = """host-expr: &host { override-expr: [ '.sni = .servername', '.a = 1' ] }
+one-expr: &one '.only = 1'
+proxy-providers:
+  local-block:
+    override:
+      override-expr:
+        - '.b = 2'
+  local-flow:
+    override: { additional-prefix: "P/", override-expr: [ '.c = 3' ] }
+  local-scalar:
+    override:
+      override-expr: '.d = 4'
+  via-merge:
+    override: { additional-prefix: "Q/", <<: *host }
+  via-alias:
+    override: *host
+  field-alias:
+    override:
+      override-expr: *one
+  none:
+    type: http
+"""
+    val doc = YamlDoc.parse(text)
+    fun items(name: String) = FormValues.exprItems(doc, listOf("proxy-providers", name))
+    expect(items("local-block") == (listOf(".b = 2") to false), "local block list read as local")
+    expect(items("local-flow") == (listOf(".c = 3") to false), "local flow list read as local")
+    expect(items("local-scalar") == (listOf(".d = 4") to false), "local scalar read as one-item list")
+    expect(items("via-merge") == (listOf(".sni = .servername", ".a = 1") to true), "flow merge <<: *host inherited expressions resolved")
+    expect(items("via-alias") == (listOf(".sni = .servername", ".a = 1") to true), "override: *alias inherited expressions resolved")
+    expect(items("field-alias") == (listOf(".only = 1") to true), "override-expr: *alias resolved via expanded view, not literal *one")
+    expect(items("none") == (emptyList<String>() to true), "absent override-expr is empty")
+}
+
 fun main() {
     testEbpfRoleStateAndWrites()
     testFakeIpIcmpPrerequisites()
     testFormValueReaders()
+    testExprItemsInheritance()
     testMapListRenameAndSwap()
-    println("eBPF role, FormValues reader, and MAPLIST rename/swap tests passed")
+    println("eBPF role, FormValues reader, expr inheritance, and MAPLIST rename/swap tests passed")
 }

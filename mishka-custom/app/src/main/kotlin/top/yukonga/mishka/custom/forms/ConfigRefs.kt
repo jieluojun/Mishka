@@ -20,9 +20,12 @@ internal object PlainYaml {
     }
 
     /** 整篇文档 → 顶层映射（根不是映射时给空映射）。 */
-    fun toPlain(doc: YamlDoc): Map<String, Any?> {
+    fun toPlain(doc: YamlDoc): Map<String, Any?> = toPlain(doc, doc.root)
+
+    /** 任意节点 → Map / List / 标量树（锚点 / `<<:` 合并同样展开；节点不是映射时给空映射）。 */
+    fun toPlain(doc: YamlDoc, node: YamlNode?): Map<String, Any?> {
         val ctx = Ctx(doc)
-        val v = conv(ctx, doc.root)
+        val v = conv(ctx, node)
         @Suppress("UNCHECKED_CAST")
         return (v as? Map<String, Any?>) ?: emptyMap()
     }
@@ -407,6 +410,7 @@ internal sealed class BatchOp {
     class Remove(val path: List<Any>) : BatchOp()
     class SetItem(val seqPath: List<Any>, val index: Int, val value: Any?) : BatchOp()
     class Rename(val path: List<Any>, val newKey: String) : BatchOp()
+    class InsertItem(val seqPath: List<Any>, val index: Int, val value: Any?) : BatchOp()
 }
 
 internal object RenameSync {

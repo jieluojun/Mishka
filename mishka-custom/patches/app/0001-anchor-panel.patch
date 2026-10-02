@@ -3015,10 +3015,10 @@ index 0000000..650e6c5
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..e3d1b5d
+index 0000000..f9dfd78
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1365 @@
+@@ -0,0 +1,1401 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -3293,6 +3293,7 @@ index 0000000..e3d1b5d
 +                }
 +                is BatchOp.Remove -> if (cur.get(op.path) == null) continue else YamlPatch.removeKey(cur, op.path)
 +                is BatchOp.SetItem -> YamlPatch.setItem(cur, op.seqPath, op.index, op.value)
++                is BatchOp.InsertItem -> YamlPatch.insertItem(cur, op.seqPath, op.index, op.value)
 +                is BatchOp.Rename -> {
 +                    val parent = cur.get(op.path.dropLast(1))
 +                    if (parent != null && cur.findEntry(parent, op.newKey) != null) {
@@ -3462,16 +3463,7 @@ index 0000000..e3d1b5d
 +    )
 +}
 +
-+private val LISTENER_TYPES = listOf(
-+    FormOption("mixed", "mixed 混合代理"),
-+    FormOption("http", "http"),
-+    FormOption("socks", "socks"),
-+    FormOption("redirect", "redirect 透明代理"),
-+    FormOption("tproxy", "tproxy 透明代理"),
-+    FormOption("tun", "tun 接管（高级）"),
-+    FormOption("tunnel", "tunnel 端口转发"),
-+    FormOption("ebpf", "eBPF 透明入站（定制内核）"),
-+)
++// LISTENER_TYPES / LISTENER_TEMPLATES / 各协议字段表在 ListenerSpecs.kt（对齐参考实现 IN_* 全量类型）
 +
 +private fun listenerName(doc: YamlDoc, index: Int): String =
 +    FormValues.readRaw(doc, listOf("listeners", index, "name")).orEmpty()
@@ -3527,16 +3519,11 @@ index 0000000..e3d1b5d
 +private fun listenerTemplate(doc: YamlDoc, type: String): Map<String, Any?> {
 +    val name = uniqueListenerName(doc, type)
 +    val nextPort = 7890L + (doc.get(listOf("listeners"))?.items?.size ?: 0)
-+    return when (type) {
-+        "ebpf" -> linkedMapOf(
-+            "name" to name,
-+            "type" to "ebpf",
-+            "mode" to "local",
-+        )
-+        "tun" -> linkedMapOf("name" to name, "type" to "tun", "stack" to "system", "auto-route" to true, "auto-detect-interface" to true)
-+        "tunnel" -> linkedMapOf("name" to name, "type" to "tunnel", "port" to nextPort, "listen" to "0.0.0.0", "network" to listOf("tcp", "udp"), "target" to "www.example.com:80")
-+        else -> linkedMapOf("name" to name, "type" to type, "port" to nextPort, "listen" to "0.0.0.0")
-+    }
++    val tpl = LinkedHashMap<String, Any?>(LISTENER_TEMPLATES[type] ?: linkedMapOf("type" to type))
++    tpl["name"] = name
++    // 基础监听协议：端口按「7890 + 已有个数」顺延防撞；其余协议保留模板默认端口，进详情页再改
++    if (type in LISTENER_BASIC_PORT_TYPES) tpl["port"] = nextPort
++    return tpl
 +}
 +
 +@Composable
@@ -3692,8 +3679,12 @@ index 0000000..e3d1b5d
 +            intercept = nameGuard,
 +        )
 +    } else {
++        // 已知协议：按参考实现 IN_* 全量分组（基础 / 协议参数 / 传输层 / TLS / REALITY / 伪装 / Mux）；
++        // 没见过的 type 退回旧的通用小节
++        val sections = listenerSections(type) ?: COMMON_LISTENER_SECTIONS
++        var usersEdit by remember(type, base) { mutableStateOf(false) }
 +        SectionsPage(
-+            sections = COMMON_LISTENER_SECTIONS,
++            sections = sections,
 +            base = base,
 +            host = host,
 +            header = header,
@@ -3701,8 +3692,53 @@ index 0000000..e3d1b5d
 +                if (field.optionsDynamic == "outbound") host.candidates("outbound", current = listOfNotNull(FormValues.readRaw(doc, base + YamlDoc.splitPath(field.path)))) else null
 +            },
 +            intercept = nameGuard,
-+            footer = { DialogNote("此页只编辑通用监听字段；协议专属 / TLS / 用户认证等高级参数保留在原 YAML，可用源码编辑器修改。") },
++            customRow = { row ->
++                if (row.kind == "in-users") {
++                    val count = FormValues.readMapList(doc, base + "users").size
++                    RowCard(
++                        title = "用户 users",
++                        summary = when {
++                            count > 0 -> "$count 个用户"
++                            type in LISTENER_USERS_REQUIRED -> "未设置（该协议必填，至少一个用户）"
++                            else -> "未设置"
++                        },
++                        onClick = { usersEdit = true },
++                        endActions = { TextButton(text = "编辑", onClick = { usersEdit = true }) },
++                    )
++                }
++            },
++            footer = { DialogNote("表单未覆盖的高级参数保留在原 YAML，可用源码编辑器修改。") },
 +        )
++        if (usersEdit) {
++            val usersField = FormField(
++                path = "users",
++                label = if (type in LISTENER_USERS_REQUIRED) "用户（必填，至少一个）" else "用户",
++                type = FormFieldType.MAPLIST,
++                desc = when (type) {
++                    "vmess" -> "UUID 为标准 36 位格式；alterId 新版填 0"
++                    "vless" -> "UUID 为标准 36 位格式；另需 TLS 证书或 reality-config，否则内核拒绝启动"
++                    "trojan" -> "另需 TLS 证书 / reality-config / ss-option 之一"
++                    "http", "socks", "mixed" -> "留空则沿用全局 authentication；添加后仅对本入站生效"
++                    else -> null
++                },
++                optional = type !in LISTENER_USERS_REQUIRED,
++            )
++            MapListDialog(
++                field = usersField,
++                columns = LISTENER_USERS_COLUMNS[type].orEmpty(),
++                current = FormValues.readMapList(doc, base + "users"),
++                onDismiss = { usersEdit = false },
++                onConfirm = { items ->
++                    usersEdit = false
++                    // alterId 等数字列按数字写回（内核要求 int，字符串会启动失败）
++                    val normalized = items.map { row ->
++                        row.mapValues { (k, v) -> if (k == "alterId") (v.toString().toLongOrNull() ?: v) else v }
++                    }
++                    if (normalized.isEmpty() && type !in LISTENER_USERS_REQUIRED) host.clear(base + "users", "用户")
++                    else host.set(base + "users", normalized, "用户")
++                },
++            )
++        }
 +    }
 +}
 +
@@ -4386,10 +4422,10 @@ index 0000000..e3d1b5d
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigRefs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigRefs.kt
 new file mode 100644
-index 0000000..f35a1c0
+index 0000000..537f72b
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigRefs.kt
-@@ -0,0 +1,547 @@
+@@ -0,0 +1,551 @@
 +package top.yukonga.mishka.custom.forms
 +
 +/**
@@ -4412,9 +4448,12 @@ index 0000000..f35a1c0
 +    }
 +
 +    /** 整篇文档 → 顶层映射（根不是映射时给空映射）。 */
-+    fun toPlain(doc: YamlDoc): Map<String, Any?> {
++    fun toPlain(doc: YamlDoc): Map<String, Any?> = toPlain(doc, doc.root)
++
++    /** 任意节点 → Map / List / 标量树（锚点 / `<<:` 合并同样展开；节点不是映射时给空映射）。 */
++    fun toPlain(doc: YamlDoc, node: YamlNode?): Map<String, Any?> {
 +        val ctx = Ctx(doc)
-+        val v = conv(ctx, doc.root)
++        val v = conv(ctx, node)
 +        @Suppress("UNCHECKED_CAST")
 +        return (v as? Map<String, Any?>) ?: emptyMap()
 +    }
@@ -4799,6 +4838,7 @@ index 0000000..f35a1c0
 +    class Remove(val path: List<Any>) : BatchOp()
 +    class SetItem(val seqPath: List<Any>, val index: Int, val value: Any?) : BatchOp()
 +    class Rename(val path: List<Any>, val newKey: String) : BatchOp()
++    class InsertItem(val seqPath: List<Any>, val index: Int, val value: Any?) : BatchOp()
 +}
 +
 +internal object RenameSync {
@@ -5001,10 +5041,10 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..ce5401c
+index 0000000..460b372
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2152 @@
+@@ -0,0 +1,2242 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -5361,6 +5401,7 @@ index 0000000..ce5401c
 +private fun ProxyListPage(host: FormHost, nav: FormNav, seqPath: YPath) {
 +    val doc = host.doc
 +    var picker by remember { mutableStateOf(false) }
++    var importing by remember { mutableStateOf(false) }
 +    var deleting by remember { mutableStateOf<DeleteFlow?>(null) }
 +    var plainDelete by remember { mutableStateOf(-1) }
 +    val protectedList = seqPath == PROXIES_PATH
@@ -5370,6 +5411,8 @@ index 0000000..ce5401c
 +        unit = "个节点",
 +        emptyHint = "还没有节点。点「新增节点」选协议，会按模板写入一项，再进详情页改服务器 / 端口 / 密码。",
 +        headerActions = {
++            // 「解析」= 粘贴分享链接 / YAML 节点批量导入（参考实现 openProxyUriImport）
++            TextButton(text = "解析", onClick = { importing = true })
 +            TextButton(text = "新增节点", onClick = { picker = true })
 +        },
 +        rowTitle = { i, node -> proxyName(doc, node) ?: "节点 #${i + 1}" },
@@ -5420,6 +5463,94 @@ index 0000000..ce5401c
 +            onDismiss = { plainDelete = -1 },
 +            onConfirm = { plainDelete = -1; host.removeItem(seqPath, i, "节点 #${i + 1}") },
 +        )
++    }
++    if (importing) {
++        ProxyImportDialog(host = host, seqPath = seqPath, onDismiss = { importing = false })
++    }
++}
++
++/**
++ * 「解析节点」导入弹层（参考实现 proxy-uri-sheet.js）：URI 每行一条或整体 YAML 节点；
++ * 成功项一次批量写入并从输入框移除，失败行留在框里方便修正重试。只加入当前草稿，不进代理组。
++ */
++@Composable
++private fun ProxyImportDialog(host: FormHost, seqPath: YPath, onDismiss: () -> Unit) {
++    var input by remember { mutableStateOf("") }
++    var summary by remember { mutableStateOf<String?>(null) }
++    var details by remember { mutableStateOf<String?>(null) }
++
++    fun runImport() {
++        val text = input
++        val doc = host.doc
++        // 保留名池（参考实现）：内置策略 + 节点 + 代理组；再加目标序列自己的名字防重
++        val reserved = (BUILTIN_POLICIES.map { it.value } + host.seqNames(PROXIES_PATH) +
++            host.seqNames(GROUPS_PATH) + host.seqNames(seqPath)).distinct()
++        val result = try {
++            ProxyUri.parseAll(text, reserved)
++        } catch (e: ProxyUriError) {
++            summary = e.message
++            details = null
++            return
++        }
++        if (result.proxies.isNotEmpty()) {
++            val startIndex = seqSize(doc, seqPath)
++            val ops = result.proxies.mapIndexed { i, p -> BatchOp.InsertItem(seqPath, startIndex + i, p) }
++            val ok = host.batch(ops, "${result.proxies.size} 个节点", "已添加")
++            if (!ok) {
++                summary = "添加未应用，请先处理配置错误后重试；输入已保留。"
++                details = null
++                return
++            }
++            // 成功项移出输入框，重试失败项时不会再次追加已经导入的节点
++            input = result.errors.joinToString("\n") { it.input }
++            showToast("已添加 ${result.proxies.size} 个出站节点")
++        }
++        summary = "已添加 ${result.proxies.size} 个，失败 ${result.errors.size} 个，跳过重复 ${result.skipped} 个。" +
++            if (result.proxies.isNotEmpty()) " 请保存配置。" else " 未修改配置。"
++        details = (
++            result.added.map { item ->
++                "第 ${item.line} 行：已添加「${item.name}」" +
++                    (if (item.renamed) "（重名已加序号）" else "") +
++                    (if (item.warnings.isNotEmpty()) "\n  注意：${item.warnings.joinToString("；")}" else "")
++            } + result.errors.map { "第 ${it.line} 行：${it.message}" }
++            ).joinToString("\n").ifEmpty { null }
++    }
++
++    WindowDialog(
++        show = true,
++        title = "解析节点",
++        summary = "`" + pathText(seqPath) + "` · 只添加到当前配置草稿，不覆盖已有节点、不自动加入代理组",
++        onDismissRequest = onDismiss,
++    ) {
++        Column(
++            modifier = Modifier.fillMaxWidth(),
++            verticalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            DialogNote("支持 URI（SS / VMess / VLESS / Trojan / Hysteria2 / TUIC）或 Clash/Mihomo YAML 节点（可不带 proxies:）。每批最多 500 个；同名自动加序号。")
++            TextField(
++                value = input,
++                onValueChange = { input = it },
++                modifier = Modifier.fillMaxWidth(),
++                label = "URI 每行一个，或粘贴 YAML 节点（可不带 proxies:）",
++                useLabelAsPlaceholder = true,
++                minLines = 5,
++            )
++            summary?.let { DialogNote(it) }
++            details?.let { d ->
++                Column(
++                    modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState()),
++                ) {
++                    Text(text = d, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
++                }
++            }
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                horizontalArrangement = Arrangement.spacedBy(8.dp),
++            ) {
++                TextButton(text = "关闭", onClick = onDismiss)
++                TextButton(text = "解析并添加", onClick = { if (input.isNotBlank()) runImport() })
++            }
++        }
 +    }
 +}
 +
@@ -5871,13 +6002,8 @@ index 0000000..ce5401c
 +    return ok
 +}
 +
-+/** 读 override.override-expr：数组 / 单条字符串都规范成列表（参考实现 exprItems）。 */
-+private fun exprItems(doc: YamlDoc, base: YPath): List<String> {
-+    val path = base + "override" + "override-expr"
-+    val n = doc.get(path) ?: return emptyList()
-+    return if (n.kind == YamlNode.Kind.SEQ) FormValues.readList(doc, path).filter { it.isNotEmpty() }
-+    else listOfNotNull(FormValues.scalarText(doc, n)?.trim()?.ifEmpty { null })
-+}
++/** 读 override.override-expr（含锚点继承回落）：见 [FormValues.exprItems]；这里只取列表部分。 */
++private fun exprItems(doc: YamlDoc, base: YPath): List<String> = FormValues.exprItems(doc, base).first
 +
 +@Composable
 +private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
@@ -5918,18 +6044,7 @@ index 0000000..ce5401c
 +        onlyType = type,
 +        intercept = intercept,
 +        footer = {
-+            Column {
-+            if (type == "file") {
-+                ProviderFileOpsRow(
-+                    host = host,
-+                    base = base,
-+                    kind = "sub",
-+                    defaultPath = "./proxies/${safeFileStem(name, "provider")}.yaml",
-+                    newFileText = "proxies:\n  # - { name: node1, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: xxx }\n",
-+                )
-+            }
 +            AnchorSectionCard(host, "proxy-providers", base)
-+            }
 +        },
 +        header = {
 +            DetailHeader(
@@ -5970,13 +6085,28 @@ index 0000000..ce5401c
 +                    endActions = { TextButton(text = "选择", onClick = { hcPick = true }) },
 +                )
 +                "override-expr" -> {
-+                    val items = exprItems(doc, base)
++                    // 本地行 + 展开视图（锚点 `<<:` / 别名）一起读；继承来的值标「继承」，编辑即本地化
++                    val (items, inherited) = FormValues.exprItems(doc, base)
 +                    RowCard(
-+                        title = if (items.isEmpty()) "未设置表达式" else "${items.size} 条表达式",
++                        title = when {
++                            items.isEmpty() -> "未设置表达式"
++                            inherited -> "${items.size} 条表达式（继承）"
++                            else -> "${items.size} 条表达式"
++                        },
 +                        summary = (if (items.isEmpty()) "" else items.joinToString(" · ").take(80) + " · ") +
-+                            "yq v4 风格子集，逐条顺序执行，作用于单个节点；支持路径赋值 = / |= / del() / select",
++                            "yq v4 风格子集，逐条顺序执行，作用于单个节点；支持路径赋值 = / |= / del() / select" +
++                            (if (inherited && items.isNotEmpty()) "；当前值来自锚点继承，编辑后写入本条目" else ""),
 +                        onClick = { exprEditor = true },
 +                        endActions = { TextButton(text = "编辑", onClick = { exprEditor = true }) },
++                    )
++                }
++                "provider-file-ops" -> if (type == "file") {
++                    ProviderFileOpsRow(
++                        host = host,
++                        base = base,
++                        kind = "sub",
++                        defaultPath = "./proxies/${safeFileStem(name, "provider")}.yaml",
++                        newFileText = "proxies:\n  # - { name: node1, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: xxx }\n",
 +                    )
 +                }
 +            }
@@ -6806,18 +6936,7 @@ index 0000000..ce5401c
 +        onlyType = type,
 +        intercept = intercept,
 +        footer = {
-+            Column {
-+            if (type == "file") {
-+                ProviderFileOpsRow(
-+                    host = host,
-+                    base = base,
-+                    kind = "ep",
-+                    defaultPath = "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(format)}",
-+                    newFileText = "# 新建规则集文件（内容取决于 behavior）\n# domain：每行一个域名/后缀\n#   .google.com\n# ipcidr：每行一个 CIDR\n#   91.108.56.0/22\n# classical：YAML payload 规则列表\npayload:\n  # - DOMAIN-SUFFIX,example.com\n",
-+                )
-+            }
 +            AnchorSectionCard(host, "rule-providers", base)
-+            }
 +        },
 +        header = {
 +            DetailHeader(
@@ -6841,14 +6960,25 @@ index 0000000..ce5401c
 +            )
 +        },
 +        customRow = { row ->
-+            if (row.kind == "rule-provider-payload" && type == "inline") {
-+                val n = FormValues.count(doc, base + "payload")
-+                RowCard(
-+                    title = "内联规则 payload",
-+                    summary = "$n 条 · 一行一条（按 behavior 写域名 / CIDR / 经典规则），不带目标策略",
-+                    onClick = { payloadEditor = true },
-+                    endActions = { TextButton(text = "编辑", onClick = { payloadEditor = true }) },
-+                )
++            when (row.kind) {
++                "rule-provider-payload" -> if (type == "inline") {
++                    val n = FormValues.count(doc, base + "payload")
++                    RowCard(
++                        title = "内联规则 payload",
++                        summary = "$n 条 · 一行一条（按 behavior 写域名 / CIDR / 经典规则），不带目标策略",
++                        onClick = { payloadEditor = true },
++                        endActions = { TextButton(text = "编辑", onClick = { payloadEditor = true }) },
++                    )
++                }
++                "rule-provider-file-ops" -> if (type == "file") {
++                    ProviderFileOpsRow(
++                        host = host,
++                        base = base,
++                        kind = "ep",
++                        defaultPath = "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(format)}",
++                        newFileText = "# 新建规则集文件（内容取决于 behavior）\n# domain：每行一个域名/后缀\n#   .google.com\n# ipcidr：每行一个 CIDR\n#   91.108.56.0/22\n# classical：YAML payload 规则列表\npayload:\n  # - DOMAIN-SUFFIX,example.com\n",
++                    )
++                }
 +            }
 +        },
 +    )
@@ -9263,10 +9393,10 @@ index 0000000..1108fb7
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 new file mode 100644
-index 0000000..f5758c0
+index 0000000..53b6a8d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
-@@ -0,0 +1,2188 @@
+@@ -0,0 +1,2190 @@
 +package top.yukonga.mishka.custom.forms
 +
 +// 本文件由 tools/forms/gen_specs.py 生成，请勿手改。
@@ -11102,6 +11232,7 @@ index 0000000..f5758c0
 +                placeholder = "默认 ./proxies/ 目录",
 +                optional = true,
 +            ),
++            FormCustomRow("provider-file-ops"),
 +            FormField(
 +                path = "interval",
 +                label = "自动更新间隔(秒)",
@@ -11357,6 +11488,7 @@ index 0000000..f5758c0
 +                placeholder = "默认 ./rules/ 目录",
 +                optional = true,
 +            ),
++            FormCustomRow("rule-provider-file-ops"),
 +            FormField(
 +                path = "interval",
 +                label = "更新间隔(秒)",
@@ -11457,10 +11589,10 @@ index 0000000..f5758c0
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
 new file mode 100644
-index 0000000..29efe3d
+index 0000000..701c7be
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,297 @@
 +package top.yukonga.mishka.custom.forms
 +
 +/** 文档内的一段路径：字符串段走映射键，Int 段走序列下标（与 [YamlDoc.splitPath] 的产物同型）。 */
@@ -11669,6 +11801,28 @@ index 0000000..29efe3d
 +        }
 +    }
 +
++    /**
++     * 读 `override.override-expr`：数组 / 单条字符串都规范成列表。本地没有该行时回落到展开视图
++     * （别名解开、`<<:` 合并后的值）——表达式挂在 `&锚点` 里、经 flow 映射 `<<: *host` 带进来的也读得到。
++     * 返回「列表 to 是否来自继承」；继承来的值一经编辑就写入本地（成为本条目的本地覆写）。
++     */
++    fun exprItems(doc: YamlDoc, base: YPath): Pair<List<String>, Boolean> {
++        val path = base + "override" + "override-expr"
++        val n = doc.get(path)
++        // 别名（`override-expr: *x`）本地读只会拿到字面 `*x`，按继承走展开视图
++        if (n != null && n.alias == null) {
++            val local = if (n.kind == YamlNode.Kind.SEQ) readList(doc, path).filter { it.isNotEmpty() }
++            else listOfNotNull(scalarText(doc, n)?.trim()?.ifEmpty { null })
++            return local to false
++        }
++        val items = when (val v = effectiveValue(doc, path)) {
++            null -> emptyList()
++            is List<*> -> v.mapNotNull { it?.toString()?.trim()?.ifEmpty { null } }
++            else -> listOfNotNull(v.toString().trim().ifEmpty { null })
++        }
++        return items to true
++    }
++
 +    fun count(doc: YamlDoc, path: YPath): Int {
 +        val n = doc.get(path) ?: return 0
 +        return when (n.kind) {
@@ -11735,6 +11889,354 @@ index 0000000..29efe3d
 +        }
 +        return s
 +    }
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt
+new file mode 100644
+index 0000000..1704d85
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt
+@@ -0,0 +1,342 @@
++package top.yukonga.mishka.custom.forms
++
++/**
++ * 入站 listeners 的协议类型 / 模板 / 字段表（对齐 mihomo_box `pages-config.js` 的
++ * IN_TYPES / IN_TEMPLATES / IN_EXTRA / IN_TLS_FIELDS / IN_REALITY_FIELDS / IN_TRANSPORT_FIELDS /
++ * IN_DISGUISE_FIELDS / IN_MUX_FIELDS，见参考实现 1021–1270 行）。
++ *
++ * 纯数据 + 纯函数，无 Compose 依赖（kotlinc 可直接编译对拍）；渲染仍由 ConfigFormPanel 的
++ * SectionsPage 完成。eBPF 有独立字段表（[EBPF_SECTIONS]）与页面，不在这里组合。
++ */
++
++/** 「选择监听器类型」的全部选项（参考实现 IN_TYPES；eBPF 仅定制内核可用）。 */
++val LISTENER_TYPES: List<FormOption> = listOf(
++    FormOption("http", "http"),
++    FormOption("socks", "socks"),
++    FormOption("mixed", "mixed 混合代理"),
++    FormOption("redirect", "redirect 透明代理"),
++    FormOption("tproxy", "tproxy 透明代理"),
++    FormOption("tun", "tun 接管（高级）"),
++    FormOption("ebpf", "eBPF 透明入站（定制内核）"),
++    FormOption("shadowsocks", "shadowsocks"),
++    FormOption("vmess", "vmess"),
++    FormOption("vless", "vless"),
++    FormOption("trojan", "trojan"),
++    FormOption("anytls", "anytls"),
++    FormOption("mieru", "mieru"),
++    FormOption("sudoku", "sudoku"),
++    FormOption("tuic", "tuic（v4 token / v5 users）"),
++    FormOption("shadowquic", "shadowquic"),
++    FormOption("hysteria2", "hysteria2"),
++    FormOption("hysteria2-realm", "hysteria2-realm"),
++    FormOption("trusttunnel", "trusttunnel"),
++    FormOption("tunnel", "tunnel 端口转发"),
++    FormOption("snell", "snell"),
++    FormOption("cns", "cns"),
++)
++
++/** 新建监听器模板（参考实现 IN_TEMPLATES；名字由页面按唯一名覆盖，基础协议端口页面另算）。 */
++val LISTENER_TEMPLATES: Map<String, Map<String, Any?>> = linkedMapOf(
++    "mixed" to linkedMapOf<String, Any?>("name" to "mixed-in", "type" to "mixed", "port" to 7890L, "listen" to "0.0.0.0"),
++    "http" to linkedMapOf<String, Any?>("name" to "http-in", "type" to "http", "port" to 7891L, "listen" to "0.0.0.0"),
++    "socks" to linkedMapOf<String, Any?>("name" to "socks-in", "type" to "socks", "port" to 7892L, "listen" to "0.0.0.0"),
++    "redirect" to linkedMapOf<String, Any?>("name" to "redirect-in", "type" to "redirect", "port" to 7893L, "listen" to "0.0.0.0"),
++    "tproxy" to linkedMapOf<String, Any?>("name" to "tproxy-in", "type" to "tproxy", "port" to 7894L, "listen" to "0.0.0.0"),
++    "tunnel" to linkedMapOf<String, Any?>("name" to "tunnel-in", "type" to "tunnel", "port" to 10090L, "listen" to "0.0.0.0", "network" to listOf("tcp", "udp"), "target" to "www.example.com:80"),
++    "tun" to linkedMapOf<String, Any?>("name" to "tun-in", "type" to "tun", "stack" to "system", "dns-hijack" to listOf("0.0.0.0:53"), "inet4-address" to listOf("198.19.0.1/30"), "mtu" to 9000L, "auto-route" to true, "auto-detect-interface" to true),
++    "ebpf" to linkedMapOf<String, Any?>("name" to "ebpf-in", "type" to "ebpf", "mode" to "local"),
++    "shadowsocks" to linkedMapOf<String, Any?>("name" to "ss-in", "type" to "shadowsocks", "port" to 10000L, "listen" to "0.0.0.0", "cipher" to "aes-256-gcm", "password" to "密码"),
++    "vmess" to linkedMapOf<String, Any?>("name" to "vmess-in", "type" to "vmess", "port" to 10001L, "listen" to "0.0.0.0", "users" to listOf(linkedMapOf("username" to "user1", "uuid" to "", "alterId" to 0L))),
++    "vless" to linkedMapOf<String, Any?>("name" to "vless-in", "type" to "vless", "port" to 10002L, "listen" to "0.0.0.0", "users" to listOf(linkedMapOf("username" to "user1", "uuid" to ""))),
++    "trojan" to linkedMapOf<String, Any?>("name" to "trojan-in", "type" to "trojan", "port" to 10003L, "listen" to "0.0.0.0", "users" to listOf(linkedMapOf("username" to "user1", "password" to "")), "certificate" to "./server.crt", "private-key" to "./server.key"),
++    "snell" to linkedMapOf<String, Any?>("name" to "snell-in", "type" to "snell", "port" to 10815L, "listen" to "0.0.0.0", "psk" to "snell-psk", "version" to 4L),
++    "anytls" to linkedMapOf<String, Any?>("name" to "anytls-in", "type" to "anytls", "port" to 10018L, "listen" to "0.0.0.0", "users" to linkedMapOf("user1" to "password1"), "certificate" to "./server.crt", "private-key" to "./server.key"),
++    "mieru" to linkedMapOf<String, Any?>("name" to "mieru-in", "type" to "mieru", "port" to 10019L, "listen" to "0.0.0.0", "transport" to "TCP", "users" to linkedMapOf("user1" to "password1")),
++    "sudoku" to linkedMapOf<String, Any?>("name" to "sudoku-in", "type" to "sudoku", "port" to 8443L, "listen" to "0.0.0.0", "key" to "server-public-key-or-uuid", "aead-method" to "chacha20-poly1305"),
++    "trusttunnel" to linkedMapOf<String, Any?>("name" to "trusttunnel-in", "type" to "trusttunnel", "port" to 10021L, "listen" to "0.0.0.0", "users" to listOf(linkedMapOf("username" to "user1", "password" to "pass1")), "certificate" to "./server.crt", "private-key" to "./server.key", "congestion-controller" to "bbr"),
++    "hysteria2" to linkedMapOf<String, Any?>("name" to "hy2-in", "type" to "hysteria2", "port" to 10004L, "listen" to "0.0.0.0", "users" to linkedMapOf("user1" to "password1"), "certificate" to "./server.crt", "private-key" to "./server.key"),
++    "hysteria2-realm" to linkedMapOf<String, Any?>("name" to "hy2realm-in", "type" to "hysteria2-realm", "port" to 10820L, "listen" to "0.0.0.0", "token" to "public"),
++    "shadowquic" to linkedMapOf<String, Any?>("name" to "sq-in", "type" to "shadowquic", "port" to 10822L, "listen" to "0.0.0.0", "users" to listOf(linkedMapOf("username" to "user", "password" to "pass")), "jls-upstream" to linkedMapOf("addr" to "www.example.com:443")),
++    "tuic" to linkedMapOf<String, Any?>("name" to "tuic-in", "type" to "tuic", "port" to 10005L, "listen" to "0.0.0.0", "users" to linkedMapOf("00000000-0000-0000-0000-000000000000" to "password1"), "certificate" to "./server.crt", "private-key" to "./server.key"),
++    "cns" to linkedMapOf<String, Any?>("name" to "cns-in", "type" to "cns", "port" to 23333L, "listen" to "0.0.0.0", "key" to "Meng", "flag" to "httpUDP", "udp" to true),
++)
++
++/** 基础监听协议：端口沿用页面「7890 + 序号」的防撞策略，不用模板固定端口。 */
++val LISTENER_BASIC_PORT_TYPES: Set<String> = setOf("mixed", "http", "socks", "redirect", "tproxy", "tunnel")
++
++/** 无监听端口的接管型（参考实现 IN_NO_PORT；ebpf 走独立页面）。 */
++val LISTENER_NO_PORT: Set<String> = setOf("tun", "ebpf")
++
++/** 需要 TLS 证书字段的类型（参考实现 IN_TLS_TYPES）。 */
++val LISTENER_TLS_TYPES: Set<String> = setOf("vmess", "vless", "trojan", "hysteria2", "tuic", "anytls", "trusttunnel", "hysteria2-realm")
++
++/** 支持 REALITY / 传输层 / TLS 伪装层的类型（参考实现 IN_REALITY_TYPES / IN_TRANSPORT_TYPES / IN_DISGUISE_TYPES）。 */
++val LISTENER_REALITY_TYPES: Set<String> = setOf("vmess", "vless", "trojan")
++
++/** 支持 mux-option 的类型（参考实现 IN_MUX_TYPES）。 */
++val LISTENER_MUX_TYPES: Set<String> = setOf("vmess", "vless", "trojan", "hysteria2", "tuic", "shadowsocks")
++
++/** `users` 是「对象列表」的协议 → 简版映射列表编辑器的列（其余协议的 users 是 MAPTEXT 映射）。 */
++val LISTENER_USERS_COLUMNS: Map<String, List<Pair<String, String>>> = linkedMapOf(
++    "http" to listOf("username" to "用户名", "password" to "密码"),
++    "socks" to listOf("username" to "用户名", "password" to "密码"),
++    "mixed" to listOf("username" to "用户名", "password" to "密码"),
++    "vmess" to listOf("username" to "用户名", "uuid" to "UUID", "alterId" to "alterId"),
++    "vless" to listOf("username" to "用户名", "uuid" to "UUID", "flow" to "flow 流控"),
++    "trojan" to listOf("username" to "用户名", "password" to "密码"),
++    "trusttunnel" to listOf("username" to "用户名", "password" to "密码"),
++    "shadowquic" to listOf("username" to "用户名", "password" to "密码"),
++)
++
++/** users 必填的协议（内核结构体无 omitempty；页面在说明里提示，不做硬校验）。 */
++val LISTENER_USERS_REQUIRED: Set<String> = setOf("vmess", "vless", "trojan")
++
++private fun ccOptions() = listOf(FormOption("cubic", "cubic"), FormOption("bbr", "bbr"), FormOption("new_reno", "new_reno"))
++
++private fun bbrOptions() = listOf(FormOption("standard", "standard"), FormOption("conservative", "conservative"), FormOption("aggressive", "aggressive"))
++
++/** 协议专属字段（参考实现 IN_EXTRA；`users` 对象列表在页面里走专门控件行，不在此列）。 */
++val LISTENER_EXTRA: Map<String, List<FormField>> = linkedMapOf(
++    "shadowsocks" to listOf(
++        FormField("cipher", "加密方式 cipher", FormFieldType.TEXT, optional = true, placeholder = "aes-256-gcm / 2022-blake3-aes-256-gcm"),
++        FormField("password", "密码", FormFieldType.TEXT, optional = true, desc = "2022 系列加密要求 base64 形式的密钥"),
++    ),
++    "vmess" to listOf(
++        FormField("mkcp-config.enable", "启用 mKCP", FormFieldType.BOOL, optional = true, desc = "v2ray 兼容的 mKCP 传输层"),
++        FormField("mkcp-config.mtu", "mKCP MTU", FormFieldType.NUMBER, optional = true, placeholder = "1350"),
++        FormField("mkcp-config.tti", "mKCP 传输间隔(ms)", FormFieldType.NUMBER, optional = true, placeholder = "50"),
++        FormField("mkcp-config.uplink-capacity", "mKCP 上行(MB/s)", FormFieldType.NUMBER, optional = true, placeholder = "5"),
++        FormField("mkcp-config.downlink-capacity", "mKCP 下行(MB/s)", FormFieldType.NUMBER, optional = true, placeholder = "20"),
++        FormField("mkcp-config.congestion", "mKCP 拥塞控制", FormFieldType.BOOL, optional = true),
++        FormField("mkcp-config.seed", "mKCP 混淆种子", FormFieldType.TEXT, optional = true),
++        FormField(
++            "mkcp-config.header", "mKCP 伪装包头", FormFieldType.SELECT, allowEmpty = true,
++            options = listOf(FormOption("none", "none"), FormOption("srtp", "srtp"), FormOption("utp", "utp"), FormOption("wechat-video", "wechat-video"), FormOption("dtls", "dtls"), FormOption("wireguard", "wireguard")),
++        ),
++    ),
++    "vless" to listOf(
++        FormField(
++            "decryption", "VLESS encryption 服务端串", FormFieldType.TEXTAREA, optional = true,
++            placeholder = "mlkem768x25519plus.native/xorpub/random.600s/0s.(私钥)…",
++            desc = "填写后可免 TLS。由 mihomo generate vless-x25519 / vless-mlkem768 生成",
++        ),
++        FormField("allow-insecure", "允许不加密 allow-insecure", FormFieldType.BOOL, optional = true, desc = "仅用于前置 nginx/caddy 的场景；否则证书、REALITY、decryption 至少配一项"),
++        FormField("xhttp-config.path", "XHTTP 路径", FormFieldType.TEXT, optional = true, placeholder = "/", desc = "填写后启用 XHTTP 传输层"),
++        FormField("xhttp-config.host", "XHTTP Host", FormFieldType.TEXT, optional = true),
++        FormField(
++            "xhttp-config.mode", "XHTTP 模式", FormFieldType.SELECT, allowEmpty = true,
++            options = listOf(FormOption("auto", "auto"), FormOption("stream-one", "stream-one"), FormOption("stream-up", "stream-up"), FormOption("packet-up", "packet-up")),
++        ),
++    ),
++    "trojan" to listOf(
++        FormField("ss-option.enabled", "启用 Shadowsocks 套壳", FormFieldType.BOOL, optional = true, desc = "等价 trojan-go 的 shadowsocks 配置"),
++        FormField(
++            "ss-option.method", "SS 加密方式", FormFieldType.SELECT, allowEmpty = true,
++            options = listOf(FormOption("aes-128-gcm", "aes-128-gcm"), FormOption("aes-256-gcm", "aes-256-gcm"), FormOption("chacha20-ietf-poly1305", "chacha20-ietf-poly1305")),
++        ),
++        FormField("ss-option.password", "SS 密码", FormFieldType.TEXT, optional = true),
++        FormField("allow-insecure", "允许不加密 allow-insecure", FormFieldType.BOOL, optional = true, desc = "仅用于前置 nginx/caddy 的场景；否则证书、REALITY、ss-option 至少配一项"),
++    ),
++    "hysteria2" to listOf(
++        FormField("users", "用户（每行「用户名: 密码」）", FormFieldType.MAPTEXT, optional = true, placeholder = "user1: password1", desc = "映射形式；需同时配置 TLS 证书"),
++        FormField("masquerade", "伪装站点 masquerade", FormFieldType.TEXT, optional = true, placeholder = "https://bing.com"),
++        FormField("obfs", "混淆 obfs", FormFieldType.TEXT, optional = true, placeholder = "salamander"),
++        FormField("obfs-password", "混淆密码", FormFieldType.TEXT, optional = true),
++        FormField("up", "上行速率 up", FormFieldType.TEXT, optional = true, placeholder = "1000（默认 Mbps）"),
++        FormField("down", "下行速率 down", FormFieldType.TEXT, optional = true, placeholder = "1000（默认 Mbps）"),
++        FormField("ignore-client-bandwidth", "忽略客户端带宽", FormFieldType.BOOL, optional = true, desc = "开启后固定使用 BBR"),
++        FormField("alpn", "ALPN", FormFieldType.LIST, optional = true, hint = "h3"),
++        FormField("bbr-profile", "BBR 策略", FormFieldType.SELECT, allowEmpty = true, options = bbrOptions()),
++        FormField("max-idle-time", "最大空闲(ms)", FormFieldType.NUMBER, optional = true),
++        FormField("cwnd", "拥塞窗口 cwnd", FormFieldType.NUMBER, optional = true),
++    ),
++    "tuic" to listOf(
++        FormField(
++            "users", "v5 用户（每行「UUID: 密码」）", FormFieldType.MAPTEXT, optional = true,
++            placeholder = "00000000-0000-0000-0000-000000000000: password1",
++            desc = "键必须是 UUID、值是密码；与 token(v4) 至少填一项",
++        ),
++        FormField("token", "token v4（与 users 二选一）", FormFieldType.LIST, optional = true, hint = "TOKEN"),
++        FormField("congestion-controller", "拥塞控制", FormFieldType.SELECT, allowEmpty = true, options = ccOptions()),
++        FormField("max-idle-time", "最大空闲（ms）", FormFieldType.NUMBER, optional = true),
++        FormField("max-udp-relay-packet-size", "最大 UDP 中继包", FormFieldType.NUMBER, optional = true),
++        FormField("authentication-timeout", "认证超时(ms)", FormFieldType.NUMBER, optional = true, placeholder = "1000"),
++        FormField("alpn", "ALPN", FormFieldType.LIST, optional = true, hint = "h3"),
++        FormField("cwnd", "拥塞窗口 cwnd", FormFieldType.NUMBER, optional = true),
++    ),
++    "anytls" to listOf(
++        FormField("users", "用户（每行「用户名: 密码」）", FormFieldType.MAPTEXT, optional = true, placeholder = "user1: password1", desc = "映射形式；certificate 与 private-key 必填"),
++        FormField("padding-scheme", "填充策略 padding-scheme", FormFieldType.LIST, optional = true, hint = "如 stop=8"),
++    ),
++    "mieru" to listOf(
++        FormField("transport", "传输 transport", FormFieldType.SELECT, allowEmpty = true, options = listOf(FormOption("TCP", "TCP"), FormOption("UDP", "UDP"))),
++        FormField("users", "用户（每行「用户名: 密码」）", FormFieldType.MAPTEXT, optional = true, placeholder = "user1: password1"),
++        FormField("traffic-pattern", "流量模式 traffic-pattern", FormFieldType.TEXT, optional = true),
++        FormField("user-hint-is-mandatory", "强制 user-hint", FormFieldType.BOOL, optional = true),
++    ),
++    "sudoku" to listOf(
++        FormField("key", "密钥 key", FormFieldType.TEXT, optional = true),
++        FormField(
++            "aead-method", "AEAD 算法", FormFieldType.SELECT, allowEmpty = true,
++            options = listOf(FormOption("chacha20-poly1305", "chacha20-poly1305"), FormOption("aes-128-gcm", "aes-128-gcm"), FormOption("none", "none")),
++        ),
++        FormField("padding-min", "最小填充率", FormFieldType.NUMBER, optional = true),
++        FormField("padding-max", "最大填充率", FormFieldType.NUMBER, optional = true),
++        FormField(
++            "table-type", "表类型 table-type", FormFieldType.SELECT, allowEmpty = true,
++            options = listOf(FormOption("prefer_ascii", "prefer_ascii"), FormOption("prefer_entropy", "prefer_entropy"), FormOption("up_ascii_down_entropy", "up_ascii_down_entropy"), FormOption("up_entropy_down_ascii", "up_entropy_down_ascii")),
++        ),
++        FormField("enable-pure-downlink", "纯 Sudoku 下行", FormFieldType.BOOL, optional = true),
++        FormField("handshake-timeout", "握手超时（秒）", FormFieldType.NUMBER, optional = true),
++        FormField("httpmask.disable", "禁用 HTTP 伪装", FormFieldType.BOOL, optional = true),
++        FormField(
++            "httpmask.mode", "HTTP 伪装模式", FormFieldType.SELECT, allowEmpty = true,
++            options = listOf(FormOption("legacy", "legacy"), FormOption("stream", "stream"), FormOption("poll", "poll"), FormOption("auto", "auto"), FormOption("ws", "ws")),
++        ),
++        FormField("httpmask.path-root", "伪装路径前缀", FormFieldType.TEXT, optional = true),
++        FormField("fallback", "HTTP 回退地址", FormFieldType.TEXT, optional = true),
++    ),
++    "trusttunnel" to listOf(
++        FormField("network", "网络（http2+http3）", FormFieldType.LIST, optional = true, hint = "tcp, udp"),
++        FormField("congestion-controller", "拥塞控制", FormFieldType.SELECT, allowEmpty = true, options = ccOptions()),
++        FormField("bbr-profile", "BBR 策略", FormFieldType.SELECT, allowEmpty = true, options = bbrOptions()),
++    ),
++    "hysteria2-realm" to listOf(
++        FormField("token", "Bearer token", FormFieldType.TEXT, optional = true),
++        FormField("max-realms", "最大 realm 总数", FormFieldType.NUMBER, optional = true),
++        FormField("max-realms-per-ip", "单 IP 最大 realm 数", FormFieldType.NUMBER, optional = true),
++        FormField("trusted-proxy-header", "可信代理头", FormFieldType.TEXT, optional = true, placeholder = "X-Forwarded-For"),
++        FormField("realm-name-pattern", "realm 名称正则", FormFieldType.TEXT, optional = true),
++        FormField("alpn", "ALPN", FormFieldType.LIST, optional = true, hint = "h2, http/1.1"),
++    ),
++    "shadowquic" to listOf(
++        FormField("jls-upstream.addr", "JLS 上游 jls-upstream.addr", FormFieldType.TEXT, optional = true, placeholder = "www.example.com:443"),
++        FormField("jls-upstream.sni", "JLS 上游 SNI", FormFieldType.TEXT, optional = true),
++        FormField("alpn", "ALPN", FormFieldType.LIST, optional = true, hint = "h3"),
++        FormField("quic-versions", "QUIC 版本", FormFieldType.TEXT, optional = true, placeholder = "v1"),
++        FormField("zero-rtt", "0-RTT", FormFieldType.BOOL, optional = true),
++        FormField("congestion-controller", "拥塞控制", FormFieldType.SELECT, allowEmpty = true, options = ccOptions()),
++        FormField("ignore-client-bandwidth", "忽略客户端带宽声明", FormFieldType.BOOL, optional = true),
++    ),
++    "tunnel" to listOf(
++        FormField("target", "转发目标 target", FormFieldType.TEXT, optional = true, placeholder = "www.example.com:80"),
++        FormField("network", "转发网络", FormFieldType.LIST, optional = true, hint = "tcp, udp"),
++    ),
++    "snell" to listOf(
++        FormField("psk", "PSK 密钥", FormFieldType.TEXT, optional = true),
++        FormField(
++            "version", "版本 version", FormFieldType.SELECT, allowEmpty = true, numeric = true,
++            options = listOf(FormOption("1", "v1"), FormOption("2", "v2"), FormOption("3", "v3"), FormOption("4", "v4"), FormOption("5", "v5")),
++        ),
++        FormField("obfs-opts.mode", "混淆模式", FormFieldType.SELECT, allowEmpty = true, options = listOf(FormOption("http", "http"), FormOption("tls", "tls"))),
++        FormField("obfs-opts.host", "混淆 Host", FormFieldType.TEXT, optional = true),
++    ),
++    "cns" to listOf(
++        FormField("key", "密钥 key", FormFieldType.TEXT, optional = true, placeholder = "Meng", desc = "对应 Proxy_key，省略默认 Meng"),
++        FormField("password", "密码 password", FormFieldType.TEXT, optional = true, desc = "对应 Encrypt_password，空则不 XOR"),
++        FormField("flag", "UDP 标志 flag", FormFieldType.TEXT, optional = true, placeholder = "httpUDP", desc = "对应 Udp_flag；握手里出现该行即走 UDP-over-TCP"),
++    ),
++    "tun" to listOf(
++        FormField(
++            "stack", "协议栈 stack", FormFieldType.SELECT, allowEmpty = true,
++            options = listOf(FormOption("system", "system"), FormOption("gvisor", "gvisor"), FormOption("mixed", "mixed"), FormOption("mips", "mips")),
++            desc = "mips = mihomo 自研 IP 协议栈，需内核 ≥ v1.19.31",
++        ),
++        FormField("dns-hijack", "DNS 劫持", FormFieldType.LIST, optional = true, hint = "0.0.0.0:53"),
++        FormField("inet4-address", "IPv4 地址", FormFieldType.LIST, optional = true, hint = "198.19.0.1/30"),
++        FormField("inet6-address", "IPv6 地址", FormFieldType.LIST, optional = true),
++        FormField("mtu", "MTU", FormFieldType.NUMBER, optional = true),
++        FormField("auto-route", "自动路由", FormFieldType.BOOL, optional = true),
++        FormField("auto-detect-interface", "自动探测出口网卡", FormFieldType.BOOL, optional = true),
++        FormField("strict-route", "严格路由", FormFieldType.BOOL, optional = true),
++        FormField("endpoint-independent-nat", "全锥形 NAT", FormFieldType.BOOL, optional = true),
++    ),
++)
++
++/** TLS 证书（参考实现 IN_TLS_FIELDS）。 */
++val LISTENER_TLS_FIELDS: List<FormField> = listOf(
++    FormField("certificate", "证书 certificate", FormFieldType.TEXT, optional = true, placeholder = "./server.crt", desc = "PEM 内容或证书路径"),
++    FormField("private-key", "私钥 private-key", FormFieldType.TEXT, optional = true, placeholder = "./server.key", desc = "PEM 内容或私钥路径，需与证书同时填写"),
++    FormField(
++        "client-auth-type", "mTLS 客户端校验", FormFieldType.SELECT, allowEmpty = true, emptyLabel = "不校验（默认）",
++        options = listOf(FormOption("request", "request"), FormOption("require-any", "require-any"), FormOption("verify-if-given", "verify-if-given"), FormOption("require-and-verify", "require-and-verify")),
++        desc = "选 verify-if-given / require-and-verify 时，下方客户端证书必填",
++    ),
++    FormField("client-auth-cert", "mTLS 客户端证书", FormFieldType.TEXT, optional = true, desc = "PEM 内容或证书路径"),
++    FormField(
++        "ech-key", "ECH 密钥 ech-key", FormFieldType.TEXTAREA, optional = true,
++        placeholder = "-----BEGIN ECH KEYS-----\n…\n-----END ECH KEYS-----",
++        desc = "可由 mihomo generate ech-keypair <域名> 生成",
++    ),
++)
++
++/** REALITY（vmess / vless / trojan 共用；参考实现 IN_REALITY_FIELDS）。 */
++val LISTENER_REALITY_FIELDS: List<FormField> = listOf(
++    FormField("reality-config.dest", "REALITY 目标 dest", FormFieldType.TEXT, optional = true, placeholder = "test.com:443", desc = "偷取证书的真实站点；填写后即启用 REALITY（不可与证书同时使用）"),
++    FormField("reality-config.private-key", "REALITY 私钥", FormFieldType.TEXT, optional = true, desc = "由 mihomo generate reality-keypair 生成"),
++    FormField("reality-config.short-id", "REALITY short-id", FormFieldType.LIST, optional = true, hint = "0123456789abcdef"),
++    FormField("reality-config.server-names", "REALITY server-names", FormFieldType.LIST, optional = true, hint = "test.com"),
++    FormField("reality-config.max-time-difference", "最大时间偏差(μs)", FormFieldType.NUMBER, optional = true),
++    FormField("reality-config.proxy", "REALITY 回落出口", FormFieldType.TEXT, optional = true),
++)
++
++/** 传输层（vmess / vless / trojan 共用；参考实现 IN_TRANSPORT_FIELDS）。 */
++val LISTENER_TRANSPORT_FIELDS: List<FormField> = listOf(
++    FormField("ws-path", "WebSocket 路径 ws-path", FormFieldType.TEXT, optional = true, placeholder = "/", desc = "非空即开启 WebSocket 传输层"),
++    FormField("grpc-service-name", "gRPC 服务名", FormFieldType.TEXT, optional = true, placeholder = "GunService", desc = "非空即开启 gRPC 传输层"),
++)
++
++/** TLS 伪装层：shadow-tls / res-tls / jls-config（参考实现 IN_DISGUISE_FIELDS）。 */
++val LISTENER_DISGUISE_FIELDS: List<FormField> = listOf(
++    FormField("shadow-tls.enable", "启用 ShadowTLS", FormFieldType.BOOL, optional = true),
++    FormField("shadow-tls.version", "ShadowTLS 版本", FormFieldType.SELECT, allowEmpty = true, numeric = true, options = listOf(FormOption("1", "v1"), FormOption("2", "v2"), FormOption("3", "v3"))),
++    FormField("shadow-tls.password", "ShadowTLS 密码(v2)", FormFieldType.TEXT, optional = true),
++    FormField("shadow-tls.handshake.dest", "ShadowTLS 握手目标", FormFieldType.TEXT, optional = true, placeholder = "www.example.com:443"),
++    FormField("res-tls.enable", "启用 RestTLS", FormFieldType.BOOL, optional = true),
++    FormField("res-tls.dest", "RestTLS 目标", FormFieldType.TEXT, optional = true, placeholder = "www.example.com:443"),
++    FormField("res-tls.password", "RestTLS 密码", FormFieldType.TEXT, optional = true),
++    FormField("jls-config.enable", "启用 JLS", FormFieldType.BOOL, optional = true),
++    FormField("jls-config.dest", "JLS 回落目标", FormFieldType.TEXT, optional = true, placeholder = "www.example.com:443"),
++    FormField("jls-config.sni", "JLS SNI", FormFieldType.TEXT, optional = true, desc = "留空时从 dest 推导"),
++)
++
++/** Multiplex（参考实现 IN_MUX_FIELDS）。 */
++val LISTENER_MUX_FIELDS: List<FormField> = listOf(
++    FormField("mux-option.padding", "Mux 填充", FormFieldType.BOOL, optional = true),
++    FormField("mux-option.brutal.enabled", "Brutal 拥塞控制", FormFieldType.BOOL, optional = true),
++    FormField("mux-option.brutal.up", "Brutal 上行(Mbps)", FormFieldType.NUMBER, optional = true),
++    FormField("mux-option.brutal.down", "Brutal 下行(Mbps)", FormFieldType.NUMBER, optional = true),
++)
++
++/**
++ * 已知协议的详情页小节组合（参考实现 renderListener 的分组顺序）。
++ * eBPF / 未知协议返回 null，由页面用 [EBPF_SECTIONS] 或通用小节兜底。
++ * `users` 对象列表协议的第一行是专门控件行（页面里接简版映射列表编辑器）。
++ */
++fun listenerSections(type: String): List<FormSection>? {
++    if (type !in LISTENER_TEMPLATES || type == "ebpf") return null
++    val out = ArrayList<FormSection>()
++    val common = ArrayList<FormRow>()
++    common.add(FormField("name", "名称", FormFieldType.TEXT, optional = true))
++    if (type !in LISTENER_NO_PORT) {
++        common.add(FormField("listen", "监听地址", FormFieldType.TEXT, placeholder = "0.0.0.0", optional = true))
++        common.add(FormField("port", "监听端口", FormFieldType.NUMBER, optional = true))
++        common.add(FormField("ports", "端口范围", FormFieldType.LIST, optional = true, desc = "多端口监听；与端口二选一"))
++        common.add(FormField("udp", "监听 UDP", FormFieldType.BOOL, optional = true, default = true, desc = "内核默认开启"))
++    }
++    common.add(FormField("proxy", "转发到代理/代理组", FormFieldType.SELECT, optionsDynamic = "outbound", optional = true, allowEmpty = true, emptyLabel = "默认（走路由规则）", desc = "入站流量不走路由，直接交给指定代理"))
++    common.add(FormField("rule", "子规则 sub-rules", FormFieldType.TEXT, optional = true, desc = "指定 sub-rules 中的规则组名"))
++    common.add(FormField("routing-mark", "routing-mark", FormFieldType.NUMBER, optional = true, desc = "为监听 socket 设置 routing-mark，仅 Linux 有效"))
++    out.add(FormSection("基础", common))
++
++    val extra = ArrayList<FormRow>()
++    if (type in LISTENER_USERS_COLUMNS) extra.add(FormCustomRow("in-users"))
++    extra.addAll(LISTENER_EXTRA[type].orEmpty())
++    if (extra.isNotEmpty()) out.add(FormSection("协议参数", extra))
++    if (type in LISTENER_REALITY_TYPES) out.add(FormSection("传输层", LISTENER_TRANSPORT_FIELDS))
++    if (type in LISTENER_TLS_TYPES) out.add(FormSection("TLS 证书", LISTENER_TLS_FIELDS))
++    if (type in LISTENER_REALITY_TYPES) out.add(FormSection("REALITY", LISTENER_REALITY_FIELDS))
++    if (type in LISTENER_REALITY_TYPES) out.add(FormSection("TLS 伪装（ShadowTLS / RestTLS / JLS）", LISTENER_DISGUISE_FIELDS))
++    if (type in LISTENER_MUX_TYPES) out.add(FormSection("Multiplex", LISTENER_MUX_FIELDS))
++    return out
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
 new file mode 100644
@@ -12771,17 +13273,20 @@ index 0000000..ffe329b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
 new file mode 100644
-index 0000000..71f3289
+index 0000000..7ff6f89
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,227 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import android.net.Uri
 +import androidx.activity.compose.rememberLauncherForActivityResult
 +import androidx.activity.result.contract.ActivityResultContracts
 +import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
 +import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.width
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.getValue
@@ -12789,8 +13294,10 @@ index 0000000..71f3289
 +import androidx.compose.runtime.remember
 +import androidx.compose.runtime.rememberCoroutineScope
 +import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
 +import androidx.compose.ui.Modifier
 +import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.unit.dp
 +import java.io.File
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.launch
@@ -12805,8 +13312,9 @@ index 0000000..71f3289
 +
 +/**
 + * file 类型合集的「源文件」操作（对齐 mihomo_box `fileOpsCtl` 的 Android 版）：上传（SAF，二进制安全，
-+ * 支持 .mrs）/ 在线编辑内容。相对路径按本订阅 imported/ 目录解析（mihomo 以工作目录启动，语义一致）；
++ * 支持 .mrs）/ 在线编辑。相对路径按本订阅 imported/ 目录解析（mihomo 以工作目录启动，语义一致）；
 + * 绝对路径原样用。写盘直接 java.io，不经编辑器草稿——源文件不是配置本身，内核按 path 单独读它。
++ * 订阅源文件（kind=sub）保存前经 [ProxyUri.ensureProxiesRoot] 兜底补 `proxies:` 根。
 + */
 +
 +/** `path` 配置值 → 实际文件：绝对路径原样；相对去掉 `./` 挂到 imported/ 目录下；无基目录返回 null。 */
@@ -12889,17 +13397,21 @@ index 0000000..71f3289
 +                if (isMrs) append(" · mrs 为二进制，只能上传替换")
 +            },
 +            endActions = {
-+                TextButton(text = "上传", onClick = { uploadLauncher.launch(arrayOf("*/*")) })
-+                TextButton(text = "编辑内容", onClick = {
-+                    when {
-+                        isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
-+                        file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
-+                            showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
-+                        host.fileBaseDir == null && !cfgPath.startsWith("/") ->
-+                            showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
-+                        else -> editOpen = true
-+                    }
-+                })
++                // 两个按钮收进一行并压紧最小宽度：默认 TextButton 的最小宽度会在窄屏上把摘要挤换行
++                Row(verticalAlignment = Alignment.CenterVertically) {
++                    TextButton(text = "上传", minWidth = 0.dp, onClick = { uploadLauncher.launch(arrayOf("*/*")) })
++                    Spacer(Modifier.width(2.dp))
++                    TextButton(text = "编辑", minWidth = 0.dp, onClick = {
++                        when {
++                            isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
++                            file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
++                                showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
++                            host.fileBaseDir == null && !cfgPath.startsWith("/") ->
++                                showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
++                            else -> editOpen = true
++                        }
++                    })
++                }
 +            },
 +            onClick = { editOpen = true },
 +        )
@@ -12912,6 +13424,8 @@ index 0000000..71f3289
 +            baseDir = host.fileBaseDir,
 +            cfgPath = cfgPath,
 +            newFileText = newFileText,
++            // 订阅源文件保存前自动补 proxies: 根（参考实现 ensureProxiesRoot；mrs 二进制不进编辑器）
++            wrapProxies = kind == "sub",
 +            scope = scope,
 +            onDismiss = { editOpen = false },
 +            onSaved = {
@@ -12931,6 +13445,7 @@ index 0000000..71f3289
 +    baseDir: String?,
 +    cfgPath: String,
 +    newFileText: String,
++    wrapProxies: Boolean,
 +    scope: kotlinx.coroutines.CoroutineScope,
 +    onDismiss: () -> Unit,
 +    onSaved: () -> Unit,
@@ -12963,7 +13478,8 @@ index 0000000..71f3289
 +            )
 +            TextButton(text = "保存文件", onClick = {
 +                val t = target ?: return@TextButton
-+                val content = draft.orEmpty()
++                // mihomo 要求订阅文件是 proxies 列表：只贴了节点列表 / 单节点时自动补根，其余内容不动
++                val content = if (wrapProxies) ProxyUri.ensureProxiesRoot(draft.orEmpty()).first else draft.orEmpty()
 +                scope.launch {
 +                    val ok = withContext(Dispatchers.IO) {
 +                        runCatching { t.parentFile?.mkdirs(); t.writeText(content) }.isSuccess
@@ -12987,6 +13503,807 @@ index 0000000..71f3289
 +        out.write(buf, 0, n)
 +    }
 +    return out.toByteArray()
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
+new file mode 100644
+index 0000000..1796296
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
+@@ -0,0 +1,795 @@
++package top.yukonga.mishka.custom.forms
++
++import java.io.ByteArrayOutputStream
++import java.nio.ByteBuffer
++import java.nio.charset.CodingErrorAction
++import java.nio.charset.StandardCharsets
++
++/**
++ * 出站代理「解析节点」（对齐 mihomo_box `proxy-uri.js` 的 Kotlin 版）：
++ * 把粘贴的分享链接（SS / VMess / VLESS / Trojan / Hysteria2 / TUIC）或 Clash/Mihomo YAML 节点
++ * 解析成 `proxies` 序列可写入的映射。纯本地解析，无网络、无 eval；解析不了的内容按行报错，不猜。
++ *
++ * 另含 `ensureProxiesRoot`：file 类型订阅源文件保存前的兜底——用户只贴「- name: …」节点列表或
++ * 单个节点时自动补 `proxies:` 根（mihomo 要求订阅文件必须是 proxies 列表）；其余内容一律不动。
++ */
++
++/** 解析失败（消息即用户可见文案）。 */
++internal class ProxyUriError(message: String) : Exception(message)
++
++internal data class ProxyImportAdded(val line: Int, val name: String, val renamed: Boolean, val warnings: List<String>)
++
++internal data class ProxyImportError(val line: Int, val message: String, val input: String)
++
++internal data class ProxyImportResult(
++    val proxies: List<Map<String, Any?>>,
++    val added: List<ProxyImportAdded>,
++    val errors: List<ProxyImportError>,
++    val skipped: Int,
++    val total: Int,
++)
++
++internal object ProxyUri {
++
++    private const val MAX_TEXT = 1024 * 1024
++    private const val MAX_NODES = 500
++
++    private val SCHEME_HEAD = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
++    private val CIPHER_RE = Regex("^[a-zA-Z0-9-]+$")
++    private val UUID_RE = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
++    private val REALITY_PUBKEY_RE = Regex("^[A-Za-z0-9_-]{43}$")
++    private val REALITY_SID_RE = Regex("^(?:[0-9a-fA-F]{2}){0,8}$")
++    private val BASE64_BODY_RE = Regex("^[A-Za-z0-9+/]*={0,2}$")
++    private val NUM_RE = Regex("^\\d+$")
++
++    // ---------------------------------------------------------------- 入口
++
++    /** 整批解析：URI 每行一条（一行多条按空白拆），或整体按 YAML 节点收。同名自动加序号。 */
++    fun parseAll(input: String, existingNames: Collection<String> = emptyList()): ProxyImportResult {
++        if (input.length > MAX_TEXT || input.toByteArray(StandardCharsets.UTF_8).size > MAX_TEXT) {
++            throw ProxyUriError("内容过大，请分批导入（每批最多 1 MiB 文本）")
++        }
++        if (input.isBlank()) throw ProxyUriError("请先粘贴节点 URI 或 YAML")
++        val names = LinkedHashSet(existingNames)
++        val seen = HashSet<String>()
++        val proxies = ArrayList<Map<String, Any?>>()
++        val added = ArrayList<ProxyImportAdded>()
++        val errors = ArrayList<ProxyImportError>()
++        var skipped = 0
++        val result = if (looksLikeYamlNodes(input)) {
++            val nodes = yamlNodes(input)
++            if (nodes.size > MAX_NODES) throw ProxyUriError("每批最多 500 个节点，请分批导入")
++            nodes.forEachIndexed { i, proxy ->
++                val key = renderKey(proxy)
++                if (!seen.add(key)) { skipped++; return@forEachIndexed }
++                try {
++                    val original = proxy["name"].toString()
++                    val finalName = uniquify(original, names)
++                    val p = LinkedHashMap(proxy)
++                    p["name"] = finalName
++                    proxies.add(p)
++                    added.add(ProxyImportAdded(i + 1, finalName, finalName != original, emptyList()))
++                } catch (e: Exception) {
++                    errors.add(ProxyImportError(i + 1, e.message ?: "解析失败", proxy["name"]?.toString().orEmpty()))
++                }
++            }
++            nodes.size
++        } else {
++            val entries = ArrayList<Pair<String, Int>>()
++            input.split(Regex("\\r?\\n")).forEachIndexed { i, line ->
++                line.trim().split(Regex("\\s+(?=[a-zA-Z][a-zA-Z0-9+.-]*://)")).filter { it.isNotEmpty() }
++                    .forEach { entries.add(it to i + 1) }
++            }
++            if (entries.isEmpty()) throw ProxyUriError("请先粘贴节点 URI 或 YAML")
++            if (entries.size > MAX_NODES) throw ProxyUriError("每批最多 500 个节点，请分批导入")
++            for ((uri, line) in entries) {
++                if (!seen.add(uri)) { skipped++; continue }
++                try {
++                    val (proxy, warnings) = parseOne(uri)
++                    val original = proxy["name"].toString()
++                    val finalName = uniquify(original, names)
++                    val p = LinkedHashMap(proxy)
++                    p["name"] = finalName
++                    proxies.add(p)
++                    added.add(ProxyImportAdded(line, finalName, finalName != original, warnings))
++                } catch (e: Exception) {
++                    errors.add(ProxyImportError(line, e.message ?: "解析失败", uri))
++                }
++            }
++            entries.size
++        }
++        return ProxyImportResult(proxies, added, errors, skipped, result)
++    }
++
++    /** 单条分享链接 → 节点映射（含 name）+ 警告。 */
++    fun parseOne(uri: String): Pair<Map<String, Any?>, List<String>> {
++        val m = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*)://(.+)$", RegexOption.DOT_MATCHES_ALL).matchEntire(uri)
++            ?: throw ProxyUriError("不是有效的节点 URI")
++        var type = m.groupValues[1].lowercase()
++        if (type == "hy2") type = "hysteria2"
++        val warnings = ArrayList<String>()
++        val parsed = when (type) {
++            "ss" -> parseSS(m.groupValues[2], warnings)
++            "vmess" -> parseVMess(m.groupValues[2], warnings)
++            "vless", "trojan", "hysteria2", "tuic" -> parseStandard(uri, type, warnings)
++            else -> throw ProxyUriError("暂不支持此协议（支持 SS / VMess / VLESS / Trojan / Hysteria2 / TUIC）")
++        }
++        val server = parsed.second["server"]?.toString().orEmpty()
++        val port = parsed.second["port"]?.toString().orEmpty()
++        var name = (parsed.first.ifBlank { "$type-$server:$port" }).replace(Regex("[\\u0000-\\u001f\\u007f]"), "").trim()
++        if (name.length > 200) throw ProxyUriError("节点名称过长（最多 200 字符）")
++        if (name.isEmpty()) name = "$type-out"
++        val proxy = LinkedHashMap<String, Any?>()
++        proxy["name"] = name
++        proxy.putAll(parsed.second)
++        return proxy to warnings
++    }
++
++    /** 输入整体像 YAML 节点（而不是 URI 列表）？（参考实现 looksLikeYamlNodes） */
++    fun looksLikeYamlNodes(input: String): Boolean {
++        val first = input.split(Regex("\\r?\\n")).map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
++        if (SCHEME_HEAD.containsMatchIn(first)) return false
++        // 单排流式节点（`- { name: … }` / 裸 `{…}` / 整体 `[…]`）没有「proxies:」也没有块式「- name:」，
++        // 只按块式特征判定会漏认成 URI 文本。
++        return Regex("^\\s*(proxies\\s*:|-\\s+(name|type)\\s*:|(name|type)\\s*:|-\\s*[{\\[]|[{\\[])", RegexOption.MULTILINE)
++            .containsMatchIn(input)
++    }
++
++    /** YAML 文本 → 节点映射列表（支持 `proxies:` 包装、裸列表、单节点；流式写法同样收）。 */
++    fun yamlNodes(input: String): List<Map<String, Any?>> {
++        val doc = YamlDoc.parse(input)
++        var root = doc.root ?: throw ProxyUriError("YAML 内容不是节点")
++        // 引擎把顶层序列 / 标量包进虚拟映射（`__seq__` / `__scalar__`），先解开拿到真实根
++        if (root.kind == YamlNode.Kind.MAP && root.entries.size == 1) {
++            val only = root.entries.first()
++            if (only.key == "__seq__" || only.key == "__scalar__") {
++                root = only.node ?: throw ProxyUriError("YAML 内容不是节点")
++            }
++        }
++        fun isNodeMap(n: YamlNode?): Boolean =
++            n != null && n.kind == YamlNode.Kind.MAP &&
++                doc.findEntry(n, "name") != null && doc.findEntry(n, "type") != null
++        val list: List<YamlNode> = when {
++            root.kind == YamlNode.Kind.SEQ -> root.items
++            root.kind == YamlNode.Kind.MAP -> {
++                val proxiesEntry = doc.findEntry(root, "proxies")
++                when {
++                    proxiesEntry == null -> {
++                        if (isNodeMap(root)) listOf(root)
++                        else throw ProxyUriError("YAML 中没有可导入的节点（需要 proxies 列表，或带 name/type 的节点）")
++                    }
++                    proxiesEntry.node?.kind == YamlNode.Kind.SEQ -> proxiesEntry.node.items
++                    isNodeMap(proxiesEntry.node) -> listOf(proxiesEntry.node!!)
++                    else -> throw ProxyUriError("proxies 字段必须是节点列表")
++                }
++            }
++            else -> throw ProxyUriError("YAML 内容不是节点")
++        }
++        val out = ArrayList<Map<String, Any?>>()
++        list.forEachIndexed { i, item ->
++            if (item.kind == YamlNode.Kind.RAW && doc.isNullText(item)) return@forEachIndexed
++            if (item.kind != YamlNode.Kind.MAP) throw ProxyUriError("第 ${i + 1} 个条目不是节点对象")
++            val proxy = LinkedHashMap(PlainYaml.toPlain(doc, item))
++            proxy.remove("proxies") // 顶层 / 节点上的 proxies 包装都丢掉
++            val name = proxy["name"]?.toString().orEmpty().replace(Regex("[\\u0000-\\u001f\\u007f]"), "").trim()
++            if (name.length > 200) throw ProxyUriError("第 ${i + 1} 个节点名称过长（最多 200 字符）")
++            val type = proxy["type"]?.toString()?.trim().orEmpty()
++            if (type.isEmpty()) throw ProxyUriError("第 ${i + 1} 个节点缺少 type")
++            proxy["name"] = name.ifEmpty { "$type-out" }
++            proxy["type"] = type
++            out.add(proxy)
++        }
++        if (out.isEmpty()) throw ProxyUriError("YAML 中没有有效节点")
++        if (out.size > MAX_NODES) throw ProxyUriError("每批最多 500 个节点，请分批导入")
++        return out
++    }
++
++    /**
++     * file 订阅文件保存前的兜底（参考实现 ensureProxiesRoot）：裸节点列表 / 单节点自动补 `proxies:` 根。
++     * URI 列表 / 已带 proxies / 解析不了的内容原样返回。返回 `文本 to 是否有改动`。
++     */
++    fun ensureProxiesRoot(src: String): Pair<String, Boolean> {
++        if (src.isBlank()) return src to false
++        val first = src.split(Regex("\\r?\\n")).firstOrNull { it.trim().isNotEmpty() && !it.trim().startsWith("#") }?.trim().orEmpty()
++        if (SCHEME_HEAD.containsMatchIn(first)) return src to false // URI 列表
++        val doc = YamlDoc.parse(src)
++        var root = doc.root ?: return src to false
++        // 顶层序列 / 标量被引擎包进 `__seq__` / `__scalar__` 虚拟映射，先解开
++        if (root.kind == YamlNode.Kind.MAP && root.entries.size == 1) {
++            val only = root.entries.first()
++            if (only.key == "__seq__" || only.key == "__scalar__") {
++                root = only.node ?: return src to false
++            }
++        }
++        fun isNodeMap(n: YamlNode?): Boolean =
++            n != null && n.kind == YamlNode.Kind.MAP && doc.findEntry(n, "type") != null
++        if (root.kind == YamlNode.Kind.SEQ && root.items.any { isNodeMap(it) }) {
++            // 先去掉内容原有的公共缩进，再统一缩进两格挂到 proxies: 下（保留注释与书写风格）
++            val rows = src.replace(Regex("\\s+$"), "").split(Regex("\\r?\\n"))
++            fun lead(l: String) = l.length - l.trimStart(' ').length
++            fun isCmt(l: String) = l.trim().startsWith("#")
++            var common = Int.MAX_VALUE
++            for (l in rows) if (l.trim().isNotEmpty() && !isCmt(l)) common = minOf(common, lead(l))
++            if (common == Int.MAX_VALUE) common = 0
++            val body = rows.joinToString("\n") { l ->
++                if (l.trim().isEmpty()) "" else "  " + l.substring(minOf(common, lead(l)))
++            }
++            return "proxies:\n$body\n" to true
++        }
++        if (isNodeMap(root) && doc.findEntry(root, "name") != null && doc.findEntry(root, "proxies") == null) {
++            val plain = PlainYaml.toPlain(doc, root)
++            // 复用引擎的渲染：把单节点写进一份临时文档的 proxies 列表再导出
++            val shell = YamlPatch.setValue(YamlDoc.parse("proxies:\n"), listOf("proxies"), listOf(plain))
++            return shell.dump().let { if (it.endsWith("\n")) it else "$it\n" } to true
++        }
++        return src to false
++    }
++
++    // ---------------------------------------------------------------- SS
++
++    private fun parseSS(bodyIn: String, warnings: MutableList<String>): Pair<String, Map<String, Any?>> {
++        var body = bodyIn
++        val hash = body.indexOf('#')
++        val name = if (hash < 0) "" else unescape(body.substring(hash + 1))
++        if (hash >= 0) body = body.substring(0, hash)
++        val q = body.indexOf('?')
++        val params = parseQuery(if (q < 0) "" else body.substring(q + 1))
++        var main = if (q < 0) body else body.substring(0, q)
++        if (!main.contains('@')) main = base64(main)
++        val at = main.lastIndexOf('@')
++        if (at < 0) throw ProxyUriError("SS 缺少认证信息或服务器地址")
++        var auth = unescape(main.substring(0, at))
++        if (!auth.contains(':')) auth = base64(auth)
++        val colon = auth.indexOf(':')
++        if (colon <= 0 || colon == auth.length - 1) throw ProxyUriError("SS 缺少加密方式或密码")
++        val cipher = auth.substring(0, colon)
++        if (!CIPHER_RE.matches(cipher)) throw ProxyUriError("SS 加密方式格式不正确")
++        val ep = endpointOf(hostPortOf("ss://" + main.substring(at + 1)))
++        val proxy = linkedMapOf<String, Any?>(
++            "type" to "ss",
++            "server" to ep.first,
++            "port" to ep.second,
++            "cipher" to cipher,
++            "password" to auth.substring(colon + 1),
++            "udp" to true,
++        )
++        val plugin = params["plugin"]
++        if (plugin != null) {
++            val parts = plugin.split(';')
++            val pluginName = parts.first()
++            if (pluginName !in listOf("obfs-local", "simple-obfs", "obfs", "v2ray-plugin")) {
++                throw ProxyUriError("暂不支持此 SS 插件，请手动配置")
++            }
++            val opts = LinkedHashMap<String, Any?>()
++            for (part in parts.drop(1)) {
++                val i = part.indexOf('=')
++                val key = if (i < 0) part else part.substring(0, i)
++                val value = if (i < 0) "true" else part.substring(i + 1)
++                if (key.isEmpty()) continue
++                val mapped = when (key) {
++                    "obfs" -> "mode"
++                    "obfs-host" -> "host"
++                    "obfs-uri" -> "path"
++                    else -> key
++                }
++                if (mapped !in listOf("mode", "host", "path", "tls", "mux", "skip-cert-verify")) {
++                    throw ProxyUriError("暂不支持此 SS 插件参数，请手动配置")
++                }
++                opts[mapped] = if (mapped in listOf("tls", "mux", "skip-cert-verify")) boolOf(value) else value
++            }
++            val mappedName = if (pluginName == "v2ray-plugin") "v2ray-plugin" else "obfs"
++            if (mappedName == "obfs" && opts["mode"] !in listOf("http", "tls")) throw ProxyUriError("SS obfs 插件缺少有效模式")
++            if (mappedName == "v2ray-plugin") {
++                val mode = opts["mode"]?.toString()
++                if (!mode.isNullOrEmpty() && mode != "websocket") throw ProxyUriError("暂不支持此 v2ray-plugin 模式")
++                opts["mode"] = "websocket"
++            }
++            proxy["plugin"] = mappedName
++            proxy["plugin-opts"] = opts
++        }
++        if (params.keys.any { it != "plugin" }) warnings.add("含未映射的 SS 参数，请在编辑器核对")
++        return name to proxy
++    }
++
++    // ---------------------------------------------------------------- VMess
++
++    private val VMESS_KNOWN = setOf(
++        "v", "ps", "add", "port", "id", "aid", "scy", "net", "type", "host", "path",
++        "tls", "sni", "alpn", "fp", "allowInsecure", "serviceName",
++    )
++
++    private fun parseVMess(bodyIn: String, warnings: MutableList<String>): Pair<String, Map<String, Any?>> {
++        val hash = bodyIn.indexOf('#')
++        val fragment = if (hash < 0) "" else unescape(bodyIn.substring(hash + 1))
++        val o: Map<String, Any?> = try {
++            @Suppress("UNCHECKED_CAST")
++            MiniJson.parse(base64(if (hash < 0) bodyIn else bodyIn.substring(0, hash))) as? Map<String, Any?>
++                ?: throw ProxyUriError("VMess JSON 应为对象")
++        } catch (e: ProxyUriError) {
++            throw e
++        } catch (e: Exception) {
++            throw ProxyUriError("VMess 需要 Base64 编码的 JSON 分享链接")
++        }
++        for (key in listOf("ps", "add", "port", "id", "aid", "scy", "net", "type", "host", "path", "tls", "sni", "fp", "allowInsecure", "serviceName")) {
++            val v = o[key] ?: continue
++            if (v !is String && v !is Long && v !is Double && v !is Boolean) throw ProxyUriError("VMess 字段类型不正确")
++        }
++        val alpn = o["alpn"]
++        if (alpn != null && alpn !is String && !(alpn is List<*> && alpn.all { it is String })) {
++            throw ProxyUriError("VMess ALPN 字段类型不正确")
++        }
++        val proxy = LinkedHashMap<String, Any?>()
++        proxy["type"] = "vmess"
++        val ep = endpointOf(hostPortOf2(o["add"]?.toString(), o["port"]))
++        proxy["server"] = ep.first
++        proxy["port"] = ep.second
++        proxy["uuid"] = uuidOf(o["id"]?.toString())
++        proxy["alterId"] = intOf(o["aid"]?.toString() ?: "0", 0, 65535, "alterId")
++        val cipher = o["scy"]?.toString()?.ifEmpty { null } ?: "auto"
++        proxy["cipher"] = cipher
++        proxy["udp"] = true
++        if (cipher !in listOf("auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero")) {
++            throw ProxyUriError("不支持此 VMess 加密方式")
++        }
++        val tlsRaw = o["tls"]?.toString()
++        if (!tlsRaw.isNullOrEmpty() && tlsRaw !in listOf("tls", "none")) throw ProxyUriError("不支持此 VMess TLS 类型")
++        var net = o["net"]?.toString()?.ifEmpty { null } ?: "tcp"
++        val headType = o["type"]?.toString()
++        if (net == "tcp" && headType == "http") net = "http"
++        else if (!headType.isNullOrEmpty() && headType !in listOf("none", "gun")) throw ProxyUriError("不支持此 VMess 传输伪装")
++        transport(proxy, net, o["host"]?.toString().orEmpty(), o["path"]?.toString().orEmpty(), o["serviceName"]?.toString().orEmpty())
++        tls(proxy, enabled = tlsRaw == "tls", sni = o["sni"]?.toString(), alpn = alpn, fp = o["fp"]?.toString(), insecure = o["allowInsecure"]?.toString())
++        if (o.keys.any { it !in VMESS_KNOWN }) warnings.add("含未映射的 VMess 字段，请在编辑器核对")
++        return (fragment.ifEmpty { o["ps"]?.toString().orEmpty() }) to proxy
++    }
++
++    // ---------------------------------------------------------------- VLESS / Trojan / Hysteria2 / TUIC
++
++    private fun parseStandard(uri: String, type: String, warnings: MutableList<String>): Pair<String, Map<String, Any?>> {
++        val u = parseUri(uri)
++        val q = u.params
++        val used = HashSet<String>()
++        fun param(vararg names: String): String {
++            names.forEach { used.add(it) }
++            return names.mapNotNull { q[it]?.takeIf(String::isNotEmpty) }.firstOrNull().orEmpty()
++        }
++        val proxy = LinkedHashMap<String, Any?>()
++        proxy["type"] = type
++        val defaultPort = if (type in listOf("trojan", "hysteria2", "tuic")) "443" else ""
++        val ep = endpointOf(hostPortOf2(u.host, u.port.ifEmpty { defaultPort }))
++        proxy["server"] = ep.first
++        proxy["port"] = ep.second
++        proxy["udp"] = true
++        val username = unescape(u.username)
++        val password = unescape(u.password)
++        if (type == "vless") {
++            if (u.hasPassword && u.password.isNotEmpty()) throw ProxyUriError("VLESS 认证部分应仅含 UUID")
++            proxy["uuid"] = uuidOf(username)
++            val encryption = param("encryption")
++            if (encryption.isNotEmpty() && encryption != "none") throw ProxyUriError("暂不支持此 VLESS encryption")
++            val flow = param("flow")
++            if (flow.isNotEmpty() && flow != "xtls-rprx-vision") throw ProxyUriError("暂不支持此 VLESS flow")
++            if (flow.isNotEmpty()) proxy["flow"] = flow
++        } else if (type == "tuic") {
++            proxy["uuid"] = uuidOf(username)
++            if (password.isEmpty()) throw ProxyUriError("TUIC 缺少密码")
++            proxy["password"] = password
++        } else {
++            val pw = username + if (u.hasPassword && password.isNotEmpty()) ":$password" else ""
++            if (pw.isEmpty()) throw ProxyUriError("节点缺少密码")
++            proxy["password"] = pw
++        }
++        if (u.path.isNotEmpty() && u.path != "/") throw ProxyUriError("传输路径应放在 URI 的 path 参数中")
++        val security = param("security")
++        if (type in listOf("hysteria2", "tuic") && security.isNotEmpty() && security != "tls") throw ProxyUriError("此协议只支持 TLS")
++        if (type == "vless" || type == "trojan") {
++            if (security.isNotEmpty() && security !in listOf("none", "tls", "reality")) throw ProxyUriError("不支持此 security 类型")
++            if (type == "trojan" && security == "none") throw ProxyUriError("Trojan 不支持关闭 TLS")
++            transport(proxy, param("type", "network").ifEmpty { "tcp" }, param("host"), param("path"), param("serviceName"))
++            // 与参考实现一致：只有 grpc 才看 mode，其它传输层出现 mode 记入「未映射参数」警告
++            if (proxy["network"] == "grpc") {
++                val mode = param("mode")
++                if (mode.isNotEmpty() && mode != "gun") throw ProxyUriError("暂不支持此 gRPC mode")
++            }
++        }
++        tls(
++            proxy,
++            enabled = if (type == "vless") security in listOf("tls", "reality") else null,
++            sni = param("sni", "peer", "servername").ifEmpty { null },
++            alpn = param("alpn").ifEmpty { null },
++            fp = param("fp").ifEmpty { null },
++            insecure = param("allowInsecure", "insecure", "skip-cert-verify").ifEmpty { null },
++        )
++        if (security == "reality") {
++            if (type !in listOf("vless", "trojan")) throw ProxyUriError("此协议不支持 Reality")
++            val key = param("pbk", "public-key")
++            val sid = param("sid", "short-id")
++            if (!REALITY_PUBKEY_RE.matches(key)) throw ProxyUriError("Reality 公钥缺失或格式不正确")
++            if (!REALITY_SID_RE.matches(sid)) throw ProxyUriError("Reality short-id 格式不正确")
++            proxy["reality-opts"] = linkedMapOf<String, Any?>("public-key" to key, "short-id" to sid)
++            if (proxy["client-fingerprint"] == null) proxy["client-fingerprint"] = "chrome"
++        }
++        if (type == "hysteria2") {
++            val obfs = param("obfs")
++            val obfsPassword = param("obfs-password")
++            if (obfs.isNotEmpty()) {
++                if (obfs != "salamander" || obfsPassword.isEmpty()) throw ProxyUriError("Hysteria2 混淆需要 salamander 和 obfs-password")
++                proxy["obfs"] = obfs
++                proxy["obfs-password"] = obfsPassword
++            }
++            if (param("mport").isNotEmpty()) throw ProxyUriError("暂不支持端口跳跃链接，请手动配置 ports")
++        }
++        if (type == "tuic") {
++            val cc = param("congestion_control", "congestion-controller")
++            val relay = param("udp_relay_mode", "udp-relay-mode")
++            if (cc.isNotEmpty()) {
++                if (cc !in listOf("cubic", "bbr", "new_reno")) throw ProxyUriError("TUIC 拥塞控制参数不正确")
++                proxy["congestion-controller"] = cc
++            }
++            if (relay.isNotEmpty()) {
++                if (relay !in listOf("native", "quic")) throw ProxyUriError("TUIC UDP 转发模式不正确")
++                proxy["udp-relay-mode"] = relay
++            }
++            val reduce = param("reduce_rtt", "reduce-rtt")
++            if (reduce.isNotEmpty()) proxy["reduce-rtt"] = boolOf(reduce)
++            val disable = param("disable_sni", "disable-sni")
++            if (disable.isNotEmpty()) proxy["disable-sni"] = boolOf(disable)
++        }
++        if (q.keys.any { it !in used }) warnings.add("含未映射的 URI 参数，请在编辑器核对")
++        return unescape(u.hash) to proxy
++    }
++
++    // ---------------------------------------------------------------- 公共小件
++
++    private fun transport(proxy: MutableMap<String, Any?>, netIn: String?, host: String, path: String, service: String) {
++        val net = netIn?.ifEmpty { null } ?: "tcp"
++        if (net !in listOf("tcp", "ws", "http", "h2", "grpc")) throw ProxyUriError("暂不支持此传输方式，请手动新建节点")
++        proxy["network"] = net
++        when (net) {
++            "ws" -> {
++                val m = linkedMapOf<String, Any?>("path" to path.ifEmpty { "/" })
++                if (host.isNotEmpty()) m["headers"] = linkedMapOf<String, Any?>("Host" to host)
++                proxy["ws-opts"] = m
++            }
++            "http" -> {
++                val m = linkedMapOf<String, Any?>("path" to path.ifEmpty { "/" }.split(','))
++                if (host.isNotEmpty()) m["headers"] = linkedMapOf<String, Any?>("Host" to host.split(','))
++                proxy["http-opts"] = m
++            }
++            "h2" -> {
++                val m = linkedMapOf<String, Any?>("path" to path.ifEmpty { "/" })
++                if (host.isNotEmpty()) m["host"] = host.split(',')
++                proxy["h2-opts"] = m
++            }
++            "grpc" -> proxy["grpc-opts"] = linkedMapOf<String, Any?>("grpc-service-name" to service.ifEmpty { path })
++        }
++    }
++
++    private fun tls(proxy: MutableMap<String, Any?>, enabled: Boolean?, sni: String?, alpn: Any?, fp: String?, insecure: String?) {
++        if (enabled != null) proxy["tls"] = enabled
++        if (!sni.isNullOrEmpty()) proxy[if (proxy["type"] in listOf("vmess", "vless")) "servername" else "sni"] = sni
++        if (alpn != null) {
++            val items = if (alpn is List<*>) alpn.map { it.toString() } else alpn.toString().split(',')
++            val clean = items.map { it.trim() }.filter { it.isNotEmpty() }
++            if (clean.isNotEmpty()) proxy["alpn"] = clean
++        }
++        if (!fp.isNullOrEmpty()) proxy["client-fingerprint"] = fp
++        if (!insecure.isNullOrEmpty()) proxy["skip-cert-verify"] = boolOf(insecure)
++    }
++
++    /** `scheme://[user[:pass]@]host[:port][/path][?query][#hash]` 的宽容解析（参考实现用 WHATWG URL）。 */
++    private data class ParsedUri(
++        val scheme: String,
++        val username: String,
++        val password: String,
++        val hasPassword: Boolean,
++        val host: String,
++        val port: String,
++        val path: String,
++        val hash: String,
++        val params: Map<String, String>,
++    )
++
++    private fun parseUri(uri: String): ParsedUri {
++        val m = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*)://(.*)$", RegexOption.DOT_MATCHES_ALL).matchEntire(uri)
++            ?: throw ProxyUriError("URI 地址或端口格式不正确")
++        var rest = m.groupValues[2]
++        var hash = ""
++        rest.indexOf('#').takeIf { it >= 0 }?.let { hash = rest.substring(it + 1); rest = rest.substring(0, it) }
++        var query = ""
++        rest.indexOf('?').takeIf { it >= 0 }?.let { query = rest.substring(it + 1); rest = rest.substring(0, it) }
++        var path = ""
++        rest.indexOf('/').takeIf { it >= 0 }?.let { path = rest.substring(it); rest = rest.substring(0, it) }
++        var username = ""
++        var password = ""
++        var hasPassword = false
++        rest.lastIndexOf('@').takeIf { it >= 0 }?.let {
++            val ui = rest.substring(0, it)
++            rest = rest.substring(it + 1)
++            val c = ui.indexOf(':')
++            if (c >= 0) { username = ui.substring(0, c); password = ui.substring(c + 1); hasPassword = true } else username = ui
++        }
++        var host: String
++        var port = ""
++        if (rest.startsWith("[")) {
++            val e = rest.indexOf(']')
++            if (e < 0) throw ProxyUriError("URI 地址或端口格式不正确")
++            host = rest.substring(1, e)
++            val after = rest.substring(e + 1)
++            when {
++                after.isEmpty() -> {}
++                after.startsWith(":") -> port = after.substring(1)
++                else -> throw ProxyUriError("URI 地址或端口格式不正确")
++            }
++        } else {
++            val c = rest.indexOf(':')
++            if (c >= 0) { host = rest.substring(0, c); port = rest.substring(c + 1) } else host = rest
++        }
++        if (host.isEmpty()) throw ProxyUriError("URI 地址或端口格式不正确")
++        val params = LinkedHashMap<String, String>()
++        for (pair in query.split('&')) {
++            if (pair.isEmpty()) continue
++            val eq = pair.indexOf('=')
++            val k = if (eq < 0) pair else pair.substring(0, eq)
++            val v = if (eq < 0) "" else pair.substring(eq + 1)
++            if (k.isEmpty()) continue
++            val key = try { unescape(k) } catch (e: ProxyUriError) { k }
++            val value = try { unescape(v) } catch (e: ProxyUriError) { v }
++            params.putIfAbsent(key, value)
++        }
++        return ParsedUri(m.groupValues[1].lowercase(), username, password, hasPassword, host, port, path, hash, params)
++    }
++
++    private fun parseQuery(query: String): Map<String, String> =
++        if (query.isEmpty()) emptyMap() else parseUri("x://h?$query").params
++
++    /** host/port 校验（`endpoint`）：去 IPv6 方括号、拒空白与控制字符。 */
++    private fun endpointOf(hp: Pair<String, String>): Pair<String, Long> {
++        val server = hp.first.trim('[', ']')
++        if (server.isEmpty() || Regex("[\\s\\u0000-\\u001f\\u007f/@?#]").containsMatchIn(server)) {
++            throw ProxyUriError("服务器地址不正确")
++        }
++        return server to intOf(hp.second, 1, 65535, "端口").toLong()
++    }
++
++    /** 从 `scheme://host[:port]` 里取 host/port（SS 的 @ 之后部分）。 */
++    private fun hostPortOf(prefixAndRest: String): Pair<String, String> {
++        val u = parseUri(prefixAndRest)
++        if (u.username.isNotEmpty() || u.hasPassword || (u.path.isNotEmpty() && u.path != "/")) {
++            throw ProxyUriError("SS 服务器地址格式不正确")
++        }
++        return u.host to u.port
++    }
++
++    private fun hostPortOf2(host: String?, port: Any?): Pair<String, String> =
++        (host?.toString().orEmpty()) to when (port) {
++            null -> ""
++            is Long -> port.toString()
++            is Double -> if (port == port.toLong().toDouble()) port.toLong().toString() else port.toString()
++            else -> port.toString()
++        }
++
++    private fun intOf(value: String?, min: Long, max: Long, label: String): Long {
++        val t = value?.toString().orEmpty()
++        if (!NUM_RE.matches(t)) throw ProxyUriError("${label}不正确")
++        val n = t.toLongOrNull() ?: throw ProxyUriError("${label}不正确")
++        if (n < min || n > max) throw ProxyUriError("${label}不正确")
++        return n
++    }
++
++    private fun boolOf(value: String): Boolean = when {
++        Regex("^(1|true)$", RegexOption.IGNORE_CASE).matches(value) -> true
++        Regex("^(0|false)$", RegexOption.IGNORE_CASE).matches(value) -> false
++        else -> throw ProxyUriError("布尔参数应为 true/false 或 1/0")
++    }
++
++    private fun uuidOf(value: String?): String {
++        val v = value?.toString().orEmpty()
++        if (!UUID_RE.matches(v)) throw ProxyUriError("UUID 格式不正确，应为 8-4-4-4-12 位十六进制")
++        return v
++    }
++
++    /** decodeURIComponent 等价：只解 %XX，不把 '+' 当空格；非法 UTF-8 直接报错。 */
++    private fun unescape(value: String): String {
++        if (!value.contains('%')) return value
++        val out = ByteArrayOutputStream()
++        var i = 0
++        while (i < value.length) {
++            val c = value[i]
++            if (c == '%') {
++                if (i + 2 >= value.length) throw ProxyUriError("URI 百分号编码不正确")
++                val hi = Character.digit(value[i + 1], 16)
++                val lo = Character.digit(value[i + 2], 16)
++                if (hi < 0 || lo < 0) throw ProxyUriError("URI 百分号编码不正确")
++                out.write(hi * 16 + lo)
++                i += 3
++            } else {
++                val bytes = c.toString().toByteArray(StandardCharsets.UTF_8)
++                out.write(bytes, 0, bytes.size)
++                i++
++            }
++        }
++        val decoder = StandardCharsets.UTF_8.newDecoder()
++            .onMalformedInput(CodingErrorAction.REPORT)
++            .onUnmappableCharacter(CodingErrorAction.REPORT)
++        return try {
++            decoder.decode(ByteBuffer.wrap(out.toByteArray())).toString()
++        } catch (e: Exception) {
++            throw ProxyUriError("Base64 或 UTF-8 内容不正确")
++        }
++    }
++
++    /** URL-safe Base64（补 padding）→ UTF-8 文本；非法编码报用户可见错误。 */
++    private fun base64(value: String): String {
++        val s = unescape(value).replace('-', '+').replace('_', '/')
++        if (!BASE64_BODY_RE.matches(s) || s.length % 4 == 1) throw ProxyUriError("Base64 编码不正确")
++        val padded = s + "=".repeat((4 - s.length % 4) % 4)
++        val bytes = try {
++            java.util.Base64.getDecoder().decode(padded)
++        } catch (e: Exception) {
++            throw ProxyUriError("Base64 编码不正确")
++        }
++        val decoder = StandardCharsets.UTF_8.newDecoder()
++            .onMalformedInput(CodingErrorAction.REPORT)
++            .onUnmappableCharacter(CodingErrorAction.REPORT)
++        return try {
++            decoder.decode(ByteBuffer.wrap(bytes)).toString()
++        } catch (e: Exception) {
++            throw ProxyUriError("Base64 或 UTF-8 内容不正确")
++        }
++    }
++
++    private fun uniquify(name: String, names: MutableSet<String>): String {
++        var candidate = name
++        var index = 2
++        while (candidate in names) candidate = "$name (${index++})"
++        names.add(candidate)
++        return candidate
++    }
++
++    /** 去重键：映射内容按 key 排序拼串（等价参考实现的 JSON.stringify）。 */
++    private fun renderKey(proxy: Map<String, Any?>): String =
++        proxy.entries.sortedBy { it.key }.joinToString(",") { (k, v) -> "$k=${renderValue(v)}" }
++
++    private fun renderValue(v: Any?): String = when (v) {
++        null -> "null"
++        is Map<*, *> -> "{${v.entries.joinToString(",") { "${it.key}:${renderValue(it.value)}" }}}"
++        is List<*> -> "[${v.joinToString(",") { renderValue(it) }}]"
++        else -> v.toString()
++    }
++}
++
++/** VMess 分享链接里的最小 JSON 读取器（对象 / 数组 / 字符串 / 数字 / 布尔 / null）。 */
++internal object MiniJson {
++
++    fun parse(text: String): Any? {
++        val p = Parser(text)
++        p.skipWs()
++        val v = p.value()
++        p.skipWs()
++        if (!p.eof()) throw IllegalArgumentException("JSON 尾部有多余内容")
++        return v
++    }
++
++    private class Parser(val s: String) {
++        var i = 0
++        fun eof() = i >= s.length
++        fun skipWs() { while (i < s.length && s[i] in " \t\r\n") i++ }
++        fun value(): Any? {
++            skipWs()
++            if (eof()) throw IllegalArgumentException("JSON 不完整")
++            return when (val c = s[i]) {
++                '{' -> obj()
++                '[' -> arr()
++                '"' -> str()
++                't' -> lit("true", true)
++                'f' -> lit("false", false)
++                'n' -> lit("null", null)
++                else -> if (c == '-' || c in '0'..'9') num() else throw IllegalArgumentException("JSON 格式不正确")
++            }
++        }
++
++        private fun lit(word: String, v: Any?): Any? {
++            if (!s.startsWith(word, i)) throw IllegalArgumentException("JSON 格式不正确")
++            i += word.length
++            return v
++        }
++
++        private fun obj(): Map<String, Any?> {
++            i++ // {
++            val out = LinkedHashMap<String, Any?>()
++            skipWs()
++            if (!eof() && s[i] == '}') { i++; return out }
++            while (true) {
++                skipWs()
++                val key = str()
++                skipWs()
++                if (eof() || s[i] != ':') throw IllegalArgumentException("JSON 格式不正确")
++                i++
++                out[key] = value()
++                skipWs()
++                if (eof()) throw IllegalArgumentException("JSON 不完整")
++                when (s[i]) {
++                    ',' -> i++
++                    '}' -> { i++; return out }
++                    else -> throw IllegalArgumentException("JSON 格式不正确")
++                }
++            }
++        }
++
++        private fun arr(): List<Any?> {
++            i++ // [
++            val out = ArrayList<Any?>()
++            skipWs()
++            if (!eof() && s[i] == ']') { i++; return out }
++            while (true) {
++                out.add(value())
++                skipWs()
++                if (eof()) throw IllegalArgumentException("JSON 不完整")
++                when (s[i]) {
++                    ',' -> i++
++                    ']' -> { i++; return out }
++                    else -> throw IllegalArgumentException("JSON 格式不正确")
++                }
++            }
++        }
++
++        private fun str(): String {
++            if (eof() || s[i] != '"') throw IllegalArgumentException("JSON 格式不正确")
++            i++
++            val sb = StringBuilder()
++            while (true) {
++                if (eof()) throw IllegalArgumentException("JSON 字符串未闭合")
++                val c = s[i]
++                if (c == '"') { i++; return sb.toString() }
++                if (c == '\\') {
++                    i++
++                    if (eof()) throw IllegalArgumentException("JSON 字符串未闭合")
++                    when (val e = s[i]) {
++                        '"' -> sb.append('"')
++                        '\\' -> sb.append('\\')
++                        '/' -> sb.append('/')
++                        'b' -> sb.append('\b')
++                        'f' -> sb.append('\u000C')
++                        'n' -> sb.append('\n')
++                        'r' -> sb.append('\r')
++                        't' -> sb.append('\t')
++                        'u' -> {
++                            if (i + 4 >= s.length) throw IllegalArgumentException("JSON \\u 转义不完整")
++                            val hex = s.substring(i + 1, i + 5)
++                            val code = hex.toIntOrNull(16) ?: throw IllegalArgumentException("JSON \\u 转义不正确")
++                            sb.append(code.toChar())
++                            i += 4
++                        }
++                        else -> throw IllegalArgumentException("JSON 转义不正确: \\$e")
++                    }
++                    i++
++                } else {
++                    sb.append(c)
++                    i++
++                }
++            }
++        }
++
++        private fun num(): Any {
++            val start = i
++            if (s[i] == '-') i++
++            while (i < s.length && s[i] in '0'..'9') i++
++            var isFloat = false
++            if (i < s.length && s[i] == '.') {
++                isFloat = true
++                i++
++                while (i < s.length && s[i] in '0'..'9') i++
++            }
++            if (i < s.length && (s[i] == 'e' || s[i] == 'E')) {
++                isFloat = true
++                i++
++                if (i < s.length && (s[i] == '+' || s[i] == '-')) i++
++                while (i < s.length && s[i] in '0'..'9') i++
++            }
++            val t = s.substring(start, i)
++            if (!isFloat) t.toLongOrNull()?.let { return it }
++            return t.toDoubleOrNull() ?: throw IllegalArgumentException("JSON 数字不正确")
++        }
++    }
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 new file mode 100644

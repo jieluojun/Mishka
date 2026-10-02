@@ -50,6 +50,8 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
 | `custom/forms/AnchorInheritance.kt` | 一级（条目 `<<:`）/ 二级（字段级 `<<:` 与 `键: *`）锚点现状读取与行级手术，纯 Kotlin，`AnchorInheritanceProps` 性质测试覆盖 |
 | `custom/forms/AnchorSectionPanel.kt` | 代理合集 / 代理组 / 规则合集详情页的「YAML 锚点」区：继承换绑 / 清除 / 新挂 + 字段级挂 / 摘（`&定义` 动作下线，存量只摘不挂） |
 | `custom/forms/ProviderFileOps.kt` | file 类型合集的「源文件」操作：SAF 上传（二进制安全，.mrs 自动切 format）/ 在线编辑；相对 path 按本订阅 imported/ 目录解析 |
+| `custom/forms/ProxyUri.kt` | 出站代理「解析节点」：分享链接（SS / VMess / VLESS / Trojan / Hysteria2 / TUIC）与 YAML 节点的离线解析器 + `ensureProxiesRoot` 兜底，纯 Kotlin，`ProxyUriProps` 性质测试覆盖 |
+| `custom/forms/ListenerSpecs.kt` | 入站 listeners 的 22 种协议类型 / 新建模板 / 按协议能力组合的字段表（协议参数 / TLS / REALITY / 传输层 / 伪装 / Mux），`ListenerSpecsProps` 性质测试覆盖 |
 
 ### 本轮修复与优化（对齐 mihomo_box 20261001-1620 参考实现）
 
@@ -63,6 +65,23 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
    删除两步确认），与其它列表页同款，窄屏不再截断。
 4. **file 类型合集源文件**：代理合集 / 规则合集详情页在 type=file 时显示「源文件」卡（上传 / 编辑内容），
    编辑器经 `fileBaseDir`（本订阅 imported/ 目录）落盘；上传 .mrs 自动把 format 切成 mrs。
+
+### 本轮补充（对齐 mihomo_box `proxy-uri.js` / `pages-config.js` 入站编辑器）
+
+5. **出站代理「解析节点」**：出站代理 / 内联 payload 列表页的表头新增「解析」按钮，粘贴分享链接
+   （SS / VMess / VLESS / Trojan / Hysteria2 / TUIC）或 Clash/Mihomo YAML 节点，本地离线解析后一次批量写入草稿
+   （`ProxyUri.kt`，逐行报错、同名自动加序号、重复跳过；解析不了的行留在输入框方便重试）；只加节点、不进代理组。
+   file 类型订阅源文件保存前经 `ensureProxiesRoot` 兜底：只贴节点列表 / 单节点时自动补 `proxies:` 根。
+6. **入站监听器类型补全**：新建监听器的类型从 8 种补到参考实现的全量 22 种（新增 shadowsocks / vmess / vless /
+   trojan / anytls / mieru / sudoku / tuic / shadowquic / hysteria2 / hysteria2-realm / trusttunnel / snell / cns），
+   详情页按协议能力分节渲染（基础 / 协议参数 / 传输层 / TLS 证书 / REALITY / TLS 伪装 / Multiplex），
+   `users` 对象列表走简版映射列表编辑器（vmess 的 alterId 按数字写回）。字段表见 `ListenerSpecs.kt`。
+7. **file 源文件卡的位置与按钮**：代理合集 / 规则合集的「源文件」卡从页脚移到「保存路径」字段正下方
+   （`provider-file-ops` / `rule-provider-file-ops` 专门控件行），「编辑内容」按钮改名「编辑」，两个按钮收进一行、
+   压紧最小宽度，窄屏不再把摘要挤换行。
+8. **代理合集表达式读继承**：`override-expr` 读取在本地无行时回落到展开视图（别名解开 + `<<:` 合并），
+   `override: { …, <<: *host }` 这类挂在锚点里的表达式不再显示「未设置表达式」，而是「N 条表达式（继承）」；
+   编辑器打开即预填继承内容，编辑后写入本条目成为本地覆写。
 
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 

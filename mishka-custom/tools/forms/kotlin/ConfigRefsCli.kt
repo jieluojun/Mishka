@@ -69,6 +69,7 @@ fun main(args: Array<String>) {
                     is BatchOp.Set -> YamlPatch.setValue(cur, op.path, op.value)
                     is BatchOp.Remove -> if (cur.get(op.path) == null) cur else YamlPatch.removeKey(cur, op.path)
                     is BatchOp.SetItem -> YamlPatch.setItem(cur, op.seqPath, op.index, op.value)
+                    is BatchOp.InsertItem -> YamlPatch.insertItem(cur, op.seqPath, op.index, op.value)
                     is BatchOp.Rename -> YamlPatch.renameKey(cur, op.path, op.newKey)
                 }
                 if (next === cur && op !is BatchOp.Remove) { println("REFUSED"); return }

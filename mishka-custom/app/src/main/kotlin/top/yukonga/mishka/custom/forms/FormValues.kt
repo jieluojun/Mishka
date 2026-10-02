@@ -206,6 +206,28 @@ internal object FormValues {
         }
     }
 
+    /**
+     * 读 `override.override-expr`：数组 / 单条字符串都规范成列表。本地没有该行时回落到展开视图
+     * （别名解开、`<<:` 合并后的值）——表达式挂在 `&锚点` 里、经 flow 映射 `<<: *host` 带进来的也读得到。
+     * 返回「列表 to 是否来自继承」；继承来的值一经编辑就写入本地（成为本条目的本地覆写）。
+     */
+    fun exprItems(doc: YamlDoc, base: YPath): Pair<List<String>, Boolean> {
+        val path = base + "override" + "override-expr"
+        val n = doc.get(path)
+        // 别名（`override-expr: *x`）本地读只会拿到字面 `*x`，按继承走展开视图
+        if (n != null && n.alias == null) {
+            val local = if (n.kind == YamlNode.Kind.SEQ) readList(doc, path).filter { it.isNotEmpty() }
+            else listOfNotNull(scalarText(doc, n)?.trim()?.ifEmpty { null })
+            return local to false
+        }
+        val items = when (val v = effectiveValue(doc, path)) {
+            null -> emptyList()
+            is List<*> -> v.mapNotNull { it?.toString()?.trim()?.ifEmpty { null } }
+            else -> listOfNotNull(v.toString().trim().ifEmpty { null })
+        }
+        return items to true
+    }
+
     fun count(doc: YamlDoc, path: YPath): Int {
         val n = doc.get(path) ?: return 0
         return when (n.kind) {

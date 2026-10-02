@@ -4,7 +4,10 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -12,8 +15,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -28,8 +33,9 @@ import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * file 类型合集的「源文件」操作（对齐 mihomo_box `fileOpsCtl` 的 Android 版）：上传（SAF，二进制安全，
- * 支持 .mrs）/ 在线编辑内容。相对路径按本订阅 imported/ 目录解析（mihomo 以工作目录启动，语义一致）；
+ * 支持 .mrs）/ 在线编辑。相对路径按本订阅 imported/ 目录解析（mihomo 以工作目录启动，语义一致）；
  * 绝对路径原样用。写盘直接 java.io，不经编辑器草稿——源文件不是配置本身，内核按 path 单独读它。
+ * 订阅源文件（kind=sub）保存前经 [ProxyUri.ensureProxiesRoot] 兜底补 `proxies:` 根。
  */
 
 /** `path` 配置值 → 实际文件：绝对路径原样；相对去掉 `./` 挂到 imported/ 目录下；无基目录返回 null。 */
@@ -112,17 +118,21 @@ internal fun ProviderFileOpsRow(
                 if (isMrs) append(" · mrs 为二进制，只能上传替换")
             },
             endActions = {
-                TextButton(text = "上传", onClick = { uploadLauncher.launch(arrayOf("*/*")) })
-                TextButton(text = "编辑内容", onClick = {
-                    when {
-                        isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
-                        file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
-                            showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
-                        host.fileBaseDir == null && !cfgPath.startsWith("/") ->
-                            showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
-                        else -> editOpen = true
-                    }
-                })
+                // 两个按钮收进一行并压紧最小宽度：默认 TextButton 的最小宽度会在窄屏上把摘要挤换行
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(text = "上传", minWidth = 0.dp, onClick = { uploadLauncher.launch(arrayOf("*/*")) })
+                    Spacer(Modifier.width(2.dp))
+                    TextButton(text = "编辑", minWidth = 0.dp, onClick = {
+                        when {
+                            isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
+                            file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
+                                showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
+                            host.fileBaseDir == null && !cfgPath.startsWith("/") ->
+                                showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
+                            else -> editOpen = true
+                        }
+                    })
+                }
             },
             onClick = { editOpen = true },
         )
@@ -135,6 +145,8 @@ internal fun ProviderFileOpsRow(
             baseDir = host.fileBaseDir,
             cfgPath = cfgPath,
             newFileText = newFileText,
+            // 订阅源文件保存前自动补 proxies: 根（参考实现 ensureProxiesRoot；mrs 二进制不进编辑器）
+            wrapProxies = kind == "sub",
             scope = scope,
             onDismiss = { editOpen = false },
             onSaved = {
@@ -154,6 +166,7 @@ private fun FileContentDialog(
     baseDir: String?,
     cfgPath: String,
     newFileText: String,
+    wrapProxies: Boolean,
     scope: kotlinx.coroutines.CoroutineScope,
     onDismiss: () -> Unit,
     onSaved: () -> Unit,
@@ -186,7 +199,8 @@ private fun FileContentDialog(
             )
             TextButton(text = "保存文件", onClick = {
                 val t = target ?: return@TextButton
-                val content = draft.orEmpty()
+                // mihomo 要求订阅文件是 proxies 列表：只贴了节点列表 / 单节点时自动补根，其余内容不动
+                val content = if (wrapProxies) ProxyUri.ensureProxiesRoot(draft.orEmpty()).first else draft.orEmpty()
                 scope.launch {
                     val ok = withContext(Dispatchers.IO) {
                         runCatching { t.parentFile?.mkdirs(); t.writeText(content) }.isSuccess

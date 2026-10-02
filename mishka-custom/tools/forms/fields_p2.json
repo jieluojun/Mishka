@@ -1090,6 +1090,9 @@
      "placeholder": "默认 ./proxies/ 目录"
     },
     {
+     "custom": "provider-file-ops"
+    },
+    {
      "path": "interval",
      "label": "自动更新间隔(秒)",
      "type": "number",
@@ -1531,6 +1534,9 @@
      "type": "text",
      "optional": true,
      "placeholder": "默认 ./rules/ 目录"
+    },
+    {
+     "custom": "rule-provider-file-ops"
     },
     {
      "path": "interval",
