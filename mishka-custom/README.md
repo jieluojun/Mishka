@@ -41,7 +41,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
    定位跳转、定义块可视化编辑、引用行改绑/清除继承/删行、新建顶层定义块、重命名（含顶层键级联）、删除定义
    （mihomo 配置段只摘 `&名`）。所有手术都是**行级、字节保真**的原文替换，改动只落在编辑器草稿里，
    写盘仍走 Mishka 原有的保存路径（内核校验 + 失败回滚）。
-2. **可视化配置表单与入口迁移**：P1 / P2 / P3 表单读取并写回已有 YAML 值；订阅编辑页在「覆写」下方提供入口，优先打开 `config.yaml`，否则选择首个 YAML 文件。锚点入口仍留在 YAML 编辑器工具栏。
+2. **可视化配置表单与入口**：P1 / P2 / P3 表单读取并写回已有 YAML 值；订阅编辑页在「覆写」下方提供入口，优先打开 `config.yaml`，否则选择首个 YAML 文件；YAML 编辑器工具栏也恢复表单快捷按钮，位于锚点面板按钮左侧。
 3. **内核换成 `jieluojun/mihomo`（`Alpha` 分支）**：Mishka 应用依赖的 4 处内核行为被移植到 Alpha 之上
    （`--override-json`、`mishka` build tag、DNS/TUN 的 Android 适配、fd TUN 的 forwarder 绑定），
    并解决「Alpha 多出来的依赖没有 go.sum 哈希」的问题（`go.work` + `go.work.sum`）。

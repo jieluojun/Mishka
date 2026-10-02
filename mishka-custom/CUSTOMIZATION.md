@@ -48,9 +48,7 @@ app 补丁共 25 个文件（17 个新 Kotlin 文件：anchor 5 + forms 12；另
 | `custom/forms/FormMapListLogic.kt` | MAPLIST 当前值校验与逐键安全写回计划 |
 | `custom/forms/EbpfFormLogic.kt` | listener 角色状态、兼容旧字段、保留非角色参数的写回与 FakeIP ICMP hook 条件 |
 
-入口拆分且互不占位：YAML 编辑器工具栏只保留锚点面板的 `MiuixIcons.Link`；配置表单入口位于导入型订阅的「编辑配置 → 覆写」下方。
-点击后优先选 `config.yaml`，否则选首个 `.yaml` / `.yml`，通过导航参数在 YAML 内容载入后自动打开表单。编辑器仍共用同一草稿、撤销与保存路径；
-锚点入口不迁移。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
+表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
 ### 三条安全边界（这也是它敢写盘的依据）
 
@@ -104,8 +102,7 @@ P3 为 DNS server、应用多选、FakeIP 规则、规则集选择、headers、M
 切换 local/shared 角色时保留其它 listener 参数。`fakeip-icmp: reply` 会提示 FakeIP 段及 TC hook 前置条件：启用的 local + `data-plane=tc`，
 或启用且配置 `shared.interface` 的 shared。此项只验证配置条件，不代表目标设备上的 TC hook 实际挂载成功。
 
-入口在导入型订阅编辑页的「覆写」下方；`config.yaml` 优先，否则选择首个 `.yaml` / `.yml`。导航到编辑器后，表单等 YAML 内容加载完成再自动展开。
-锚点面板依旧留在 YAML 编辑器工具栏，不在迁移范围内。P1/P2/P3 明细与 P4 字段级对拍待办见 [`FORMS.md`](FORMS.md)。
+入口保留两处：导入型订阅编辑页的「覆写」下方按 `config.yaml` 优先、否则首个 YAML 选择文件并在加载后自动展开表单；YAML 编辑器工具栏也恢复表单快捷按钮，位于锚点面板按钮左侧。锚点面板仍留在原位置。P1/P2/P3 明细与 P4 字段级对拍待办见 [`FORMS.md`](FORMS.md)。
 
 ---
 

@@ -31,7 +31,7 @@ ok  工作区已回到干净状态
 PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 ```
 
-当前 app 补丁：25 files changed / 13152 insertions / 1 deletion，包括 17 个新 Kotlin 源文件，以及 8 个上游文件（路由、订阅编辑页、YAML 编辑器和 4 份 strings.xml）。订阅页入口在「覆写」下方；锚点面板仍在 YAML 编辑器工具栏。
+当前 app 补丁：25 files changed / 13160 insertions / 1 deletion，包括 17 个新 Kotlin 源文件，以及 8 个上游文件（路由、订阅编辑页、YAML 编辑器和 4 份 strings.xml）。订阅页入口在「覆写」下方；YAML 编辑器工具栏也有表单快捷按钮，位于锚点面板按钮左侧。
 
 基线（`patches/app/BASELINE.txt`）：`upstream_commit=e855709c476c8f82635b3bb6f751975e1319f391`，
 `patch_sha256=91962d35ee40b6d302060d47e839ef283c963585cef6e58c4b738ddd961c3109`。导出脚本使用稳定的

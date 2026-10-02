@@ -38,18 +38,10 @@ index bdb96f7..c5f8970 100644
      @Serializable
      data object AppProxy : Route
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
-index 8466deb..42a8975 100644
+index 8466deb..e70d062 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
-@@ -47,7 +47,6 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
- import top.yukonga.miuix.kmp.icon.MiuixIcons
- import top.yukonga.miuix.kmp.icon.extended.Back
- import top.yukonga.miuix.kmp.icon.extended.Link
--import top.yukonga.miuix.kmp.icon.extended.Tune
- import top.yukonga.miuix.kmp.icon.extended.Ok
- import top.yukonga.miuix.kmp.theme.MiuixTheme
- import top.yukonga.scripta.editor.CodeEditor
-@@ -60,6 +59,7 @@ fun FileManagerEditorScreen(
+@@ -60,6 +60,7 @@ fun FileManagerEditorScreen(
      uuid: String,
      relativePath: String,
      subscriptionViewModel: SubscriptionViewModel? = null,
@@ -57,7 +49,7 @@ index 8466deb..42a8975 100644
      onBack: () -> Unit = {},
  ) {
      val fileManager = subscriptionViewModel?.fileManager
-@@ -69,12 +69,17 @@ fun FileManagerEditorScreen(
+@@ -69,12 +70,17 @@ fun FileManagerEditorScreen(
      var isSaving by remember { mutableStateOf(false) }
      var showAnchorPanel by remember { mutableStateOf(false) }
      var showFormPanel by remember { mutableStateOf(false) }
@@ -75,28 +67,31 @@ index 8466deb..42a8975 100644
      }
  
      val backdrop = rememberBlurBackdrop()
-@@ -104,6 +109,7 @@ fun FileManagerEditorScreen(
+@@ -104,17 +110,18 @@ fun FileManagerEditorScreen(
                      actions = {
                          // [mishka-custom] YAML 配置的锚点面板入口：&定义 / *引用 可视化编辑
                          if (isYamlPath(relativePath)) {
-+                            // 锚点面板入口保持在原位；用户明确要求不迁移锚点工具。
-                             IconButton(onClick = { showAnchorPanel = true }) {
+-                            IconButton(onClick = { showAnchorPanel = true }) {
++                            IconButton(onClick = { showFormPanel = true }) {
                                  Icon(
-                                     imageVector = MiuixIcons.Link,
-@@ -111,13 +117,6 @@ fun FileManagerEditorScreen(
+-                                    imageVector = MiuixIcons.Link,
+-                                    contentDescription = "锚点面板",
++                                    imageVector = MiuixIcons.Tune,
++                                    contentDescription = stringResource(R.string.subscription_visual_config),
                                      tint = MiuixTheme.colorScheme.onSurface,
                                  )
                              }
 -                            IconButton(onClick = { showFormPanel = true }) {
--                                Icon(
++                            // 锚点面板入口保持在原位；用户明确要求不迁移锚点工具。
++                            IconButton(onClick = { showAnchorPanel = true }) {
+                                 Icon(
 -                                    imageVector = MiuixIcons.Tune,
 -                                    contentDescription = "配置表单",
--                                    tint = MiuixTheme.colorScheme.onSurface,
--                                )
--                            }
-                         }
-                         val canSave = controller.isModified && !isSaving && fileManager != null
-                         IconButton(
++                                    imageVector = MiuixIcons.Link,
++                                    contentDescription = "锚点面板",
+                                     tint = MiuixTheme.colorScheme.onSurface,
+                                 )
+                             }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
 index cef7fbf..eeb582a 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt

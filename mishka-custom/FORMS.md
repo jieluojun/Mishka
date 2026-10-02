@@ -57,10 +57,9 @@ Mishka 里**没有任何 YAML 库**（`grep` 过 `app/build.gradle.kts`、`libs.
 
 ## 4. 界面结构
 
-* 入口：订阅编辑页「覆写」行下方提供「可视化配置」，布局与模块配置页一致；仅导入型订阅显示。
-  点击后按 `config.yaml` 优先、否则首个 `.yaml` / `.yml` 选择配置文件，并在 YAML 内容载入后自动打开结构化表单。
-  配置表单不占用编辑器工具栏；锚点面板不迁移，仍留在 YAML 编辑器原有工具栏位置。表单修改进入同一个编辑器草稿 / 撤销单元，
-  写盘仍走编辑器顶栏「确定」。
+* 入口有两处：导入型订阅编辑页「覆写」行下方提供「可视化配置」，布局与模块配置页一致；优先选 `config.yaml`，否则选首个 `.yaml` / `.yml`，加载后自动打开表单。
+  YAML 编辑器工具栏也保留可视化配置快捷按钮，位于锚点面板按钮左侧，打开当前文件的表单。
+  两个入口共用同一编辑器草稿 / 撤销单元；锚点面板仍在原工具栏位置，写盘仍走编辑器顶栏「确定」。
 * 配置面板首页：**13 个格子的 hub**，与参考实现同构（全局配置 / DNS / 域名嗅探 / 入站 / 出站代理 /
   代理集合 / 代理组 / 路由规则 / 规则集合 / 子规则 / 流量隧道 / NTP / 实验性），每格显示子标题计数
   （`N 个节点`、`N 条规则`…）与当前开关态（DNS/嗅探/NTP 显示「已启用 / 未启用」）。
@@ -182,8 +181,8 @@ Mishka 里**没有任何 YAML 库**（`grep` 过 `app/build.gradle.kts`、`libs.
   总开关在任一角色启用时显示开启，角色开关只改自身 enable 状态并保留其它参数。新建模板不猜 `shared.interface`，安全从 local 开始；
   顶层 `dns-mode` 与 `bypass-private-address` 也纳入 eBPF 字段表，角色级值可以覆盖全局值。scalar 与 sequence 两种 `network` 写法都能读取；
   `fakeip-icmp: reply` 会检查 FakeIP 段及可用 TC hook（启用的 local+tc，或启用且配置网卡的 shared）。
-* 专用表单入口已从编辑器 toolbar 移到订阅编辑页「覆写」下方（仅导入型订阅）；点击后选 `config.yaml` 或首个 YAML 并自动展开表单。
-  锚点面板仍在原 toolbar 位置，不在迁移范围内。
+* 订阅编辑页「覆写」下方保留「可视化配置」入口（仅导入型订阅），选 `config.yaml` 或首个 YAML 并自动展开表单；YAML 编辑器 toolbar 同时恢复表单快捷按钮，位于锚点面板按钮左侧。
+  锚点面板按钮自身仍在原位置。
 * 定向测试脚本：`bash tools/forms/run_editor_logic_tests.sh`（eBPF role state / FakeIP ICMP 的 TC hook 前置条件 / listener 路径 / FormValues readers / MAPLIST rename、swap、删除目标键）
   通过；引擎对拍 802/802、引用对拍 153 例 0 差异。Android Gradle 编译仍需本机 Android SDK。
 

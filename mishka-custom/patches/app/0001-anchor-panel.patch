@@ -13219,15 +13219,16 @@ index b1b2479..42a8975 100644
  import top.yukonga.mishka.ui.theme.LocalAppDarkMode
  import top.yukonga.mishka.ui.util.horizontalCutoutPadding
  import top.yukonga.mishka.viewmodel.SubscriptionViewModel
-@@ -44,6 +46,7 @@ import top.yukonga.miuix.kmp.basic.Text
+@@ -44,6 +46,8 @@ import top.yukonga.miuix.kmp.basic.Text
  import top.yukonga.miuix.kmp.blur.layerBackdrop
  import top.yukonga.miuix.kmp.icon.MiuixIcons
  import top.yukonga.miuix.kmp.icon.extended.Back
 +import top.yukonga.miuix.kmp.icon.extended.Link
++import top.yukonga.miuix.kmp.icon.extended.Tune
  import top.yukonga.miuix.kmp.icon.extended.Ok
  import top.yukonga.miuix.kmp.theme.MiuixTheme
  import top.yukonga.scripta.editor.CodeEditor
-@@ -56,6 +59,7 @@ fun FileManagerEditorScreen(
+@@ -56,6 +60,7 @@ fun FileManagerEditorScreen(
      uuid: String,
      relativePath: String,
      subscriptionViewModel: SubscriptionViewModel? = null,
@@ -13235,7 +13236,7 @@ index b1b2479..42a8975 100644
      onBack: () -> Unit = {},
  ) {
      val fileManager = subscriptionViewModel?.fileManager
-@@ -63,12 +67,19 @@ fun FileManagerEditorScreen(
+@@ -63,12 +68,19 @@ fun FileManagerEditorScreen(
      val scope = rememberCoroutineScope()
      val context = LocalContext.current
      var isSaving by remember { mutableStateOf(false) }
@@ -13255,12 +13256,19 @@ index b1b2479..42a8975 100644
      }
  
      val backdrop = rememberBlurBackdrop()
-@@ -96,6 +107,17 @@ fun FileManagerEditorScreen(
+@@ -96,6 +108,24 @@ fun FileManagerEditorScreen(
                          }
                      },
                      actions = {
 +                        // [mishka-custom] YAML 配置的锚点面板入口：&定义 / *引用 可视化编辑
 +                        if (isYamlPath(relativePath)) {
++                            IconButton(onClick = { showFormPanel = true }) {
++                                Icon(
++                                    imageVector = MiuixIcons.Tune,
++                                    contentDescription = stringResource(R.string.subscription_visual_config),
++                                    tint = MiuixTheme.colorScheme.onSurface,
++                                )
++                            }
 +                            // 锚点面板入口保持在原位；用户明确要求不迁移锚点工具。
 +                            IconButton(onClick = { showAnchorPanel = true }) {
 +                                Icon(
@@ -13273,7 +13281,7 @@ index b1b2479..42a8975 100644
                          val canSave = controller.isModified && !isSaving && fileManager != null
                          IconButton(
                              enabled = canSave,
-@@ -192,6 +214,22 @@ fun FileManagerEditorScreen(
+@@ -192,6 +222,22 @@ fun FileManagerEditorScreen(
                          .weight(1f),
                  )
              }
