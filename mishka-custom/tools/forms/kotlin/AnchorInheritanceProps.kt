@@ -125,6 +125,8 @@ fun main() {
     expect(AnchorInheritance.setEntryMerge(multiDoc, ads, "hc") == null, "multi merge refuses surgery")
 
     testFlowAnchors()
+    testFlowMapListField()
+    testAnchorRefCounts()
 
     println("anchor inheritance and second-level anchor tests passed")
 }
@@ -168,4 +170,65 @@ private fun testFlowAnchors() {
 
     // 一级读取在 flow 定义下依旧成立（候选过滤用 isMap，这里验证展开读参）
     expect(FormValues.effectiveText(doc, subA + "interval") == "3600", "inherited value via flow anchor readable")
+}
+
+/**
+ * flow 映射里写列表字段（override-expr 快捷表达式的路径）：引擎拒绝把装不下一行的集合塞进 flow，
+ * 手术必须先展开成块式（`<<:` 与其它键逐字保留）再写；写完的形态要能被引擎常规路径继续改。
+ */
+private fun testFlowMapListField() {
+    val doc = reparsed(FLOW_SAMPLE)
+    val subA: YPath = listOf("proxy-providers", "sub-a")
+    val exprs = listOf(".servername = \"填免流混淆\"", ".sni = .servername", "it's fine")
+
+    val out = AnchorInheritance.setFlowMapListField(doc, subA + "override", "override-expr", exprs)
+        ?: error("flow list write rejected")
+    val re = reparsed(out)
+    // `<<: *host` 与既有键原样保留，override 由 flow 变块式，列表按块式序列写入
+    expect(re.get(subA + "override")?.flow == false, "override must expand to block form")
+    expect(AnchorInheritance.fieldStates(re, subA).first { it.key == "override" }.merges == listOf("host"), "flow merge must survive expansion")
+    expect(re.get(subA + "override" + "additional-prefix") != null, "existing flow keys must survive")
+    val (items, inherited) = FormValues.exprItems(re, subA)
+    expect(items == exprs && !inherited, "written list must roundtrip verbatim, value is local now")
+    expect(out.contains("- 'it''s fine'"), "single-quote escaping must double inner quotes")
+    expect(re.get(subA + "url") != null, "sibling keys untouched")
+
+    // 写完是块式：第二次编辑走引擎常规 setValue，删除走 removeKey
+    val re2 = YamlPatch.setValue(re, subA + "override" + "override-expr", listOf(".only = 1"))
+    expect(re2 !== re && FormValues.exprItems(re2, subA).first == listOf(".only = 1"), "block rewrite via engine")
+    val re3 = YamlPatch.removeKey(re2, subA + "override" + "override-expr")
+    expect(re3.get(subA + "override" + "override-expr") == null, "block removal via engine")
+    expect(re3.get(subA + "override" + "additional-prefix") != null, "removal keeps map intact")
+
+    // 空列表 = 删除该字段（其余键保留）
+    val emptied = reparsed(AnchorInheritance.setFlowMapListField(doc, subA + "override", "override-expr", emptyList()) ?: error("empty write rejected"))
+    expect(emptied.get(subA + "override" + "override-expr") == null, "empty list removes field")
+    expect(AnchorInheritance.fieldStates(emptied, subA).first { it.key == "override" }.merges == listOf("host"), "empty write keeps merge")
+
+    // 行尾注释挪到 `键:` 行尾而不是丢掉
+    val withComment = reparsed("proxy-providers:\n  - name: c\n    override: { type: file } # keep me\n")
+    val co = AnchorInheritance.setFlowMapListField(withComment, listOf("proxy-providers", 0, "override"), "override-expr", listOf(".a = 1"))
+        ?: error("comment write rejected")
+    expect(co.contains("override: # keep me"), "trailing comment preserved on key line")
+
+    // 跨多行 flow / 块式映射：不手术，交回引擎 / 编辑器
+    val multiline = reparsed("proxy-providers:\n  - name: m\n    override: { a: 1,\n      b: 2 }\n")
+    expect(AnchorInheritance.setFlowMapListField(multiline, listOf("proxy-providers", 0, "override"), "e", listOf("1")) == null, "multiline flow refused")
+    val block = reparsed("proxy-providers:\n  - name: b\n    override:\n      type: file\n")
+    expect(AnchorInheritance.setFlowMapListField(block, listOf("proxy-providers", 0, "override"), "e", listOf("1")) == null, "block map refused (engine handles it)")
+}
+
+/** 锚点定义一览的引用计数：`<<: *x`、`键: *x` 都计入。 */
+private fun testAnchorRefCounts() {
+    val doc = reparsed(FLOW_SAMPLE)
+    val counts = AnchorInheritance.anchorRefCounts(doc)
+    expect(counts["providers"] == 2, "providers referenced by sub-a and sub-b, got ${counts["providers"]}")
+    expect(counts["host"] == 1, "host referenced inside sub-a flow override, got ${counts["host"]}")
+    expect(counts["nope"] == null, "unknown anchors absent from counts")
+
+    val doc2 = reparsed(SAMPLE)
+    val counts2 = AnchorInheritance.anchorRefCounts(doc2)
+    expect(counts2["base"] == 2, "block merges counted, got ${counts2["base"]}")
+    expect(counts2["hc"] == 1, "nested block merge counted, got ${counts2["hc"]}")
+    expect(counts2["dl"] == 0 || counts2["dl"] == null, "defined but unreferenced anchor has no count, got ${counts2["dl"]}")
 }

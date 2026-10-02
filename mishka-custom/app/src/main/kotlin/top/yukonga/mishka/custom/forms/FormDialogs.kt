@@ -279,6 +279,7 @@ internal fun ListDialog(
                                 items.add(index - 1, v)
                             }
                         })
+                        Spacer(Modifier.width(6.dp))
                         TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { items.removeAt(index) })
                     }
                 }

@@ -990,7 +990,8 @@ internal fun ListHeader(summary: String, actions: @Composable () -> Unit) {
         )
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.End,
+            // spacedBy 兜底：headerActions 里多个按钮相邻时统一间距，调用方不用再手垫 Spacer
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) { actions() }
     }

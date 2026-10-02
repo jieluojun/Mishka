@@ -3,7 +3,10 @@ package top.yukonga.mishka.custom.forms
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +51,7 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
     val l1 = remember(doc, base) { AnchorInheritance.entryMerges(doc, base) }
     val states = remember(doc, base) { AnchorInheritance.fieldStates(doc, base) }
     val defs = remember(doc) { AnchorInheritance.anchorDefs(doc) }
+    val refCounts = remember(doc) { AnchorInheritance.anchorRefCounts(doc) }
     val entry = doc.get(base)
     // 块映射节点的 start 是第一个子行，键行要用 headLine0 推，否则「定义在本条目之前」会错偏一行
     val headLine1 = entry?.let { AnchorInheritance.headLine0(it) + 1 } ?: 0
@@ -57,11 +61,14 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
     Column(modifier = Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionHeader("YAML 锚点")
         Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
+            val l1Def = defs.firstOrNull { it.name == l1.merges.firstOrNull() }
             BasicComponent(
                 title = "继承锚点 <<:",
                 summary = when {
                     l1.multi -> "合并来源 ${l1.merges.size} 个（${l1.merges.joinToString("、") { "*$it" }}），为不破坏原结构已锁定；如需调整请在编辑器里改"
-                    l1.merges.isNotEmpty() -> "继承 *${l1.merges.first()} · 可换绑到其它锚点，或选「(不继承)」删除这一行"
+                    l1.merges.isNotEmpty() -> "继承 *${l1.merges.first()}" +
+                        (l1Def?.let { "（定义在第 ${it.line1} 行）" } ?: "") +
+                        " · 可换绑到其它锚点，或选「(不继承)」删除这一行"
                     else -> "未继承 · 选一个锚点，把它的字段并进来当默认（本地同名字段仍是覆写）"
                 },
                 endActions = { TextButton(text = "选择", onClick = { pickL1 = true }) },
@@ -75,8 +82,8 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
                 if (f.merges.isNotEmpty()) parts.add("${f.key} <<:${if (f.multi) "多来源" else "*" + f.merges.first()}")
                 f.aliasRef?.let { parts.add("${f.key} *${it}") }
             }
-            if (parts.isEmpty()) append("未设置字段级锚点") else append(parts.joinToString(" · "))
-            append(" · 字段级 &定义 已下线，存量点「编辑」里 × 摘除")
+            if (parts.isEmpty()) append("未设置字段级锚点 · 点「编辑」可给某个字段挂 <<: 继承或 * 引用")
+            else append(parts.joinToString(" · "))
         }
         Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
             BasicComponent(
@@ -85,6 +92,46 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
                 endActions = { TextButton(text = "编辑", onClick = { pickField = true }) },
                 onClick = { pickField = true },
             )
+        }
+        // 锚点定义一览：名字 / 定义行号 / 形态 / 全文引用次数，本条目正在用的标出来
+        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                BasicComponent(
+                    title = "锚点定义（${defs.size}）",
+                    summary = if (defs.isEmpty()) {
+                        "文档里还没有锚点：先在编辑器里给某个字段写 `&名字`，再回来挂继承 / 引用"
+                    } else {
+                        "编辑器里以 &名字 定义 · 行号即编辑器行号 · 映射才能被 <<: 继承，标量 / 序列只能整体 * 引用"
+                    },
+                )
+                if (defs.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        val entryAnchor = entry?.anchor
+                        defs.forEach { d ->
+                            val inheritedHere = d.name in l1.merges
+                            val fieldUses = states.filter { d.name in it.merges || it.aliasRef == d.name }.map { it.key }
+                            BasicComponent(
+                                title = buildString {
+                                    append("&").append(d.name)
+                                    when {
+                                        d.name == entryAnchor -> append("  ← 本条目定义")
+                                        inheritedHere -> append("  ← 本条目继承中")
+                                        fieldUses.isNotEmpty() -> append("  ← 本条目字段 " + fieldUses.joinToString("/") + " 在用")
+                                    }
+                                },
+                                summary = "定义在第 ${d.line1} 行 · " +
+                                    (if (d.isMap) "映射（可 <<: 继承）" else "标量 / 序列（只能 * 引用）") +
+                                    " · 全文引用 ${refCounts[d.name] ?: 0} 处",
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -164,7 +211,8 @@ private fun FieldAnchorDialog(
     WindowDialog(
         show = true,
         title = "二级锚点（字段级）",
-        summary = "继承 <<: 要求字段是映射；整体引用 * 任意值都行。选中锚点后该字段即以锚点内容生效。",
+        summary = "继承 <<: 要求字段是映射；整体引用 * 任意值都行。选中锚点后该字段即以锚点内容生效。" +
+            "字段级 &定义 已下线：存量的用上方 × 摘除，新增只支持继承与引用。",
         onDismissRequest = onDismiss,
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -180,6 +228,7 @@ private fun FieldAnchorDialog(
                     f.defAnchor?.let { append(" · 定义 &$it") }
                     if (f.merges.isNotEmpty()) append(if (f.multi) " · 继承多来源（锁定）" else " · 继承 <<: *${f.merges.first()}")
                     f.aliasRef?.let { append(" · 引用 *$it") }
+                    append(" · 第 ${f.line1} 行")
                 }
                 BasicComponent(
                     title = label,

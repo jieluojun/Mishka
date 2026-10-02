@@ -958,6 +958,33 @@ private fun renameProvider(host: FormHost, old: String, new: String): Boolean {
 /** 读 override.override-expr（含锚点继承回落）：见 [FormValues.exprItems]；这里只取列表部分。 */
 private fun exprItems(doc: YamlDoc, base: YPath): List<String> = FormValues.exprItems(doc, base).first
 
+/**
+ * 写 override-expr。存量配置里 `override` 常是单行 flow 映射（如
+ * `override: { additional-prefix: ..., <<: *host }`），引擎不会把装不下一行的列表塞进 flow
+ * （[YamlPatch.flowSet] 直接拒绝，旧代码只会弹「这个位置不能这样写」）——先展开成块式映射
+ * （`<<: *锚点` 与其它键逐字保留）再写；块式 / 缺失则直接交引擎。清空且值是纯继承时没有本地行
+ * 可删，提示去「YAML 锚点」区解除继承。
+ */
+private fun commitExprList(host: FormHost, doc: YamlDoc, base: YPath, list: List<String>) {
+    val path = base + "override" + "override-expr"
+    val ov = doc.get(base + "override")
+    if (ov != null && ov.kind == YamlNode.Kind.MAP && ov.flow) {
+        val text = AnchorInheritance.setFlowMapListField(doc, base + "override", "override-expr", list)
+        if (text == null) showToast("override 是跨多行的 flow 映射，请在编辑器里直接改", long = true)
+        else host.applyRawText(text, "override-expr", ov.start + 1)
+        return
+    }
+    if (list.isEmpty()) {
+        when {
+            doc.get(path) != null -> host.clear(path, "override-expr")
+            exprItems(doc, base).isNotEmpty() -> showToast("表达式来自锚点继承：要清除请在「YAML 锚点」区解除继承，或改锚点定义", long = true)
+            else -> showToast("未设置表达式")
+        }
+        return
+    }
+    host.set(path, list, "override-expr")
+}
+
 @Composable
 private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
     val doc = host.doc
@@ -1108,10 +1135,7 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
         ExprListDialog(
             items = exprItems(doc, base),
             onDismiss = { exprEditor = false },
-            onCommit = { list ->
-                if (list.isEmpty()) host.clear(base + "override" + "override-expr", "override-expr")
-                else host.set(base + "override" + "override-expr", list, "override-expr")
-            },
+            onCommit = { list -> commitExprList(host, doc, base, list) },
         )
     }
     deleting?.let { flow -> DeleteFlowDialogs(flow, host, onDismiss = { deleting = null }, onDeleted = { nav.pop() }) }
@@ -1172,7 +1196,8 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
                             val a = ArrayList(items)
                             var added = 0
                             for (e in exprs) if (e !in a) { a.add(e); added++ }
-                            if (added == 0) showToast("这些表达式已在列表中") else { onCommit(a); showToast("已填入 $added 条表达式") }
+                            // 先报「已填入」再提交：若提交失败（如 flow 形态不支持），失败提示不会被成功提示盖掉
+                            if (added == 0) showToast("这些表达式已在列表中") else { showToast("已填入 $added 条表达式"); onCommit(a) }
                         },
                     )
                 }
@@ -1196,6 +1221,7 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
                             modifier = Modifier.weight(1f),
                         )
                         TextButton(text = "✎", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = i })
+                        Spacer(Modifier.width(6.dp))
                         TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
                             onCommit(items.filterIndexed { j, _ -> j != i })
                         })
@@ -1533,8 +1559,8 @@ private fun RuleListPage(host: FormHost, seqPath: YPath, title: String) {
         unit = "条规则",
         emptyHint = "还没有规则。「添加规则」逐条填；「文本模式」一行一条整列表粘贴。",
         headerActions = {
+            // 间距由 ListHeader 的 spacedBy(8.dp) 统一给
             TextButton(text = "文本模式", onClick = { textMode = true })
-            Spacer(Modifier.width(4.dp))
             TextButton(text = "＋ 添加规则", onClick = { edit = RuleEditTarget(index = null, insertAt = items.size) })
         },
         rowTitle = { i, node ->

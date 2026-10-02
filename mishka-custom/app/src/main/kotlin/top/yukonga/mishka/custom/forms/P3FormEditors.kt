@@ -98,6 +98,7 @@ internal fun DnsServerListDialog(
                                 }
                             })
                             TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
+                            Spacer(Modifier.width(6.dp))
                             TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { servers.removeAt(index) })
                         },
                     )
@@ -581,12 +582,16 @@ internal fun FakeIpRulesDialog(
                                 }
                             })
                             TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
+                            Spacer(Modifier.width(6.dp))
                             TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { rules.removeAt(index) })
                         },
                     )
                 }
             }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
                 TextButton(text = "添加规则", onClick = { editing = rules.size })
                 TextButton(text = "MATCH 兜底", onClick = { rules.add("MATCH,fake-ip") })
             }
@@ -941,6 +946,7 @@ internal fun MapListFieldDialog(
                         summary = row.values.joinToString(", ").ifBlank { "（空）" },
                         endActions = {
                             TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
+                            Spacer(Modifier.width(6.dp))
                             TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { rows.removeAt(index) })
                         },
                     )

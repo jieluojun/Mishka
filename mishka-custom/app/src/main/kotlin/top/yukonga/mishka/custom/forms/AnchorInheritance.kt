@@ -342,4 +342,122 @@ internal object AnchorInheritance {
         lines[li] = if (tail.isEmpty()) head else head + " " + tail
         return lines.joinToString("\n")
     }
+
+    /**
+     * 在**单行 flow 映射**里写入一个「字符串列表」字段（如 `override.override-expr`）：引擎拒绝把
+     * 装不下一行的集合塞进 flow（[YamlPatch.flowSet] 返回原文），这里先把 flow 展开成块式映射——
+     * 每个既有键值段与 `<<: *别名` 的原文逐字保留——再按块式序列写入目标字段（已存在则整段替换，
+     * [items] 为空则删除该字段）。行尾注释挪到 `键:` 行尾；跨多行 flow / 解析不动的返回 null 交回编辑器。
+     */
+    fun setFlowMapListField(doc: YamlDoc, mapPath: YPath, key: String, items: List<String>): String? {
+        val node = doc.get(mapPath) ?: return null
+        if (node.kind != YamlNode.Kind.MAP || !node.flow) return null
+        if (node.start != node.end - 1) return null
+        val li = node.start
+        val raw = doc.lines[li]
+        val open = node.flowStart
+        val close = node.flowEnd - 1
+        if (close < open || raw.getOrNull(close) != '}' || raw.getOrNull(open) != '{') return null
+        val keyIndent = indentOf(raw)
+        val head = raw.substring(0, open).trimEnd()      // `    override:`（含可能的 &锚点）
+        val tail = raw.substring(close + 1)              // 行尾注释等，挪到 head 行尾
+        val segments = splitFlowSegments(raw.substring(open + 1, close))
+        val out = ArrayList<String>()
+        out.add(if (tail.isBlank()) head else head + " " + tail.trim())
+        var replaced = false
+        for (seg in segments) {
+            val t = seg.trim()
+            if (t.isEmpty()) continue
+            if (flowSegmentKey(t) == key) {
+                replaced = true
+                if (items.isNotEmpty()) {
+                    out.add(" ".repeat(keyIndent + 2) + key + ":")
+                    for (it in items) out.add(" ".repeat(keyIndent + 4) + "- " + quoteSingle(it))
+                }
+            } else {
+                out.add(" ".repeat(keyIndent + 2) + t)
+            }
+        }
+        if (!replaced && items.isNotEmpty()) {
+            out.add(" ".repeat(keyIndent + 2) + key + ":")
+            for (it in items) out.add(" ".repeat(keyIndent + 4) + "- " + quoteSingle(it))
+        }
+        val lines = ArrayList(doc.lines)
+        lines.removeAt(li)
+        lines.addAll(li, out)
+        return lines.joinToString("\n")
+    }
+
+    /** 全篇锚点引用计数：`<<: *x` / `键: *x` / 序列项 `- *x` 都算一次（可视化「谁在用这个锚点」）。 */
+    fun anchorRefCounts(doc: YamlDoc): Map<String, Int> {
+        val counts = LinkedHashMap<String, Int>()
+        fun bump(name: String?) { if (name != null) counts[name] = (counts[name] ?: 0) + 1 }
+        fun walk(n: YamlNode?) {
+            if (n == null) return
+            bump(n.alias)
+            n.entries.forEach { walk(it.node) }
+            n.items.forEach { walk(it) }
+        }
+        walk(doc.root)
+        // 根被包进 __seq__ / __scalar__ 虚拟映射时 root.entries 已覆盖；root 自身的别名也计入
+        return counts
+    }
+
+    /** flow 体按顶层逗号切段（跳过引号与嵌套括号），各段原文保留。 */
+    private fun splitFlowSegments(body: String): List<String> {
+        val out = ArrayList<String>()
+        var depth = 0
+        var quote: Char? = null
+        var start = 0
+        var i = 0
+        while (i < body.length) {
+            val c = body[i]
+            if (quote != null) {
+                if (c == quote) {
+                    if (i + 1 < body.length && body[i + 1] == quote) i++ else quote = null
+                }
+            } else when (c) {
+                '"', '\'' -> quote = c
+                '{', '[' -> depth++
+                '}', ']' -> depth--
+                ',' -> if (depth == 0) { out.add(body.substring(start, i)); start = i + 1 }
+            }
+            i++
+        }
+        out.add(body.substring(start))
+        return out
+    }
+
+    /** flow 段的键名（`键: 值` / `<<: *x`；带引号的键也认）。非键值段返回整段。 */
+    private fun flowSegmentKey(seg: String): String {
+        var quote: Char? = null
+        var depth = 0
+        var i = 0
+        if (seg.startsWith("\"") || seg.startsWith("'")) {
+            quote = seg[0]
+            i = 1
+            while (i < seg.length) {
+                if (seg[i] == quote!!) {
+                    if (i + 1 < seg.length && seg[i + 1] == quote) i++ else { quote = null; i++; break }
+                }
+                i++
+            }
+            val key = seg.substring(1, (i - 1).coerceAtLeast(1))
+            while (i < seg.length && seg[i] == ' ') i++
+            return if (i < seg.length && seg[i] == ':') key else seg
+        }
+        while (i < seg.length) {
+            val c = seg[i]
+            when {
+                c == '{' || c == '[' -> depth++
+                c == '}' || c == ']' -> depth--
+                c == ':' && depth == 0 -> return seg.substring(0, i).trim()
+            }
+            i++
+        }
+        return seg
+    }
+
+    /** 单引号流式安全串：内部 `'` 翻倍（YAML 单引号转义）。 */
+    private fun quoteSingle(s: String): String = "'" + s.replace("'", "''") + "'"
 }

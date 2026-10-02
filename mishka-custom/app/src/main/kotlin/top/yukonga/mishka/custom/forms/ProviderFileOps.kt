@@ -3,10 +3,12 @@ package top.yukonga.mishka.custom.forms
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -75,6 +77,21 @@ internal fun ProviderFileOpsRow(
         return resolveProviderFile(host.fileBaseDir, localPath ?: defaultPath)
     }
 
+    /**
+     * 打开在线编辑的统一守卫——卡片整行 onClick 与「编辑」按钮必须走同一条路：
+     * 之前卡片点击绕过了守卫，订阅目录未知时弹层带着空目标打开，「保存文件」静默无反应。
+     */
+    fun tryOpenEdit() {
+        when {
+            isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
+            file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
+                showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
+            host.fileBaseDir == null && !cfgPath.startsWith("/") ->
+                showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
+            else -> editOpen = true
+        }
+    }
+
     val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         val target = ensureTarget()
@@ -114,7 +131,13 @@ internal fun ProviderFileOpsRow(
                 append(cfgPath)
                 if (localPath == null) append("（默认路径，操作时写入配置）")
                 append(" · ")
-                append(stat ?: "文件不存在，上传 / 保存即创建")
+                append(
+                    when {
+                        stat != null -> stat
+                        file == null -> "无法定位文件（订阅目录未知）：可用「上传」，或在配置里填绝对路径"
+                        else -> "文件不存在，上传 / 保存即创建"
+                    },
+                )
                 if (isMrs) append(" · mrs 为二进制，只能上传替换")
             },
             endActions = {
@@ -122,19 +145,10 @@ internal fun ProviderFileOpsRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(text = "上传", minWidth = 0.dp, onClick = { uploadLauncher.launch(arrayOf("*/*")) })
                     Spacer(Modifier.width(2.dp))
-                    TextButton(text = "编辑", minWidth = 0.dp, onClick = {
-                        when {
-                            isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
-                            file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
-                                showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
-                            host.fileBaseDir == null && !cfgPath.startsWith("/") ->
-                                showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
-                            else -> editOpen = true
-                        }
-                    })
+                    TextButton(text = "编辑", minWidth = 0.dp, onClick = { tryOpenEdit() })
                 }
             },
-            onClick = { editOpen = true },
+            onClick = { tryOpenEdit() },
         )
     }
 
@@ -196,18 +210,35 @@ private fun FileContentDialog(
                 modifier = Modifier.fillMaxWidth(),
                 label = "文件内容",
                 singleLine = false,
+                minLines = 8,
+                maxLines = 16,
             )
-            TextButton(text = "保存文件", onClick = {
-                val t = target ?: return@TextButton
-                // mihomo 要求订阅文件是 proxies 列表：只贴了节点列表 / 单节点时自动补根，其余内容不动
-                val content = if (wrapProxies) ProxyUri.ensureProxiesRoot(draft.orEmpty()).first else draft.orEmpty()
-                scope.launch {
-                    val ok = withContext(Dispatchers.IO) {
-                        runCatching { t.parentFile?.mkdirs(); t.writeText(content) }.isSuccess
+            // 内容框与保存按钮之间留边距；按钮右对齐与其它弹层一致
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(text = "保存文件", onClick = {
+                    val t = target
+                    if (t == null) {
+                        showToast("无法确定写入位置：缺少订阅目录或路径为空，请先用「上传」或在配置里填绝对路径", long = true)
+                        return@TextButton
                     }
-                    if (ok) onSaved() else showToast("写入失败", long = true)
-                }
-            })
+                    if (failed && draft == null) {
+                        showToast("文件内容没读到，不执行保存（避免把原文件清空）", long = true)
+                        return@TextButton
+                    }
+                    // mihomo 要求订阅文件是 proxies 列表：只贴了节点列表 / 单节点时自动补根，其余内容不动
+                    val content = if (wrapProxies) ProxyUri.ensureProxiesRoot(draft.orEmpty()).first else draft.orEmpty()
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            runCatching { t.parentFile?.mkdirs(); t.writeText(content) }.isSuccess
+                        }
+                        if (ok) onSaved() else showToast("写入失败：请检查文件权限或磁盘空间", long = true)
+                    }
+                })
+            }
         }
     }
 }
