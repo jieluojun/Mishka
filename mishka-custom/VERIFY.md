@@ -34,9 +34,10 @@ PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 当前 app 补丁：25 files changed / 13152 insertions / 1 deletion，包括 17 个新 Kotlin 源文件，以及 8 个上游文件（路由、订阅编辑页、YAML 编辑器和 4 份 strings.xml）。订阅页入口在「覆写」下方；锚点面板仍在 YAML 编辑器工具栏。
 
 基线（`patches/app/BASELINE.txt`）：`upstream_commit=e855709c476c8f82635b3bb6f751975e1319f391`，
-`patch_sha256=d92bd55faf2eb1124ba7f751a58d9912c0b05fc33c8a9c386915831a39bfc0c7`。导出脚本使用稳定的
-`anchor-panel.seed.patch` + `visual-config-entry.seed.patch`，连续导出两次得到相同 SHA。`scripts/apply-patches.sh`
-与 `scripts/revert-patches.sh` 已在干净克隆上往返验证，撤销后 `git status` 为空。
+`patch_sha256=91962d35ee40b6d302060d47e839ef283c963585cef6e58c4b738ddd961c3109`。导出脚本使用稳定的
+`anchor-panel.seed.patch` + `visual-config-entry.seed.patch`；本次针对 CI 编译错误更新了 `ConfigFormPanel.kt` 补丁 hunk 与对应 blob 哈希，
+并在已打补丁的源码树上验证 `git apply -R` / `git apply` 均通过。`scripts/apply-patches.sh` 与 `scripts/revert-patches.sh`
+此前已在干净克隆上往返验证，撤销后 `git status` 为空。
 
 导出时须在干净仓库运行；脚本会拒绝已有 `custom/` 目录，避免 `.git/info/exclude` 隐藏现存源码。源码入补丁使用 `git add -f -A`，
 反向应用后的残留检查不只依赖 `git status`（被忽略的文件不可见），而会检查 `find … -name '*.kt'`。
@@ -233,8 +234,9 @@ eBPF role, FormValues reader, and MAPLIST rename/swap tests passed
 * 在干净的 Mishka 克隆上运行 `scripts/apply-patches.sh --repo <repo>`，可应用完整 app 补丁；随后运行
   `scripts/revert-patches.sh --repo <repo>`，所有 8 个 tracked 文件恢复、custom/ 删除，`git status` 为空。
 * `tools/export_app_patch.sh` 连跑两次，`0001-anchor-panel.patch` 的 SHA 都是 `d92bd55f…bfc0c7`，验证 seed 流程可重复。
-* 已尝试 `./gradlew :app:compileDebugKotlin`（无 daemon、单 worker）。Gradle 在配置 `:app` 时停止：
-  `SDK location not found`，环境没有 `ANDROID_HOME`，也没有有效的 `local.properties/sdk.dir`；因此不是 Kotlin/Compose 编译结果，不能声称 Android 编译通过。
+* 本地尝试 `./gradlew :app:compileDebugKotlin` 时仍因沙箱缺 Android SDK（`SDK location not found`）停在配置阶段。用户提供的 GitHub Actions 日志已进入 `:app:compileReleaseKotlin`，
+  报告 `ConfigFormPanel.kt` 对 `IntRange?` 调用不存在的 `orEmpty()`；现已改成空安全 `?.any { … } == true`（无 listener 列表时按无重复处理），并更新补丁及基线。
+  **该修复尚未由新的 GitHub Actions 构建确认**，需要推送更新后的交付文件后重跑。
 * 4 个修改的上游 Kotlin 文件经 `check_kotlin.py` 语法检查通过；4 份 `strings.xml` 均可由 XML parser 解析。`check_api.py --root <上游克隆>` 核对了 80 条 import，
   但只有 Mishka app 源码可用、调用点核对数为 0；另有 5 个外部依赖源码路径缺失，故这是有限的 import 检查，不等价于完整 API 编译。
 * `scripts/verify.sh --repo <clean repo>`：11 项通过、0 失败、1 项跳过（未提供 `--kernel-dir`）。

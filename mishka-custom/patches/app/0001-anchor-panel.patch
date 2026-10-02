@@ -3024,8 +3024,8 @@ index 0000000..9d3c781
 +    val nameGuard: FieldInterceptor = { field, _, value ->
 +        if (field.path == "name") {
 +            val newName = (value as? String).orEmpty().trim()
-+            val duplicate = (doc.get(listOf("listeners"))?.items?.indices.orEmpty())
-+                .any { it != index && listenerName(doc, it) == newName }
++            val duplicate = doc.get(listOf("listeners"))?.items?.indices
++                ?.any { it != index && listenerName(doc, it) == newName } == true
 +            if (newName.isNotEmpty() && duplicate) {
 +                showToast("已存在同名监听器「$newName」", long = true)
 +                true

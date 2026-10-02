@@ -145,8 +145,7 @@ git pull && bash mishka-custom/scripts/setup.sh --repo .
   Alpha 默认 TUN 栈是 mips）需要你实机验证。要退回官方内核：`revert-patches.sh --all`。
 * **签名**：与官方 Mishka 的签名不同，无法覆盖安装官方版（先卸载或用不同 `applicationId`）；
   CI 在没配 secrets 时用的 debug 风格密钥是公开的，只适合自用。
-* 本包**尚未完成 Android Gradle/APK 构建**：当前沙箱没有 Android SDK，`:app:compileDebugKotlin` 在 Gradle 配置阶段因 SDK 路径缺失而停止。
-  Android 端的最终验证请以 CI 或本地 `build-release.sh` 的结果为准；沙箱内已通过离线自检、补丁往返、引擎与表单逻辑对拍、Kotlin 语法和可用依赖 API 核对。
+* 本包**尚未完成 Android Gradle/APK 构建验证**：当前沙箱没有 Android SDK；用户提供的 CI 曾在 `ConfigFormPanel.kt` 的 `IntRange?` 空值检查处编译失败，已修复并更新 app 补丁，等待重跑 CI 确认。Android 端最终结果请以新的 CI 或本地 `build-release.sh` 为准；离线引擎与表单逻辑测试此前已通过。
 
 ## 来源与许可
 
