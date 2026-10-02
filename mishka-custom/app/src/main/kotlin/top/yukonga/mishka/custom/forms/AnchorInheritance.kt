@@ -67,7 +67,8 @@ internal object AnchorInheritance {
             val v = e.node
             val merges = ArrayList<String>()
             var multi = false
-            if (v != null && v.kind == YamlNode.Kind.MAP && !v.flow) {
+            // flow 映射（`override: { …, <<: *host }`）的合并键也在 entries 里，照样读
+            if (v != null && v.kind == YamlNode.Kind.MAP) {
                 val ms = v.entries.filter { it.isMerge }
                 ms.forEach { m -> collectAliases(m.node, merges) }
                 multi = ms.size > 1
@@ -79,17 +80,17 @@ internal object AnchorInheritance {
                 aliasRef = v?.takeIf { it.kind == YamlNode.Kind.RAW && !it.multi }?.alias,
                 merges = merges,
                 multi = multi,
-                isMap = v?.kind == YamlNode.Kind.MAP && !v.flow,
+                isMap = v?.kind == YamlNode.Kind.MAP,
             )
         }
     }
 
-    /** 全文 `&定义` 清单（递归走节点树）：候选列表与「定义在引用行之前」硬规则用它。 */
+    /** 全文 `&定义` 清单（递归走节点树）：候选列表与「定义在引用行之前」硬规则用它。flow 映射也是映射，`<<:` 可指向它。 */
     fun anchorDefs(doc: YamlDoc): List<AnchorDefInfo> {
         val out = ArrayList<AnchorDefInfo>()
         fun walk(n: YamlNode?) {
             if (n == null) return
-            n.anchor?.let { out.add(AnchorDefInfo(it, n.start + 1, n.kind == YamlNode.Kind.MAP && !n.flow)) }
+            n.anchor?.let { out.add(AnchorDefInfo(it, n.start + 1, n.kind == YamlNode.Kind.MAP)) }
             n.entries.forEach { walk(it.node) }
             n.items.forEach { walk(it) }
         }
@@ -117,6 +118,30 @@ internal object AnchorInheritance {
     }
 
     private fun indentOf(line: String): Int = line.takeWhile { it == ' ' || it == '\t' }.length
+
+    /** 裸文本掩码：引号内的位置为 false——flow 里找 `<<` 时不能命中引号里的内容。 */
+    private fun quoteMask(line: String): BooleanArray {
+        val mask = BooleanArray(line.length) { true }
+        var quote: Char? = null
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            if (quote != null) {
+                mask[i] = false
+                if (c == quote) {
+                    if (i + 1 < line.length && line[i + 1] == quote) {
+                        mask[i + 1] = false
+                        i++
+                    } else quote = null
+                }
+            } else if (c == '"' || c == '\'') {
+                mask[i] = false
+                quote = c
+            }
+            i++
+        }
+        return mask
+    }
 
     /** 条目块子行的缩进：首个子键 / 首个序列项的缩进，没有就按表头缩进 + 2。 */
     private fun childIndent(n: YamlNode): Int {
@@ -230,7 +255,7 @@ internal object AnchorInheritance {
         }
         val v = e.node
         val emptyValue = v == null || doc.isNullText(v)
-        if (!emptyValue && !(v.kind == YamlNode.Kind.MAP && !v.flow)) return null
+        if (!emptyValue && v?.kind != YamlNode.Kind.MAP) return null
         val merges = ArrayList<String>()
         val mergeLines = ArrayList<Int>()
         if (v != null && v.kind == YamlNode.Kind.MAP) {
@@ -241,6 +266,47 @@ internal object AnchorInheritance {
             }
         }
         if (merges.size > 1 || mergeLines.size > 1) return null
+        if (v != null && v.flow) {
+            // flow 映射（`override: { …, <<: *host }`）：只重写 `<<: *名` 片段，其余 flow 内容逐字不动；
+            // 跨多行的 flow 不猜，返回 null 走编辑器
+            if (v.start != v.end - 1) return null
+            val li = v.start
+            val raw = lines[li]
+            val mask = quoteMask(raw)
+            val re = Regex("<<\\s*:\\s*\\*[^\\s,}]+")
+            val match = re.findAll(raw).firstOrNull { mask[it.range.first] }
+            if (match != null) {
+                if (name == null) {
+                    var from = match.range.first
+                    var to = match.range.last
+                    // 收一个相邻逗号：优先前逗号，没有再后逗号
+                    var p = from - 1
+                    while (p >= 0 && raw[p] == ' ') p--
+                    if (p >= 0 && raw[p] == ',') from = p
+                    else {
+                        var q = to + 1
+                        while (q < raw.length && raw[q] == ' ') q++
+                        if (q < raw.length && raw[q] == ',') to = q
+                    }
+                    lines.replaceAt(li, raw.removeRange(from, to + 1))
+                } else {
+                    lines.replaceAt(li, raw.replaceRange(match.range, "<<: *" + name))
+                }
+                return lines.joinToString("\n")
+            }
+            if (name == null) return null
+            // 无合并键：在闭括号前插 `<<: *name`，闭括号前保留一个空格；空 flow 不补逗号
+            val close = (v.flowEnd - 1).coerceIn(0, raw.length)
+            if (raw.getOrNull(close) != '}') return null
+            var b = close - 1
+            while (b >= 0 && raw[b] == ' ') b--
+            val insert = if (b < 0 || raw[b] == '{') " <<: *" else ", <<: *"
+            lines.replaceAt(
+                li,
+                raw.substring(0, b + 1) + insert + name + " " + raw.substring(close),
+            )
+            return lines.joinToString("\n")
+        }
         if (mergeLines.isNotEmpty()) {
             val li = mergeLines.first() - 1
             val raw = lines[li]

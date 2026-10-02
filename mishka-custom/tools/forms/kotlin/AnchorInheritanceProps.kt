@@ -124,5 +124,48 @@ fun main() {
     expect(multi.multi && multi.merges.toSet() == setOf("base", "hc"), "flow multi merge locked")
     expect(AnchorInheritance.setEntryMerge(multiDoc, ads, "hc") == null, "multi merge refuses surgery")
 
+    testFlowAnchors()
+
     println("anchor inheritance and second-level anchor tests passed")
+}
+
+private const val FLOW_SAMPLE = """providers-def: &providers { interval: 3600, proxy: DIRECT, health-check: { enable: true } }
+host-def: &host { additional-suffix: " [x]" }
+proxy-providers:
+  sub-a:
+    <<: *providers
+    url: https://example.com/a.yaml
+    override: { additional-prefix: "P/", <<: *host }
+  sub-b:
+    <<: *providers
+    url: https://example.com/b.yaml
+    override: { additional-prefix: "Q/" }
+"""
+
+/** 真实配置常见形态：锚点定义是 flow 映射、二级合并写在 flow 里——候选与读取都不能漏。 */
+private fun testFlowAnchors() {
+    val doc = reparsed(FLOW_SAMPLE)
+    val subA: YPath = listOf("proxy-providers", "sub-a")
+    val subB: YPath = listOf("proxy-providers", "sub-b")
+
+    val defs = AnchorInheritance.anchorDefs(doc)
+    expect(defs.first { it.name == "providers" }.isMap, "flow map anchor must count as mergeable map")
+    expect(defs.first { it.name == "host" }.isMap, "flow map anchor must count as mergeable map")
+
+    val states = AnchorInheritance.fieldStates(doc, subA)
+    val ov = states.first { it.key == "override" }
+    expect(ov.merges == listOf("host") && ov.isMap, "flow-field merge must be read")
+
+    // flow 内换绑 / 摘除 / 追加，其余 flow 内容逐字不动
+    val rebound = reparsed(AnchorInheritance.setFieldMerge(doc, subA, "override", "providers") ?: error("flow rebind rejected"))
+    val ovLine = rebound.lines[6]
+    expect(ovLine.contains("<<: *providers") && ovLine.contains("additional-prefix: \"P/\"") && !ovLine.contains("*host"), "flow rebind keeps other keys")
+    val removed = reparsed(AnchorInheritance.setFieldMerge(doc, subA, "override", null) ?: error("flow remove rejected"))
+    expect(removed.lines[6] == "    override: { additional-prefix: \"P/\" }", "flow remove strips merge and one comma")
+    val appended = reparsed(AnchorInheritance.setFieldMerge(doc, subB, "override", "host") ?: error("flow append rejected"))
+    expect(appended.lines[10] == "    override: { additional-prefix: \"Q/\", <<: *host }", "flow append inserts before closing brace")
+    expect(AnchorInheritance.fieldStates(appended, subB).first { it.key == "override" }.merges == listOf("host"), "appended flow merge readable")
+
+    // 一级读取在 flow 定义下依旧成立（候选过滤用 isMap，这里验证展开读参）
+    expect(FormValues.effectiveText(doc, subA + "interval") == "3600", "inherited value via flow anchor readable")
 }

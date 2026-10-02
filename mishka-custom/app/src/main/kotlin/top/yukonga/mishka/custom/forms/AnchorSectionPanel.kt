@@ -49,7 +49,8 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
     val states = remember(doc, base) { AnchorInheritance.fieldStates(doc, base) }
     val defs = remember(doc) { AnchorInheritance.anchorDefs(doc) }
     val entry = doc.get(base)
-    val headLine1 = entry?.let { (if (it.dash >= 0) it.dash else it.start) + 1 } ?: 0
+    // 块映射节点的 start 是第一个子行，键行要用 headLine0 推，否则「定义在本条目之前」会错偏一行
+    val headLine1 = entry?.let { AnchorInheritance.headLine0(it) + 1 } ?: 0
     var pickL1 by remember { mutableStateOf(false) }
     var pickField by remember { mutableStateOf(false) }
 
