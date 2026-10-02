@@ -169,6 +169,43 @@ internal object FormValues {
         }
     }
 
+    /**
+     * 展开视图（别名解开、`<<:` 合并后）里某条路径的值。源码没有本地行、值纯经锚点继承来的，
+     * 这里也能读到——可视化「读配置文件参数」走它，本地行优先于它（[readRaw] 等）。
+     */
+    fun effectiveValue(doc: YamlDoc, path: YPath): Any? {
+        var cur: Any? = PlainYaml.toPlain(doc)
+        for (seg in path) {
+            cur = when {
+                seg is Int && cur is List<*> -> cur.getOrNull(seg)
+                seg is String && cur is Map<*, *> -> cur[seg]
+                else -> return null
+            }
+        }
+        return cur
+    }
+
+    /** 展开视图里的标量文本（集合给 null）：继承来的 type / behavior 等判断用它。 */
+    fun effectiveText(doc: YamlDoc, path: YPath): String? = when (val v = effectiveValue(doc, path)) {
+        null -> null
+        is Map<*, *>, is List<*> -> null
+        is Boolean -> if (v) "true" else "false"
+        else -> v.toString()
+    }
+
+    /** 本地无值时按展开值给摘要（标量照写、布尔映开/关、集合报项数），尾标「继承」；无继承值返回 null。 */
+    fun describeEffective(doc: YamlDoc, field: FormField, path: YPath): String? = when (val v = effectiveValue(doc, path)) {
+        null -> null
+        is Map<*, *> -> "${v.size} 项（继承）"
+        is List<*> -> "${v.size} 项（继承）"
+        is Boolean -> (if (v) "开" else "关") + "（继承）"
+        else -> {
+            val s = v.toString()
+            val shown = if (field.type == FormFieldType.SELECT) field.options.firstOrNull { it.value == s }?.label ?: s else s
+            shown.take(60) + "（继承）"
+        }
+    }
+
     fun count(doc: YamlDoc, path: YPath): Int {
         val n = doc.get(path) ?: return 0
         return when (n.kind) {

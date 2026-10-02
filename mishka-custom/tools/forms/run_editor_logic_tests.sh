@@ -32,6 +32,9 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
   "$FORMS/ConfigRefs.kt" \
   "$FORMS/EbpfFormLogic.kt" \
   "$FORMS/FormMapListLogic.kt" \
+  "$FORMS/AnchorInheritance.kt" \
   "$SCRIPT_DIR/kotlin/EditorLogicProps.kt" \
+  "$SCRIPT_DIR/kotlin/AnchorInheritanceProps.kt" \
   -d "$BUILD_DIR"
 java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.forms.EditorLogicPropsKt
+java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.forms.AnchorInheritancePropsKt

@@ -1,0 +1,213 @@
+package top.yukonga.mishka.custom.forms
+
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import top.yukonga.mishka.platform.showToast
+import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.window.WindowDialog
+
+/**
+ * file 类型合集的「源文件」操作（对齐 mihomo_box `fileOpsCtl` 的 Android 版）：上传（SAF，二进制安全，
+ * 支持 .mrs）/ 在线编辑内容。相对路径按本订阅 imported/ 目录解析（mihomo 以工作目录启动，语义一致）；
+ * 绝对路径原样用。写盘直接 java.io，不经编辑器草稿——源文件不是配置本身，内核按 path 单独读它。
+ */
+
+/** `path` 配置值 → 实际文件：绝对路径原样；相对去掉 `./` 挂到 imported/ 目录下；无基目录返回 null。 */
+internal fun resolveProviderFile(baseDir: String?, cfgPath: String): File? {
+    val p = cfgPath.trim()
+    if (p.isEmpty()) return null
+    if (p.startsWith("/")) return File(p)
+    val b = baseDir?.trim() ?: return null
+    if (b.isEmpty()) return null
+    return File(b, p.removePrefix("./"))
+}
+
+private const val MAX_EDIT_BYTES = 4L * 1024 * 1024
+private const val MAX_UPLOAD_BYTES = 8L * 1024 * 1024
+
+@Composable
+internal fun ProviderFileOpsRow(
+    host: FormHost,
+    base: YPath,
+    kind: String,
+    defaultPath: String,
+    newFileText: String,
+) {
+    val doc = host.doc
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val localPath = FormValues.readRaw(doc, base + "path")?.ifBlank { null }
+    val cfgPath = localPath ?: defaultPath
+    val file = remember(host.fileBaseDir, cfgPath) { resolveProviderFile(host.fileBaseDir, cfgPath) }
+    val stat = remember(file, doc) { file?.takeIf { it.exists() }?.let { "${it.length()} 字节" } }
+    val isMrs = cfgPath.endsWith(".mrs", ignoreCase = true)
+    var editOpen by remember { mutableStateOf(false) }
+
+    /** 源文件操作落地前确保配置里有 path（没有就写默认相对路径），返回实际目标文件。 */
+    fun ensureTarget(): File? {
+        if (localPath == null) host.set(base + "path", defaultPath, "本地路径")
+        return resolveProviderFile(host.fileBaseDir, localPath ?: defaultPath)
+    }
+
+    val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val target = ensureTarget()
+        if (target == null) {
+            showToast("无法确定写入位置：缺少订阅目录", long = true)
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        val buf = readBytesLimited(input, MAX_UPLOAD_BYTES + 1)
+                        require(buf.size <= MAX_UPLOAD_BYTES) { "文件过大（>8MB）" }
+                        target.parentFile?.mkdirs()
+                        target.writeBytes(buf)
+                    } ?: error("读取所选文件失败")
+                }
+            }
+            result.fold(
+                onSuccess = {
+                    showToast("已上传 → ${target.path}")
+                    // 与参考实现一致：.mrs 文件名自动把 format 切到 mrs
+                    val name = target.name
+                    if (name.endsWith(".mrs", ignoreCase = true) && FormValues.readRaw(doc, base + "format") != "mrs") {
+                        host.set(base + "format", "mrs", "文件格式")
+                    }
+                },
+                onFailure = { showToast("上传失败：${it.message ?: it::class.simpleName}", long = true) },
+            )
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
+        BasicComponent(
+            title = "源文件",
+            summary = buildString {
+                append(cfgPath)
+                if (localPath == null) append("（默认路径，操作时写入配置）")
+                append(" · ")
+                append(stat ?: "文件不存在，上传 / 保存即创建")
+                if (isMrs) append(" · mrs 为二进制，只能上传替换")
+            },
+            endActions = {
+                TextButton(text = "上传", onClick = { uploadLauncher.launch(arrayOf("*/*")) })
+                TextButton(text = "编辑内容", onClick = {
+                    when {
+                        isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
+                        file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
+                            showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
+                        host.fileBaseDir == null && !cfgPath.startsWith("/") ->
+                            showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
+                        else -> editOpen = true
+                    }
+                })
+            },
+            onClick = { editOpen = true },
+        )
+    }
+
+    if (editOpen) {
+        FileContentDialog(
+            title = if (kind == "ep") "编辑规则集文件" else "编辑订阅文件",
+            file = file,
+            baseDir = host.fileBaseDir,
+            cfgPath = cfgPath,
+            newFileText = newFileText,
+            scope = scope,
+            onDismiss = { editOpen = false },
+            onSaved = {
+                editOpen = false
+                if (localPath == null) host.set(base + "path", defaultPath, "本地路径")
+                showToast("已保存源文件")
+            },
+        )
+    }
+}
+
+/** 在线编辑弹层：打开时 IO 读现有内容（不存在给模板），保存直接写文件。 */
+@Composable
+private fun FileContentDialog(
+    title: String,
+    file: File?,
+    baseDir: String?,
+    cfgPath: String,
+    newFileText: String,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+) {
+    var draft by remember { mutableStateOf<String?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    val target = file ?: remember(baseDir, cfgPath) { resolveProviderFile(baseDir, cfgPath) }
+    LaunchedEffect(target) {
+        draft = withContext(Dispatchers.IO) {
+            runCatching {
+                target?.takeIf { it.exists() }?.readText() ?: newFileText
+            }.getOrElse { failed = true; null }
+        }
+    }
+    val text = draft
+    WindowDialog(
+        show = true,
+        title = title,
+        summary = target?.path ?: cfgPath,
+        onDismissRequest = onDismiss,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (failed) DialogNote("读取文件失败，请在编辑器外检查权限。")
+            TextField(
+                value = text.orEmpty(),
+                onValueChange = { draft = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = "文件内容",
+                singleLine = false,
+            )
+            TextButton(text = "保存文件", onClick = {
+                val t = target ?: return@TextButton
+                val content = draft.orEmpty()
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) {
+                        runCatching { t.parentFile?.mkdirs(); t.writeText(content) }.isSuccess
+                    }
+                    if (ok) onSaved() else showToast("写入失败", long = true)
+                }
+            })
+        }
+    }
+}
+
+private fun readBytesLimited(input: java.io.InputStream, limit: Long): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(8192)
+    var total = 0L
+    while (true) {
+        val n = input.read(buf)
+        if (n < 0) break
+        total += n
+        if (total > limit) throw IllegalStateException("文件过大")
+        out.write(buf, 0, n)
+    }
+    return out.toByteArray()
+}

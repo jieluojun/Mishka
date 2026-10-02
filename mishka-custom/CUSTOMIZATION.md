@@ -26,7 +26,7 @@
 
 ### 文件与入口
 
-app 补丁共 25 个文件（17 个新 Kotlin 文件：anchor 5 + forms 12；另修改 8 个上游文件，13152 insertions / 1 deletion）。
+app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 = anchor 5 + forms 15；修改 8 个上游文件：导航 / 订阅页 / 编辑器入口 / 四份多语言资源），mishka-custom 侧 9 个（交付源码与工具的同步副本）。
 
 | 文件 | 职责 |
 | --- | --- |
@@ -47,6 +47,22 @@ app 补丁共 25 个文件（17 个新 Kotlin 文件：anchor 5 + forms 12；另
 | `custom/forms/P3FormEditors.kt` | DNS / headers / MAPLIST / FakeIP / APPLIST 等专用编辑对话框 |
 | `custom/forms/FormMapListLogic.kt` | MAPLIST 当前值校验与逐键安全写回计划 |
 | `custom/forms/EbpfFormLogic.kt` | listener 角色状态、兼容旧字段、保留非角色参数的写回与 FakeIP ICMP hook 条件 |
+| `custom/forms/AnchorInheritance.kt` | 一级（条目 `<<:`）/ 二级（字段级 `<<:` 与 `键: *`）锚点现状读取与行级手术，纯 Kotlin，`AnchorInheritanceProps` 性质测试覆盖 |
+| `custom/forms/AnchorSectionPanel.kt` | 代理合集 / 代理组 / 规则合集详情页的「YAML 锚点」区：继承换绑 / 清除 / 新挂 + 字段级挂 / 摘（`&定义` 动作下线，存量只摘不挂） |
+| `custom/forms/ProviderFileOps.kt` | file 类型合集的「源文件」操作：SAF 上传（二进制安全，.mrs 自动切 format）/ 在线编辑；相对 path 按本订阅 imported/ 目录解析 |
+
+### 本轮修复与优化（对齐 mihomo_box 20261001-1620 参考实现）
+
+1. **规则合集可视化读配置参数**：列表摘要与字段行在源码无本地行时回落到展开视图
+   （`FormValues.effectiveValue`，别名解开 + `<<:` 合并后的值），继承来的 type / behavior / format /
+   url / path 不再显示成「未设置」，尾标「继承」；代理集合同款。
+2. **锚点继承与二级锚点**：三个合集详情页新增「YAML 锚点」区（上表两文件），语义子集对齐
+   `anchorSection`：一级换绑 / 清除 / 新挂，二级字段挂 `<<:` / `*`、存量 `&` 摘除；多合并来源锁定；
+   候选只列定义在引用行之前的锚点，`<<:` 只列映射。
+3. **入站监听器按钮**：行内「↑ / 编辑 / 删」三按钮换成整行点按进详情 + 「⋯」菜单（上移 / 下移 /
+   删除两步确认），与其它列表页同款，窄屏不再截断。
+4. **file 类型合集源文件**：代理合集 / 规则合集详情页在 type=file 时显示「源文件」卡（上传 / 编辑内容），
+   编辑器经 `fileBaseDir`（本订阅 imported/ 目录）落盘；上传 .mrs 自动把 format 切成 mrs。
 
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 

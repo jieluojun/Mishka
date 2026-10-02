@@ -31,7 +31,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
 | `init/` | `no-debug.init.gradle`：构建 debug 变体时直接失败（默认只出 release） |
 | `ci/` | `build-release.yml`：只出 release 的 GitHub Actions 工作流（新增文件，不动上游 `build.yml`） |
 | `app/src/main/kotlin/top/yukonga/mishka/custom/anchor/` | 锚点面板的 5 个 Kotlin 源文件（方便直接阅读；补丁里也含同一份） |
-| `app/src/main/kotlin/top/yukonga/mishka/custom/forms/` | 配置表单的 12 个 Kotlin 源文件：保真 YAML 引擎、P1（26 小节 / 154 字段）、P2（266 字段 / 37 种规则 / 27 种协议）、P3 专用编辑器、表单值读取、引用检查、MAPLIST 写回逻辑及 eBPF listener 编辑逻辑 |
+| `app/src/main/kotlin/top/yukonga/mishka/custom/forms/` | 配置表单的 15 个 Kotlin 源文件：保真 YAML 引擎、P1（26 小节 / 154 字段）、P2（266 字段 / 37 种规则 / 27 种协议）、P3 专用编辑器、表单值读取（含锚点继承的展开值回落）、引用检查、MAPLIST 写回逻辑、eBPF listener 编辑逻辑、锚点继承/二级锚点手术与面板、file 类型合集源文件操作 |
 | `tools/` | 自检工具：补丁双向校验、语法门、API/具名参数核对、锚点算法三方可对拍、性质测试、模型新鲜度、表单引擎双实现对拍、可复现打包（`pack_deliver.sh`） |
 | `README.md` / `CUSTOMIZATION.md` / `BUILD.md` / `INSTALL.md` / `VERIFY.md` / `FORMS.md` / `FORMS-P1.md` / `FORMS-P2.md` | 交付说明、定制详解、构建、安装与回滚、已验证事实、配置表单设计与 P1 / P2 字段清单 |
 

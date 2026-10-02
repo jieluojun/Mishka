@@ -2393,12 +2393,565 @@ index 0000000..6c24053
 +        return if (at < 0) line else line.substring(0, at)
 +    }
 +}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
+new file mode 100644
+index 0000000..519c32d
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
+@@ -0,0 +1,279 @@
++package top.yukonga.mishka.custom.forms
++
++/**
++ * 条目级（一级）/ 字段级（二级）锚点的现状读取与行级手术，对齐 mihomo_box `anchorSection`
++ * （pages-flow.js）的语义子集：
++ *  - 一级 = 条目键行（映射的 `名字:` / 序列的 `- `）块内的 `<<: *name` 合并继承：换绑 / 清除 / 新挂；
++ *  - 二级 = 条目内子字段的 `<<: *name` 合并与 `键: *name` 整体引用：挂 / 换绑 / 摘除；
++ *  - `&定义` 动作已下线（与参考实现一致）：存量字段级 `&名` 只允许摘除，不新挂、不改名。
++ *
++ * 现状全部从 [YamlDoc] 行模型读（`<<` 合并键、alias、anchor 都在模型里标好），手术只重写目标行，
++ * 其余行逐字不动；形态拆不动（flow 单行条目、多合并来源）返回 null 由 UI 提示走编辑器。
++ */
++
++/** 条目的一级继承现状。[mergeLines] 为 `<<:` 行号（1 基）；[multi] = 多来源，UI 锁定不让改。 */
++internal data class EntryMergeState(
++    val merges: List<String>,
++    val mergeLines: List<Int>,
++    val multi: Boolean,
++)
++
++/** 条目内一个本地子字段的二级锚点现状。[absent] = 源码没有这个字段的本地行。 */
++internal data class FieldAnchorState(
++    val key: String,
++    val line1: Int,
++    val defAnchor: String?,
++    val aliasRef: String?,
++    val merges: List<String>,
++    val multi: Boolean,
++    val isMap: Boolean,
++    val absent: Boolean = false,
++)
++
++/** 全文锚点定义：名字 / 定义行（1 基）/ 是否为映射（`<<:` 只能指向映射）。 */
++internal data class AnchorDefInfo(val name: String, val line1: Int, val isMap: Boolean)
++
++internal object AnchorInheritance {
++
++    // ==================== 现状读取 ====================
++
++    fun entryMerges(doc: YamlDoc, base: YPath): EntryMergeState {
++        val n = doc.get(base) ?: return EntryMergeState(emptyList(), emptyList(), false)
++        val merges = ArrayList<String>()
++        val lines = ArrayList<Int>()
++        if (n.kind == YamlNode.Kind.MAP || n.kind == YamlNode.Kind.SEQ) {
++            for (e in n.entries) {
++                if (!e.isMerge) continue
++                collectAliases(e.node, merges)
++                lines.add(e.line + 1)
++            }
++        }
++        return EntryMergeState(merges, lines, merges.size > 1 || lines.size > 1)
++    }
++
++    private fun collectAliases(node: YamlNode?, out: MutableList<String>) {
++        when {
++            node == null -> Unit
++            node.kind == YamlNode.Kind.SEQ -> node.items.forEach { it.alias?.let(out::add) }
++            else -> node.alias?.let(out::add)
++        }
++    }
++
++    /** 条目内本地子字段的二级现状；flow 单行条目拆不动，返回空（UI 提示走一级或文本）。 */
++    fun fieldStates(doc: YamlDoc, base: YPath): List<FieldAnchorState> {
++        val n = doc.get(base) ?: return emptyList()
++        if (n.kind != YamlNode.Kind.MAP || n.flow) return emptyList()
++        return n.entries.filter { !it.isMerge }.map { e ->
++            val v = e.node
++            val merges = ArrayList<String>()
++            var multi = false
++            if (v != null && v.kind == YamlNode.Kind.MAP && !v.flow) {
++                val ms = v.entries.filter { it.isMerge }
++                ms.forEach { m -> collectAliases(m.node, merges) }
++                multi = ms.size > 1
++            }
++            FieldAnchorState(
++                key = e.key,
++                line1 = e.line + 1,
++                defAnchor = v?.anchor,
++                aliasRef = v?.takeIf { it.kind == YamlNode.Kind.RAW && !it.multi }?.alias,
++                merges = merges,
++                multi = multi,
++                isMap = v?.kind == YamlNode.Kind.MAP && !v.flow,
++            )
++        }
++    }
++
++    /** 全文 `&定义` 清单（递归走节点树）：候选列表与「定义在引用行之前」硬规则用它。 */
++    fun anchorDefs(doc: YamlDoc): List<AnchorDefInfo> {
++        val out = ArrayList<AnchorDefInfo>()
++        fun walk(n: YamlNode?) {
++            if (n == null) return
++            n.anchor?.let { out.add(AnchorDefInfo(it, n.start + 1, n.kind == YamlNode.Kind.MAP && !n.flow)) }
++            n.entries.forEach { walk(it.node) }
++            n.items.forEach { walk(it) }
++        }
++        walk(doc.root)
++        return out
++    }
++
++    // ==================== 行级手术 ====================
++
++    /** 行尾裸注释（含 `#`），无则空串。本地复刻一份，避免 forms 包依赖 anchor 包（离线对拍要单编本包）。 */
++    private fun trailingComment(line: String): String {
++        var quote: Char? = null
++        for (i in line.indices) {
++            val c = line[i]
++            if (quote != null) {
++                if (c == quote) quote = null
++                continue
++            }
++            when (c) {
++                '"', '\'' -> quote = c
++                '#' -> if (i == 0 || line[i - 1].isWhitespace()) return line.substring(i).trimEnd()
++            }
++        }
++        return ""
++    }
++
++    private fun indentOf(line: String): Int = line.takeWhile { it == ' ' || it == '\t' }.length
++
++    /** 条目块子行的缩进：首个子键 / 首个序列项的缩进，没有就按表头缩进 + 2。 */
++    private fun childIndent(n: YamlNode): Int {
++        val head = indentOfLine(n)
++        val first = n.entries.firstOrNull()?.keyIndent ?: n.items.firstOrNull()?.indent
++        return first ?: head + 2
++    }
++
++    /** 表头行（映射键行 / dash 行）的缩进。 */
++    private fun indentOfLine(n: YamlNode): Int = n.indent
++
++    /**
++     * 表头行下标（0 基）：序列项 = dash 行；flow = 自身行；块映射的 [YamlNode.start] 是第一个子行，
++     * 键行在它前一行。
++     */
++    fun headLine0(n: YamlNode): Int = when {
++        n.dash >= 0 -> n.dash
++        n.flow -> n.start
++        else -> n.start - 1
++    }
++
++    private fun MutableList<String>.replaceAt(index: Int, line: String) { this[index] = line }
++
++    /**
++     * 一级继承换绑 / 清除 / 新挂。[name] 为 null = 不继承（删 `<<:` 行）。
++     * 多来源、flow 条目返回 null（拒绝）。dash 行内联 `<<`（`- <<: *a`）只替换段、不动 dash。
++     */
++    fun setEntryMerge(doc: YamlDoc, base: YPath, name: String?): String? {
++        val n = doc.get(base) ?: return null
++        if (n.flow) return null
++        val st = entryMerges(doc, base)
++        if (st.multi) return null
++        val lines = doc.lines.toMutableList()
++        if (st.mergeLines.isNotEmpty()) {
++            val li = st.mergeLines.first() - 1
++            val raw = lines[li]
++            val trimmed = raw.trimStart()
++            val comment = trailingComment(raw)
++            val tail = if (comment.isEmpty()) "" else " " + comment
++            if (trimmed.startsWith("<<")) {
++                if (name == null) lines.removeAt(li)
++                else lines.replaceAt(li, " ".repeat(indentOf(raw)) + "<<: *" + name + tail)
++            } else {
++                // dash 行内联（`- <<: *a` / `- &x <<: *a`）：只摘 / 换 `<<:` 段
++                val re = Regex("<<\\s*:\\s*\\*[^\\s]+")
++                if (name == null) {
++                    val stripped = re.replace(raw, "").replace(Regex("\\s+$"), "")
++                    lines.replaceAt(li, stripped)
++                } else {
++                    lines.replaceAt(li, re.replace(raw, "<<: *" + name))
++                }
++            }
++            return lines.joinToString("\n")
++        }
++        if (name == null) return null
++        val head = headLine0(n)
++        lines.add(head + 1, " ".repeat(childIndent(n)) + "<<: *" + name)
++        return lines.joinToString("\n")
++    }
++
++    /**
++     * 二级整体引用 `键: *name`。[name] 为 null = 清除引用，用 [restore] 回填本地值
++     * （展开视图里该字段的生效标量；不是标量时调用方传 null → 拒绝，宁不动）。
++     */
++    fun setFieldAlias(doc: YamlDoc, base: YPath, key: String, name: String?, restore: String?): String? {
++        val n = doc.get(base) ?: return null
++        if (n.kind != YamlNode.Kind.MAP || n.flow) return null
++        val e = doc.findEntry(n, key)
++        val lines = doc.lines.toMutableList()
++        val ci = childIndent(n)
++        if (e == null) {
++            if (name == null) return null
++            val head = headLine0(n)
++            lines.add(head + 1, " ".repeat(ci) + key + ": *" + name)
++            return lines.joinToString("\n")
++        }
++        val li = e.line
++        val raw = lines[li]
++        val comment = trailingComment(raw)
++        val tail = if (comment.isEmpty()) "" else " " + comment
++        val v = e.node
++        val blockEnd = v?.end ?: li + 1
++        if (name != null) {
++            // 块式子行一起删：整段换成 `键: *name`
++            repeat(blockEnd - 1 - li) { lines.removeAt(li + 1) }
++            lines.replaceAt(li, " ".repeat(e.keyIndent) + key + ": *" + name + tail)
++        } else {
++            if (restore == null) return null
++            repeat(blockEnd - 1 - li) { lines.removeAt(li + 1) }
++            lines.replaceAt(li, " ".repeat(e.keyIndent) + key + ": " + restore + tail)
++        }
++        return lines.joinToString("\n")
++    }
++
++    /**
++     * 二级合并继承：字段块内挂 / 换绑 / 摘 `<<: *name`。字段不存在时新建 `键:` + `<<:` 两行；
++     * 字段是标量 / 别名（合并无意义）返回 null。
++     */
++    fun setFieldMerge(doc: YamlDoc, base: YPath, key: String, name: String?): String? {
++        val n = doc.get(base) ?: return null
++        if (n.kind != YamlNode.Kind.MAP || n.flow) return null
++        val e = doc.findEntry(n, key)
++        val lines = doc.lines.toMutableList()
++        val ci = childIndent(n)
++        if (e == null) {
++            if (name == null) return null
++            val head = headLine0(n)
++            lines.add(head + 1, " ".repeat(ci) + key + ":")
++            lines.add(head + 2, " ".repeat(ci + 2) + "<<: *" + name)
++            return lines.joinToString("\n")
++        }
++        val v = e.node
++        val emptyValue = v == null || doc.isNullText(v)
++        if (!emptyValue && !(v.kind == YamlNode.Kind.MAP && !v.flow)) return null
++        val merges = ArrayList<String>()
++        val mergeLines = ArrayList<Int>()
++        if (v != null && v.kind == YamlNode.Kind.MAP) {
++            for (m in v.entries) {
++                if (!m.isMerge) continue
++                collectAliases(m.node, merges)
++                mergeLines.add(m.line + 1)
++            }
++        }
++        if (merges.size > 1 || mergeLines.size > 1) return null
++        if (mergeLines.isNotEmpty()) {
++            val li = mergeLines.first() - 1
++            val raw = lines[li]
++            val comment = trailingComment(raw)
++            val tail = if (comment.isEmpty()) "" else " " + comment
++            if (name == null) lines.removeAt(li)
++            else lines.replaceAt(li, " ".repeat(indentOf(raw)) + "<<: *" + name + tail)
++            return lines.joinToString("\n")
++        }
++        if (name == null) return null
++        val fieldIndent = e.keyIndent
++        lines.add(e.line + 1, " ".repeat(fieldIndent + 2) + "<<: *" + name)
++        return lines.joinToString("\n")
++    }
++
++    /** 摘除存量字段级 `&名`（定义动作下线后的唯一出口）：`键: &x 值` → `键: 值`。 */
++    fun removeFieldDef(doc: YamlDoc, base: YPath, key: String): String? {
++        val n = doc.get(base) ?: return null
++        if (n.kind != YamlNode.Kind.MAP || n.flow) return null
++        val e = doc.findEntry(n, key) ?: return null
++        val v = e.node ?: return null
++        val def = v.anchor ?: return null
++        val li = e.line
++        val lines = doc.lines.toMutableList()
++        val raw = lines[li]
++        val token = "&" + def
++        val at = raw.indexOf(token)
++        if (at < 0) return null
++        var tailStart = at + token.length
++        while (tailStart < raw.length && raw[tailStart] == ' ') tailStart++
++        val head = raw.substring(0, at).trimEnd(' ')
++        val tail = raw.substring(tailStart)
++        lines[li] = if (tail.isEmpty()) head else head + " " + tail
++        return lines.joinToString("\n")
++    }
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
+new file mode 100644
+index 0000000..c8c7c27
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
+@@ -0,0 +1,262 @@
++package top.yukonga.mishka.custom.forms
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import top.yukonga.mishka.platform.showToast
++import top.yukonga.miuix.kmp.basic.BasicComponent
++import top.yukonga.miuix.kmp.basic.Card
++import top.yukonga.miuix.kmp.basic.CardDefaults
++import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.basic.TextButton
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++import top.yukonga.miuix.kmp.window.WindowDialog
++
++/**
++ * 详情页的「YAML 锚点」区（对齐 mihomo_box `anchorSection`）：一级 = 条目键行 `<<: *name` 合并继承
++ * （换绑 / 清除 / 新挂）；二级 = 条目内子字段的 `<<:` 合并与 `键: *name` 整体引用。
++ * `&定义` 动作已下线：存量字段级 `&名` 只能摘除。候选锚点只列**定义在本条目行之前**的（YAML 无前向别名），
++ * `<<:` 只列映射锚点——两条硬规则与锚点面板一致。
++ */
++
++/** 各合集的已知字段序（参考实现 knownFieldsByTop），二级选择器按它排。 */
++private val ANCHOR_FIELD_CANDIDATES: Map<String, List<String>> = mapOf(
++    "proxy-providers" to listOf(
++        "type", "url", "interval", "proxy", "path", "header", "format",
++        "health-check", "override", "filter", "exclude-filter", "exclude-type",
++    ),
++    "proxy-groups" to listOf(
++        "name", "type", "proxies", "use", "url", "interval", "timeout", "tolerance", "lazy",
++        "expected-status", "max-failed-times", "hidden", "icon", "filter", "exclude-filter",
++        "exclude-type", "strategy", "disable-udp", "interface-name", "routing-mark",
++    ),
++    "rule-providers" to listOf("type", "behavior", "url", "path", "interval", "proxy", "header", "format"),
++)
++
++@Composable
++internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
++    val doc = host.doc
++    val l1 = remember(doc, base) { AnchorInheritance.entryMerges(doc, base) }
++    val states = remember(doc, base) { AnchorInheritance.fieldStates(doc, base) }
++    val defs = remember(doc) { AnchorInheritance.anchorDefs(doc) }
++    val entry = doc.get(base)
++    val headLine1 = entry?.let { (if (it.dash >= 0) it.dash else it.start) + 1 } ?: 0
++    var pickL1 by remember { mutableStateOf(false) }
++    var pickField by remember { mutableStateOf(false) }
++
++    Column(modifier = Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
++        SectionHeader("YAML 锚点")
++        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
++            BasicComponent(
++                title = "继承锚点 <<:",
++                summary = when {
++                    l1.multi -> "合并来源 ${l1.merges.size} 个（${l1.merges.joinToString("、") { "*$it" }}），为不破坏原结构已锁定；如需调整请在编辑器里改"
++                    l1.merges.isNotEmpty() -> "继承 *${l1.merges.first()} · 可换绑到其它锚点，或选「(不继承)」删除这一行"
++                    else -> "未继承 · 选一个锚点，把它的字段并进来当默认（本地同名字段仍是覆写）"
++                },
++                endActions = { TextButton(text = "选择", onClick = { pickL1 = true }) },
++                onClick = { pickL1 = true },
++            )
++        }
++        val chipText = buildString {
++            val parts = ArrayList<String>()
++            states.forEach { f ->
++                f.defAnchor?.let { parts.add("${f.key} &${it}") }
++                if (f.merges.isNotEmpty()) parts.add("${f.key} <<:${if (f.multi) "多来源" else "*" + f.merges.first()}")
++                f.aliasRef?.let { parts.add("${f.key} *${it}") }
++            }
++            if (parts.isEmpty()) append("未设置字段级锚点") else append(parts.joinToString(" · "))
++            append(" · 字段级 &定义 已下线，存量点「编辑」里 × 摘除")
++        }
++        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
++            BasicComponent(
++                title = "二级锚点（字段级）",
++                summary = chipText,
++                endActions = { TextButton(text = "编辑", onClick = { pickField = true }) },
++                onClick = { pickField = true },
++            )
++        }
++    }
++
++    if (pickL1) {
++        val options = listOf(FormOption("", "(不继承)")) +
++            defs.filter { it.line1 < headLine1 && it.isMap }.map { FormOption(it.name, it.name) }
++        OptionPickerDialog(
++            title = "继承锚点",
++            summary = "只列定义在本条目之前、且是映射的锚点；选「(不继承)」删除 <<: 行",
++            options = options,
++            current = if (l1.merges.size == 1) l1.merges.first() else null,
++            onDismiss = { pickL1 = false },
++            onPick = { v ->
++                pickL1 = false
++                val want = v.ifEmpty { null }
++                if (l1.merges.size == 1 && want == l1.merges.first()) return@OptionPickerDialog
++                if (want == null && l1.merges.isEmpty()) return@OptionPickerDialog
++                val newText = AnchorInheritance.setEntryMerge(doc, base, want)
++                if (newText == null) showToast("继承未改动：这个位置不能这样写，请在编辑器里直接改", long = true)
++                else host.applyRawText(newText, "继承锚点", entry?.let { it.start + 1 })
++            },
++        )
++    }
++    if (pickField) {
++        FieldAnchorDialog(
++            host = host, base = base, topKey = topKey, states = states,
++            defs = defs, headLine1 = headLine1, entryLine0 = entry?.start ?: 0,
++            onDismiss = { pickField = false },
++        )
++    }
++}
++
++/** 二级锚点编辑弹层：现状 chips（× 摘除）+ 字段 / 动作 / 锚点三选 + 应用。 */
++@Composable
++private fun FieldAnchorDialog(
++    host: FormHost,
++    base: YPath,
++    topKey: String,
++    states: List<FieldAnchorState>,
++    defs: List<AnchorDefInfo>,
++    headLine1: Int,
++    entryLine0: Int,
++    onDismiss: () -> Unit,
++) {
++    val doc = host.doc
++    val known = ANCHOR_FIELD_CANDIDATES[topKey].orEmpty()
++    // 本地字段 + 已知但源码没写的字段（可新挂）；已知序在前
++    val fieldNames = (states.map { it.key } + known).distinct().sortedBy { k ->
++        val i = known.indexOf(k); if (i >= 0) i else 999
++    }
++    var field by remember { mutableStateOf<String?>(null) }
++    var mode by remember { mutableStateOf("merge") }
++    var anchor by remember { mutableStateOf<String?>(null) }
++    var pickField by remember { mutableStateOf(false) }
++    var pickMode by remember { mutableStateOf(false) }
++    var pickAnchor by remember { mutableStateOf(false) }
++
++    fun stateOf(key: String): FieldAnchorState? = states.firstOrNull { it.key == key }
++
++    fun apply() {
++        val key = field ?: run { showToast("请先选择字段", long = true); return }
++        val name = anchor
++        val out = when (mode) {
++            "alias" -> {
++                if (name == null) {
++                    // 清除整体引用：用展开视图里的生效标量回填；非标量宁不动
++                    val restore = FormValues.effectiveText(doc, base + key)
++                    AnchorInheritance.setFieldAlias(doc, base, key, null, restore)
++                } else AnchorInheritance.setFieldAlias(doc, base, key, name, null)
++            }
++            else -> AnchorInheritance.setFieldMerge(doc, base, key, name)
++        }
++        if (out == null) showToast("字段锚点未改动：该字段形态不支持这个操作，请在编辑器里直接改", long = true)
++        else host.applyRawText(out, "字段锚点 $key", entryLine0 + 1)
++    }
++
++    WindowDialog(
++        show = true,
++        title = "二级锚点（字段级）",
++        summary = "继承 <<: 要求字段是映射；整体引用 * 任意值都行。选中锚点后该字段即以锚点内容生效。",
++        onDismissRequest = onDismiss,
++    ) {
++        Column(modifier = Modifier.fillMaxWidth()) {
++            val active = states.filter { it.defAnchor != null || it.aliasRef != null || it.merges.isNotEmpty() }
++            if (active.isEmpty()) Text(
++                text = "条目内没有字段级锚点",
++                fontSize = 12.sp,
++                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++            )
++            active.forEach { f ->
++                val label = buildString {
++                    append(f.key)
++                    f.defAnchor?.let { append(" · 定义 &$it") }
++                    if (f.merges.isNotEmpty()) append(if (f.multi) " · 继承多来源（锁定）" else " · 继承 <<: *${f.merges.first()}")
++                    f.aliasRef?.let { append(" · 引用 *$it") }
++                }
++                BasicComponent(
++                    title = label,
++                    endActions = {
++                        if (!f.multi) TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
++                            val out = when {
++                                f.aliasRef != null -> AnchorInheritance.setFieldAlias(
++                                    doc, base, f.key, null, FormValues.effectiveText(doc, base + f.key),
++                                )
++                                f.merges.isNotEmpty() -> AnchorInheritance.setFieldMerge(doc, base, f.key, null)
++                                f.defAnchor != null -> AnchorInheritance.removeFieldDef(doc, base, f.key)
++                                else -> null
++                            }
++                            if (out == null) showToast("摘除未改动：请在编辑器里直接改", long = true)
++                            else { onDismiss(); host.applyRawText(out, "字段锚点 ${f.key}", f.line1) }
++                        })
++                    },
++                )
++            }
++            BasicComponent(
++                title = "字段",
++                summary = field ?: "(选择字段)",
++                endActions = { TextButton(text = "选择", onClick = { pickField = true }) },
++                onClick = { pickField = true },
++            )
++            BasicComponent(
++                title = "动作",
++                summary = if (mode == "merge") "继承合并 <<:" else "整体字段引用 *",
++                endActions = { TextButton(text = "切换", onClick = { pickMode = true }) },
++                onClick = { pickMode = true },
++            )
++            BasicComponent(
++                title = "锚点",
++                summary = anchor?.let { "*$it" } ?: if (mode == "merge") "(不继承)" else "(恢复为本地值)",
++                endActions = { TextButton(text = "选择", onClick = { pickAnchor = true }) },
++                onClick = { pickAnchor = true },
++            )
++            TextButton(text = "应用", onClick = { apply() })
++        }
++    }
++
++    if (pickField) {
++        OptionPickerDialog(
++            title = "选择字段",
++            options = fieldNames.map { k ->
++                val st = stateOf(k)
++                val mark = buildString {
++                    st?.defAnchor?.let { append(" &$it") }
++                    if (st?.merges?.isNotEmpty() == true) append(" «${st.merges.joinToString("+")}»")
++                    st?.aliasRef?.let { append(" *$it") }
++                }
++                FormOption(k, k + mark)
++            },
++            current = field,
++            onDismiss = { pickField = false },
++            onPick = { field = it; pickField = false; anchor = null },
++        )
++    }
++    if (pickMode) {
++        OptionPickerDialog(
++            title = "选择动作",
++            options = listOf(FormOption("merge", "继承合并 <<:"), FormOption("alias", "整体字段引用 *")),
++            current = mode,
++            onDismiss = { pickMode = false },
++            onPick = { mode = it; pickMode = false; anchor = null },
++        )
++    }
++    if (pickAnchor) {
++        // 字段级同样遵守「定义在引用行之前」：用字段行号（已有本地行）或条目行号（新挂）
++        val beforeLine = stateOf(field.orEmpty())?.line1 ?: headLine1
++        val options = listOf(FormOption("", if (mode == "merge") "(不继承)" else "(恢复为本地值)")) +
++            defs.filter { it.line1 < beforeLine && (mode == "alias" || it.isMap) }.map { FormOption(it.name, it.name) }
++        OptionPickerDialog(
++            title = "选择锚点",
++            options = options,
++            current = anchor,
++            onDismiss = { pickAnchor = false },
++            onPick = { anchor = it.ifEmpty { null }; pickAnchor = false },
++        )
++    }
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..9d3c781
+index 0000000..e3d1b5d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1332 @@
+@@ -0,0 +1,1365 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -2473,6 +3026,7 @@ index 0000000..9d3c781
 +    controller: CodeEditorController,
 +    fileName: String,
 +    onClose: () -> Unit,
++    fileBaseDir: String? = null,
 +) {
 +    val version = if (visible) controller.documentVersion else -1
 +    val text = remember(version) { if (visible) controller.getText() else "" }
@@ -2495,7 +3049,7 @@ index 0000000..9d3c781
 +        showToast(toast)
 +    }
 +
-+    val host = remember(doc) { FormHost(doc, ::apply) }
++    val host = remember(doc, fileBaseDir) { FormHost(doc, ::apply, fileBaseDir) }
 +    val route = nav.current
 +
 +    WindowBottomSheet(
@@ -2584,7 +3138,19 @@ index 0000000..9d3c781
 +internal class FormHost(
 +    val doc: YamlDoc,
 +    private val applyText: (newText: String, toast: String, revealLine1: Int?) -> Unit,
++    /** 当前编辑文件所属订阅的 imported/ 目录；file 类型合集的源文件上传 / 编辑靠它落盘。null = 无文件能力。 */
++    val fileBaseDir: String? = null,
 +) {
++    /** 行级手术（锚点继承等）的落地通道：整篇替换，与 set / batch 同一套「无变化」提示。 */
++    fun applyRawText(newText: String, label: String, revealLine1: Int? = null): Boolean {
++        if (newText == doc.dump()) {
++            showToast("$label 没有变化")
++            return false
++        }
++        applyText(newText, "已写入 $label", revealLine1)
++        return true
++    }
++
 +    private fun refuse(label: String) {
 +        // 引擎拒绝（路径下面是纯值 / 别名、flow 里装不下的集合或多行文本…）：宁可不动
 +        showToast("$label 未改动：这个位置不能这样写，请在编辑器里直接改这一段", long = true)
@@ -2914,6 +3480,7 @@ index 0000000..9d3c781
 +    val count = if (node?.kind == YamlNode.Kind.SEQ) node.items.size else 0
 +    var chooseType by remember(doc) { mutableStateOf(false) }
 +    var deleting by remember(doc) { mutableStateOf<Int?>(null) }
++    var menu by remember(doc) { mutableStateOf<Int?>(null) }
 +
 +    Column(modifier = Modifier.fillMaxWidth()) {
 +        SectionHeader("监听器（$count）")
@@ -2935,11 +3502,9 @@ index 0000000..9d3c781
 +                    summary = "$type · ${listenerSummary(doc, index)}",
 +                    onClick = { nav.push(FormRoute.Listener(index)) },
 +                    endActions = {
-+                        TextButton(text = "↑", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-+                            if (index > 0) host.moveItem(path, index, index - 1, "监听器")
-+                        })
-+                        TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { nav.push(FormRoute.Listener(index)) })
-+                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { deleting = index })
++                        // 整行点按 = 编辑；挪 / 删收进「⋯」菜单（与其它列表页同款），
++                        // 旧版行内「↑ / 编辑 / 删」三按钮在窄屏上挤得摘要换行、「删」被截断
++                        TextButton(text = "⋯", minWidth = 0.dp, minHeight = 0.dp, onClick = { menu = index })
 +                    },
 +                )
 +            }
@@ -2952,6 +3517,21 @@ index 0000000..9d3c781
 +        )
 +    }
 +
++    menu?.let { index ->
++        if (index < count) {
++            ItemMenuDialog(
++                title = listenerName(doc, index).ifBlank { "监听器 #${index + 1}" },
++                summary = "`${pathText(path + index)}`",
++                canUp = index > 0,
++                canDown = index < count - 1,
++                onUp = { host.moveItem(path, index, index - 1, "监听器") },
++                onDown = { host.moveItem(path, index, index + 1, "监听器") },
++                onDelete = { deleting = index },
++                onDismiss = { menu = null },
++                deleteDirect = true,
++            )
++        } else menu = null
++    }
 +    if (chooseType) {
 +        OptionPickerDialog(
 +            title = "选择监听器类型",
@@ -3404,18 +3984,24 @@ index 0000000..9d3c781
 +        if (intercept != null && intercept(field, path, value)) return true
 +        return if (value == null) host.clear(path, field.label) else host.set(path, value, field.label)
 +    }
++    // 源码无本地行但展开视图（锚点继承）有值时照配置参数显示，尾标「继承」——可视化不丢继承来的参数
++    val inherited = if (hasVal) null else FormValues.describeEffective(doc, field, path)
 +    val summary = when {
 +        field.type == FormFieldType.BOOL -> {
 +            val v = FormValues.readBool(doc, path)
 +            when {
 +                hasVal && v != null -> if (v) "开" else "关"
 +                hasVal -> FormValues.readRaw(doc, path).orEmpty().take(40)
++                inherited != null -> inherited
 +                field.asSwitch -> "未设置（默认${if (field.default == true) "开" else "关"}）"
 +                field.default != null -> "默认（不覆写，内核默认${if (field.default) "开" else "关"}）"
 +                else -> if (tri) "默认（不覆写）" else "未设置"
 +            }
 +        }
-+        else -> FormValues.describe(doc, field, path)
++        else -> {
++            val local = FormValues.describe(doc, field, path)
++            if (local == "未设置" && inherited != null) inherited else local
++        }
 +    }
 +
 +    fun openEditor() {
@@ -4348,10 +4934,10 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..05e4dbd
+index 0000000..ce5401c
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2110 @@
+@@ -0,0 +1,2152 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -5172,9 +5758,14 @@ index 0000000..05e4dbd
 +        rowSummary = { name, node ->
 +            if (node == null || node.kind != YamlNode.Kind.MAP) "（不是映射，只能在编辑器里改）"
 +            else {
-+                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node).orEmpty()
++                // 本地行优先；纯经 <<: *锚点 继承来的参数走展开视图，列表摘要不丢配置参数
++                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node)
++                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "type")
++                    ?: ""
 +                val src = FormValues.scalarText(doc, doc.findEntry(node, "url")?.node)
 +                    ?: FormValues.scalarText(doc, doc.findEntry(node, "path")?.node)
++                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "url")
++                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "path")
 +                buildString {
 +                    append(typeLabel(PROVIDER_TYPES, type))
 +                    if (type == "inline") append(" · ").append(FormValues.count(doc, PROVIDERS_PATH + name + "payload")).append(" 个节点")
@@ -5259,6 +5850,20 @@ index 0000000..05e4dbd
 +        host = host,
 +        onlyType = type,
 +        intercept = intercept,
++        footer = {
++            Column {
++            if (type == "file") {
++                ProviderFileOpsRow(
++                    host = host,
++                    base = base,
++                    kind = "sub",
++                    defaultPath = "./proxies/${safeFileStem(name, "provider")}.yaml",
++                    newFileText = "proxies:\n  # - { name: node1, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: xxx }\n",
++                )
++            }
++            AnchorSectionCard(host, "proxy-providers", base)
++            }
++        },
 +        header = {
 +            DetailHeader(
 +                title = name,
@@ -5667,6 +6272,7 @@ index 0000000..05e4dbd
 +        base = base,
 +        host = host,
 +        onlyType = effType,
++        footer = { AnchorSectionCard(host, "proxy-groups", base) },
 +        dynamicOptions = { field, path ->
 +            when (field.path) {
 +                "proxies" -> host.candidates("policies", exclude = setOf(name), current = FormValues.readListField(doc, field, path))
@@ -6030,11 +6636,18 @@ index 0000000..05e4dbd
 +        rowSummary = { name, node ->
 +            if (node == null || node.kind != YamlNode.Kind.MAP) "（不是映射，只能在编辑器里改）"
 +            else {
-+                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node).orEmpty()
++                // 本地行优先；纯经 <<: *锚点 继承来的参数走展开视图，列表摘要不丢配置参数
++                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node)
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "type")
++                    ?: ""
 +                val behavior = FormValues.scalarText(doc, doc.findEntry(node, "behavior")?.node)
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "behavior")
 +                val format = FormValues.scalarText(doc, doc.findEntry(node, "format")?.node)
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "format")
 +                val src = FormValues.scalarText(doc, doc.findEntry(node, "url")?.node)
 +                    ?: FormValues.scalarText(doc, doc.findEntry(node, "path")?.node)
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "url")
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "path")
 +                buildString {
 +                    append(typeLabel(RULE_PROVIDER_TYPES, type))
 +                    behavior?.let { append(" · ").append(it) }
@@ -6098,6 +6711,7 @@ index 0000000..05e4dbd
 +        return
 +    }
 +    val type = FormValues.readRaw(doc, base + "type")?.ifBlank { null } ?: effectiveText(doc, base + "type") ?: "http"
++    val format = FormValues.readRaw(doc, base + "format")?.ifBlank { null } ?: effectiveText(doc, base + "format") ?: "yaml"
 +    var renaming by remember { mutableStateOf(false) }
 +    var payloadEditor by remember { mutableStateOf(false) }
 +    var deleting by remember { mutableStateOf<DeleteFlow?>(null) }
@@ -6124,6 +6738,20 @@ index 0000000..05e4dbd
 +        host = host,
 +        onlyType = type,
 +        intercept = intercept,
++        footer = {
++            Column {
++            if (type == "file") {
++                ProviderFileOpsRow(
++                    host = host,
++                    base = base,
++                    kind = "ep",
++                    defaultPath = "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(format)}",
++                    newFileText = "# 新建规则集文件（内容取决于 behavior）\n# domain：每行一个域名/后缀\n#   .google.com\n# ipcidr：每行一个 CIDR\n#   91.108.56.0/22\n# classical：YAML payload 规则列表\npayload:\n  # - DOMAIN-SUFFIX,example.com\n",
++                )
++            }
++            AnchorSectionCard(host, "rule-providers", base)
++            }
++        },
 +        header = {
 +            DetailHeader(
 +                title = name,
@@ -10762,10 +11390,10 @@ index 0000000..f5758c0
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
 new file mode 100644
-index 0000000..53eef41
+index 0000000..29efe3d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,275 @@
 +package top.yukonga.mishka.custom.forms
 +
 +/** 文档内的一段路径：字符串段走映射键，Int 段走序列下标（与 [YamlDoc.splitPath] 的产物同型）。 */
@@ -10934,6 +11562,43 @@ index 0000000..53eef41
 +                    add(entry.key to scalarText(doc, value).orEmpty())
 +                }
 +            }
++        }
++    }
++
++    /**
++     * 展开视图（别名解开、`<<:` 合并后）里某条路径的值。源码没有本地行、值纯经锚点继承来的，
++     * 这里也能读到——可视化「读配置文件参数」走它，本地行优先于它（[readRaw] 等）。
++     */
++    fun effectiveValue(doc: YamlDoc, path: YPath): Any? {
++        var cur: Any? = PlainYaml.toPlain(doc)
++        for (seg in path) {
++            cur = when {
++                seg is Int && cur is List<*> -> cur.getOrNull(seg)
++                seg is String && cur is Map<*, *> -> cur[seg]
++                else -> return null
++            }
++        }
++        return cur
++    }
++
++    /** 展开视图里的标量文本（集合给 null）：继承来的 type / behavior 等判断用它。 */
++    fun effectiveText(doc: YamlDoc, path: YPath): String? = when (val v = effectiveValue(doc, path)) {
++        null -> null
++        is Map<*, *>, is List<*> -> null
++        is Boolean -> if (v) "true" else "false"
++        else -> v.toString()
++    }
++
++    /** 本地无值时按展开值给摘要（标量照写、布尔映开/关、集合报项数），尾标「继承」；无继承值返回 null。 */
++    fun describeEffective(doc: YamlDoc, field: FormField, path: YPath): String? = when (val v = effectiveValue(doc, path)) {
++        null -> null
++        is Map<*, *> -> "${v.size} 项（继承）"
++        is List<*> -> "${v.size} 项（继承）"
++        is Boolean -> (if (v) "开" else "关") + "（继承）"
++        else -> {
++            val s = v.toString()
++            val shown = if (field.type == FormFieldType.SELECT) field.options.firstOrNull { it.value == s }?.label ?: s else s
++            shown.take(60) + "（继承）"
 +        }
 +    }
 +
@@ -12036,6 +12701,225 @@ index 0000000..ffe329b
 +            }
 +        }
 +    }
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
+new file mode 100644
+index 0000000..71f3289
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
+@@ -0,0 +1,213 @@
++package top.yukonga.mishka.custom.forms
++
++import android.net.Uri
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.LocalContext
++import java.io.File
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++import top.yukonga.mishka.platform.showToast
++import top.yukonga.miuix.kmp.basic.BasicComponent
++import top.yukonga.miuix.kmp.basic.Card
++import top.yukonga.miuix.kmp.basic.CardDefaults
++import top.yukonga.miuix.kmp.basic.TextButton
++import top.yukonga.miuix.kmp.basic.TextField
++import top.yukonga.miuix.kmp.window.WindowDialog
++
++/**
++ * file 类型合集的「源文件」操作（对齐 mihomo_box `fileOpsCtl` 的 Android 版）：上传（SAF，二进制安全，
++ * 支持 .mrs）/ 在线编辑内容。相对路径按本订阅 imported/ 目录解析（mihomo 以工作目录启动，语义一致）；
++ * 绝对路径原样用。写盘直接 java.io，不经编辑器草稿——源文件不是配置本身，内核按 path 单独读它。
++ */
++
++/** `path` 配置值 → 实际文件：绝对路径原样；相对去掉 `./` 挂到 imported/ 目录下；无基目录返回 null。 */
++internal fun resolveProviderFile(baseDir: String?, cfgPath: String): File? {
++    val p = cfgPath.trim()
++    if (p.isEmpty()) return null
++    if (p.startsWith("/")) return File(p)
++    val b = baseDir?.trim() ?: return null
++    if (b.isEmpty()) return null
++    return File(b, p.removePrefix("./"))
++}
++
++private const val MAX_EDIT_BYTES = 4L * 1024 * 1024
++private const val MAX_UPLOAD_BYTES = 8L * 1024 * 1024
++
++@Composable
++internal fun ProviderFileOpsRow(
++    host: FormHost,
++    base: YPath,
++    kind: String,
++    defaultPath: String,
++    newFileText: String,
++) {
++    val doc = host.doc
++    val context = LocalContext.current
++    val scope = rememberCoroutineScope()
++    val localPath = FormValues.readRaw(doc, base + "path")?.ifBlank { null }
++    val cfgPath = localPath ?: defaultPath
++    val file = remember(host.fileBaseDir, cfgPath) { resolveProviderFile(host.fileBaseDir, cfgPath) }
++    val stat = remember(file, doc) { file?.takeIf { it.exists() }?.let { "${it.length()} 字节" } }
++    val isMrs = cfgPath.endsWith(".mrs", ignoreCase = true)
++    var editOpen by remember { mutableStateOf(false) }
++
++    /** 源文件操作落地前确保配置里有 path（没有就写默认相对路径），返回实际目标文件。 */
++    fun ensureTarget(): File? {
++        if (localPath == null) host.set(base + "path", defaultPath, "本地路径")
++        return resolveProviderFile(host.fileBaseDir, localPath ?: defaultPath)
++    }
++
++    val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
++        if (uri == null) return@rememberLauncherForActivityResult
++        val target = ensureTarget()
++        if (target == null) {
++            showToast("无法确定写入位置：缺少订阅目录", long = true)
++            return@rememberLauncherForActivityResult
++        }
++        scope.launch {
++            val result = withContext(Dispatchers.IO) {
++                runCatching {
++                    context.contentResolver.openInputStream(uri)?.use { input ->
++                        val buf = readBytesLimited(input, MAX_UPLOAD_BYTES + 1)
++                        require(buf.size <= MAX_UPLOAD_BYTES) { "文件过大（>8MB）" }
++                        target.parentFile?.mkdirs()
++                        target.writeBytes(buf)
++                    } ?: error("读取所选文件失败")
++                }
++            }
++            result.fold(
++                onSuccess = {
++                    showToast("已上传 → ${target.path}")
++                    // 与参考实现一致：.mrs 文件名自动把 format 切到 mrs
++                    val name = target.name
++                    if (name.endsWith(".mrs", ignoreCase = true) && FormValues.readRaw(doc, base + "format") != "mrs") {
++                        host.set(base + "format", "mrs", "文件格式")
++                    }
++                },
++                onFailure = { showToast("上传失败：${it.message ?: it::class.simpleName}", long = true) },
++            )
++        }
++    }
++
++    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
++        BasicComponent(
++            title = "源文件",
++            summary = buildString {
++                append(cfgPath)
++                if (localPath == null) append("（默认路径，操作时写入配置）")
++                append(" · ")
++                append(stat ?: "文件不存在，上传 / 保存即创建")
++                if (isMrs) append(" · mrs 为二进制，只能上传替换")
++            },
++            endActions = {
++                TextButton(text = "上传", onClick = { uploadLauncher.launch(arrayOf("*/*")) })
++                TextButton(text = "编辑内容", onClick = {
++                    when {
++                        isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
++                        file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
++                            showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
++                        host.fileBaseDir == null && !cfgPath.startsWith("/") ->
++                            showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
++                        else -> editOpen = true
++                    }
++                })
++            },
++            onClick = { editOpen = true },
++        )
++    }
++
++    if (editOpen) {
++        FileContentDialog(
++            title = if (kind == "ep") "编辑规则集文件" else "编辑订阅文件",
++            file = file,
++            baseDir = host.fileBaseDir,
++            cfgPath = cfgPath,
++            newFileText = newFileText,
++            scope = scope,
++            onDismiss = { editOpen = false },
++            onSaved = {
++                editOpen = false
++                if (localPath == null) host.set(base + "path", defaultPath, "本地路径")
++                showToast("已保存源文件")
++            },
++        )
++    }
++}
++
++/** 在线编辑弹层：打开时 IO 读现有内容（不存在给模板），保存直接写文件。 */
++@Composable
++private fun FileContentDialog(
++    title: String,
++    file: File?,
++    baseDir: String?,
++    cfgPath: String,
++    newFileText: String,
++    scope: kotlinx.coroutines.CoroutineScope,
++    onDismiss: () -> Unit,
++    onSaved: () -> Unit,
++) {
++    var draft by remember { mutableStateOf<String?>(null) }
++    var failed by remember { mutableStateOf(false) }
++    val target = file ?: remember(baseDir, cfgPath) { resolveProviderFile(baseDir, cfgPath) }
++    LaunchedEffect(target) {
++        draft = withContext(Dispatchers.IO) {
++            runCatching {
++                target?.takeIf { it.exists() }?.readText() ?: newFileText
++            }.getOrElse { failed = true; null }
++        }
++    }
++    val text = draft
++    WindowDialog(
++        show = true,
++        title = title,
++        summary = target?.path ?: cfgPath,
++        onDismissRequest = onDismiss,
++    ) {
++        Column(modifier = Modifier.fillMaxWidth()) {
++            if (failed) DialogNote("读取文件失败，请在编辑器外检查权限。")
++            TextField(
++                value = text.orEmpty(),
++                onValueChange = { draft = it },
++                modifier = Modifier.fillMaxWidth(),
++                label = "文件内容",
++                singleLine = false,
++            )
++            TextButton(text = "保存文件", onClick = {
++                val t = target ?: return@TextButton
++                val content = draft.orEmpty()
++                scope.launch {
++                    val ok = withContext(Dispatchers.IO) {
++                        runCatching { t.parentFile?.mkdirs(); t.writeText(content) }.isSuccess
++                    }
++                    if (ok) onSaved() else showToast("写入失败", long = true)
++                }
++            })
++        }
++    }
++}
++
++private fun readBytesLimited(input: java.io.InputStream, limit: Long): ByteArray {
++    val out = java.io.ByteArrayOutputStream()
++    val buf = ByteArray(8192)
++    var total = 0L
++    while (true) {
++        val n = input.read(buf)
++        if (n < 0) break
++        total += n
++        if (total > limit) throw IllegalStateException("文件过大")
++        out.write(buf, 0, n)
++    }
++    return out.toByteArray()
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 new file mode 100644
@@ -13207,7 +14091,7 @@ index bdb96f7..c5f8970 100644
      @Serializable
      data object AppProxy : Route
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
-index b1b2479..42a8975 100644
+index b1b2479..6c54327 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 @@ -31,6 +31,8 @@ import top.yukonga.mishka.platform.ProfileFileManager
@@ -13281,7 +14165,7 @@ index b1b2479..42a8975 100644
                          val canSave = controller.isModified && !isSaving && fileManager != null
                          IconButton(
                              enabled = canSave,
-@@ -192,6 +222,22 @@ fun FileManagerEditorScreen(
+@@ -192,6 +222,24 @@ fun FileManagerEditorScreen(
                          .weight(1f),
                  )
              }
@@ -13295,11 +14179,13 @@ index b1b2479..42a8975 100644
 +            )
 +
 +            // [mishka-custom] 配置表单：同一套约定——只改被编辑的键，改动先落草稿
++            // fileBaseDir：file 类型合集的源文件上传 / 编辑按本订阅 imported/ 目录解析相对 path
 +            MishkaConfigFormPanel(
 +                visible = showFormPanel,
 +                controller = controller,
 +                fileName = relativePath,
 +                onClose = { showFormPanel = false },
++                fileBaseDir = fileManager?.getImportedDir(uuid),
 +            )
          }
      }
@@ -13403,3 +14289,1257 @@ index d1acc59..b419b27 100644
 +    <string name="subscription_visual_config">Visual config</string>
 +    <string name="subscription_visual_config_summary">Edit this subscription’s YAML config with structured forms</string>
  </resources>
+diff --git a/mishka-custom/CUSTOMIZATION.md b/mishka-custom/CUSTOMIZATION.md
+index 8bc4b54..4ac8b4b 100644
+--- a/mishka-custom/CUSTOMIZATION.md
++++ b/mishka-custom/CUSTOMIZATION.md
+@@ -26,7 +26,7 @@
+ 
+ ### 文件与入口
+ 
+-app 补丁共 25 个文件（17 个新 Kotlin 文件：anchor 5 + forms 12；另修改 8 个上游文件，13152 insertions / 1 deletion）。
++app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 = anchor 5 + forms 15；修改 8 个上游文件：导航 / 订阅页 / 编辑器入口 / 四份多语言资源），mishka-custom 侧 9 个（交付源码与工具的同步副本）。
+ 
+ | 文件 | 职责 |
+ | --- | --- |
+@@ -47,6 +47,22 @@ app 补丁共 25 个文件（17 个新 Kotlin 文件：anchor 5 + forms 12；另
+ | `custom/forms/P3FormEditors.kt` | DNS / headers / MAPLIST / FakeIP / APPLIST 等专用编辑对话框 |
+ | `custom/forms/FormMapListLogic.kt` | MAPLIST 当前值校验与逐键安全写回计划 |
+ | `custom/forms/EbpfFormLogic.kt` | listener 角色状态、兼容旧字段、保留非角色参数的写回与 FakeIP ICMP hook 条件 |
++| `custom/forms/AnchorInheritance.kt` | 一级（条目 `<<:`）/ 二级（字段级 `<<:` 与 `键: *`）锚点现状读取与行级手术，纯 Kotlin，`AnchorInheritanceProps` 性质测试覆盖 |
++| `custom/forms/AnchorSectionPanel.kt` | 代理合集 / 代理组 / 规则合集详情页的「YAML 锚点」区：继承换绑 / 清除 / 新挂 + 字段级挂 / 摘（`&定义` 动作下线，存量只摘不挂） |
++| `custom/forms/ProviderFileOps.kt` | file 类型合集的「源文件」操作：SAF 上传（二进制安全，.mrs 自动切 format）/ 在线编辑；相对 path 按本订阅 imported/ 目录解析 |
++
++### 本轮修复与优化（对齐 mihomo_box 20261001-1620 参考实现）
++
++1. **规则合集可视化读配置参数**：列表摘要与字段行在源码无本地行时回落到展开视图
++   （`FormValues.effectiveValue`，别名解开 + `<<:` 合并后的值），继承来的 type / behavior / format /
++   url / path 不再显示成「未设置」，尾标「继承」；代理集合同款。
++2. **锚点继承与二级锚点**：三个合集详情页新增「YAML 锚点」区（上表两文件），语义子集对齐
++   `anchorSection`：一级换绑 / 清除 / 新挂，二级字段挂 `<<:` / `*`、存量 `&` 摘除；多合并来源锁定；
++   候选只列定义在引用行之前的锚点，`<<:` 只列映射。
++3. **入站监听器按钮**：行内「↑ / 编辑 / 删」三按钮换成整行点按进详情 + 「⋯」菜单（上移 / 下移 /
++   删除两步确认），与其它列表页同款，窄屏不再截断。
++4. **file 类型合集源文件**：代理合集 / 规则合集详情页在 type=file 时显示「源文件」卡（上传 / 编辑内容），
++   编辑器经 `fileBaseDir`（本订阅 imported/ 目录）落盘；上传 .mrs 自动把 format 切成 mrs。
+ 
+ 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
+ 
+diff --git a/mishka-custom/README.md b/mishka-custom/README.md
+index c7b38ea..9a236aa 100644
+--- a/mishka-custom/README.md
++++ b/mishka-custom/README.md
+@@ -31,7 +31,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
+ | `init/` | `no-debug.init.gradle`：构建 debug 变体时直接失败（默认只出 release） |
+ | `ci/` | `build-release.yml`：只出 release 的 GitHub Actions 工作流（新增文件，不动上游 `build.yml`） |
+ | `app/src/main/kotlin/top/yukonga/mishka/custom/anchor/` | 锚点面板的 5 个 Kotlin 源文件（方便直接阅读；补丁里也含同一份） |
+-| `app/src/main/kotlin/top/yukonga/mishka/custom/forms/` | 配置表单的 12 个 Kotlin 源文件：保真 YAML 引擎、P1（26 小节 / 154 字段）、P2（266 字段 / 37 种规则 / 27 种协议）、P3 专用编辑器、表单值读取、引用检查、MAPLIST 写回逻辑及 eBPF listener 编辑逻辑 |
++| `app/src/main/kotlin/top/yukonga/mishka/custom/forms/` | 配置表单的 15 个 Kotlin 源文件：保真 YAML 引擎、P1（26 小节 / 154 字段）、P2（266 字段 / 37 种规则 / 27 种协议）、P3 专用编辑器、表单值读取（含锚点继承的展开值回落）、引用检查、MAPLIST 写回逻辑、eBPF listener 编辑逻辑、锚点继承/二级锚点手术与面板、file 类型合集源文件操作 |
+ | `tools/` | 自检工具：补丁双向校验、语法门、API/具名参数核对、锚点算法三方可对拍、性质测试、模型新鲜度、表单引擎双实现对拍、可复现打包（`pack_deliver.sh`） |
+ | `README.md` / `CUSTOMIZATION.md` / `BUILD.md` / `INSTALL.md` / `VERIFY.md` / `FORMS.md` / `FORMS-P1.md` / `FORMS-P2.md` | 交付说明、定制详解、构建、安装与回滚、已验证事实、配置表单设计与 P1 / P2 字段清单 |
+ 
+diff --git a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
+new file mode 100644
+index 0000000..519c32d
+--- /dev/null
++++ b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
+@@ -0,0 +1,279 @@
++package top.yukonga.mishka.custom.forms
++
++/**
++ * 条目级（一级）/ 字段级（二级）锚点的现状读取与行级手术，对齐 mihomo_box `anchorSection`
++ * （pages-flow.js）的语义子集：
++ *  - 一级 = 条目键行（映射的 `名字:` / 序列的 `- `）块内的 `<<: *name` 合并继承：换绑 / 清除 / 新挂；
++ *  - 二级 = 条目内子字段的 `<<: *name` 合并与 `键: *name` 整体引用：挂 / 换绑 / 摘除；
++ *  - `&定义` 动作已下线（与参考实现一致）：存量字段级 `&名` 只允许摘除，不新挂、不改名。
++ *
++ * 现状全部从 [YamlDoc] 行模型读（`<<` 合并键、alias、anchor 都在模型里标好），手术只重写目标行，
++ * 其余行逐字不动；形态拆不动（flow 单行条目、多合并来源）返回 null 由 UI 提示走编辑器。
++ */
++
++/** 条目的一级继承现状。[mergeLines] 为 `<<:` 行号（1 基）；[multi] = 多来源，UI 锁定不让改。 */
++internal data class EntryMergeState(
++    val merges: List<String>,
++    val mergeLines: List<Int>,
++    val multi: Boolean,
++)
++
++/** 条目内一个本地子字段的二级锚点现状。[absent] = 源码没有这个字段的本地行。 */
++internal data class FieldAnchorState(
++    val key: String,
++    val line1: Int,
++    val defAnchor: String?,
++    val aliasRef: String?,
++    val merges: List<String>,
++    val multi: Boolean,
++    val isMap: Boolean,
++    val absent: Boolean = false,
++)
++
++/** 全文锚点定义：名字 / 定义行（1 基）/ 是否为映射（`<<:` 只能指向映射）。 */
++internal data class AnchorDefInfo(val name: String, val line1: Int, val isMap: Boolean)
++
++internal object AnchorInheritance {
++
++    // ==================== 现状读取 ====================
++
++    fun entryMerges(doc: YamlDoc, base: YPath): EntryMergeState {
++        val n = doc.get(base) ?: return EntryMergeState(emptyList(), emptyList(), false)
++        val merges = ArrayList<String>()
++        val lines = ArrayList<Int>()
++        if (n.kind == YamlNode.Kind.MAP || n.kind == YamlNode.Kind.SEQ) {
++            for (e in n.entries) {
++                if (!e.isMerge) continue
++                collectAliases(e.node, merges)
++                lines.add(e.line + 1)
++            }
++        }
++        return EntryMergeState(merges, lines, merges.size > 1 || lines.size > 1)
++    }
++
++    private fun collectAliases(node: YamlNode?, out: MutableList<String>) {
++        when {
++            node == null -> Unit
++            node.kind == YamlNode.Kind.SEQ -> node.items.forEach { it.alias?.let(out::add) }
++            else -> node.alias?.let(out::add)
++        }
++    }
++
++    /** 条目内本地子字段的二级现状；flow 单行条目拆不动，返回空（UI 提示走一级或文本）。 */
++    fun fieldStates(doc: YamlDoc, base: YPath): List<FieldAnchorState> {
++        val n = doc.get(base) ?: return emptyList()
++        if (n.kind != YamlNode.Kind.MAP || n.flow) return emptyList()
++        return n.entries.filter { !it.isMerge }.map { e ->
++            val v = e.node
++            val merges = ArrayList<String>()
++            var multi = false
++            if (v != null && v.kind == YamlNode.Kind.MAP && !v.flow) {
++                val ms = v.entries.filter { it.isMerge }
++                ms.forEach { m -> collectAliases(m.node, merges) }
++                multi = ms.size > 1
++            }
++            FieldAnchorState(
++                key = e.key,
++                line1 = e.line + 1,
++                defAnchor = v?.anchor,
++                aliasRef = v?.takeIf { it.kind == YamlNode.Kind.RAW && !it.multi }?.alias,
++                merges = merges,
++                multi = multi,
++                isMap = v?.kind == YamlNode.Kind.MAP && !v.flow,
++            )
++        }
++    }
++
++    /** 全文 `&定义` 清单（递归走节点树）：候选列表与「定义在引用行之前」硬规则用它。 */
++    fun anchorDefs(doc: YamlDoc): List<AnchorDefInfo> {
++        val out = ArrayList<AnchorDefInfo>()
++        fun walk(n: YamlNode?) {
++            if (n == null) return
++            n.anchor?.let { out.add(AnchorDefInfo(it, n.start + 1, n.kind == YamlNode.Kind.MAP && !n.flow)) }
++            n.entries.forEach { walk(it.node) }
++            n.items.forEach { walk(it) }
++        }
++        walk(doc.root)
++        return out
++    }
++
++    // ==================== 行级手术 ====================
++
++    /** 行尾裸注释（含 `#`），无则空串。本地复刻一份，避免 forms 包依赖 anchor 包（离线对拍要单编本包）。 */
++    private fun trailingComment(line: String): String {
++        var quote: Char? = null
++        for (i in line.indices) {
++            val c = line[i]
++            if (quote != null) {
++                if (c == quote) quote = null
++                continue
++            }
++            when (c) {
++                '"', '\'' -> quote = c
++                '#' -> if (i == 0 || line[i - 1].isWhitespace()) return line.substring(i).trimEnd()
++            }
++        }
++        return ""
++    }
++
++    private fun indentOf(line: String): Int = line.takeWhile { it == ' ' || it == '\t' }.length
++
++    /** 条目块子行的缩进：首个子键 / 首个序列项的缩进，没有就按表头缩进 + 2。 */
++    private fun childIndent(n: YamlNode): Int {
++        val head = indentOfLine(n)
++        val first = n.entries.firstOrNull()?.keyIndent ?: n.items.firstOrNull()?.indent
++        return first ?: head + 2
++    }
++
++    /** 表头行（映射键行 / dash 行）的缩进。 */
++    private fun indentOfLine(n: YamlNode): Int = n.indent
++
++    /**
++     * 表头行下标（0 基）：序列项 = dash 行；flow = 自身行；块映射的 [YamlNode.start] 是第一个子行，
++     * 键行在它前一行。
++     */
++    fun headLine0(n: YamlNode): Int = when {
++        n.dash >= 0 -> n.dash
++        n.flow -> n.start
++        else -> n.start - 1
++    }
++
++    private fun MutableList<String>.replaceAt(index: Int, line: String) { this[index] = line }
++
++    /**
++     * 一级继承换绑 / 清除 / 新挂。[name] 为 null = 不继承（删 `<<:` 行）。
++     * 多来源、flow 条目返回 null（拒绝）。dash 行内联 `<<`（`- <<: *a`）只替换段、不动 dash。
++     */
++    fun setEntryMerge(doc: YamlDoc, base: YPath, name: String?): String? {
++        val n = doc.get(base) ?: return null
++        if (n.flow) return null
++        val st = entryMerges(doc, base)
++        if (st.multi) return null
++        val lines = doc.lines.toMutableList()
++        if (st.mergeLines.isNotEmpty()) {
++            val li = st.mergeLines.first() - 1
++            val raw = lines[li]
++            val trimmed = raw.trimStart()
++            val comment = trailingComment(raw)
++            val tail = if (comment.isEmpty()) "" else " " + comment
++            if (trimmed.startsWith("<<")) {
++                if (name == null) lines.removeAt(li)
++                else lines.replaceAt(li, " ".repeat(indentOf(raw)) + "<<: *" + name + tail)
++            } else {
++                // dash 行内联（`- <<: *a` / `- &x <<: *a`）：只摘 / 换 `<<:` 段
++                val re = Regex("<<\\s*:\\s*\\*[^\\s]+")
++                if (name == null) {
++                    val stripped = re.replace(raw, "").replace(Regex("\\s+$"), "")
++                    lines.replaceAt(li, stripped)
++                } else {
++                    lines.replaceAt(li, re.replace(raw, "<<: *" + name))
++                }
++            }
++            return lines.joinToString("\n")
++        }
++        if (name == null) return null
++        val head = headLine0(n)
++        lines.add(head + 1, " ".repeat(childIndent(n)) + "<<: *" + name)
++        return lines.joinToString("\n")
++    }
++
++    /**
++     * 二级整体引用 `键: *name`。[name] 为 null = 清除引用，用 [restore] 回填本地值
++     * （展开视图里该字段的生效标量；不是标量时调用方传 null → 拒绝，宁不动）。
++     */
++    fun setFieldAlias(doc: YamlDoc, base: YPath, key: String, name: String?, restore: String?): String? {
++        val n = doc.get(base) ?: return null
++        if (n.kind != YamlNode.Kind.MAP || n.flow) return null
++        val e = doc.findEntry(n, key)
++        val lines = doc.lines.toMutableList()
++        val ci = childIndent(n)
++        if (e == null) {
++            if (name == null) return null
++            val head = headLine0(n)
++            lines.add(head + 1, " ".repeat(ci) + key + ": *" + name)
++            return lines.joinToString("\n")
++        }
++        val li = e.line
++        val raw = lines[li]
++        val comment = trailingComment(raw)
++        val tail = if (comment.isEmpty()) "" else " " + comment
++        val v = e.node
++        val blockEnd = v?.end ?: li + 1
++        if (name != null) {
++            // 块式子行一起删：整段换成 `键: *name`
++            repeat(blockEnd - 1 - li) { lines.removeAt(li + 1) }
++            lines.replaceAt(li, " ".repeat(e.keyIndent) + key + ": *" + name + tail)
++        } else {
++            if (restore == null) return null
++            repeat(blockEnd - 1 - li) { lines.removeAt(li + 1) }
++            lines.replaceAt(li, " ".repeat(e.keyIndent) + key + ": " + restore + tail)
++        }
++        return lines.joinToString("\n")
++    }
++
++    /**
++     * 二级合并继承：字段块内挂 / 换绑 / 摘 `<<: *name`。字段不存在时新建 `键:` + `<<:` 两行；
++     * 字段是标量 / 别名（合并无意义）返回 null。
++     */
++    fun setFieldMerge(doc: YamlDoc, base: YPath, key: String, name: String?): String? {
++        val n = doc.get(base) ?: return null
++        if (n.kind != YamlNode.Kind.MAP || n.flow) return null
++        val e = doc.findEntry(n, key)
++        val lines = doc.lines.toMutableList()
++        val ci = childIndent(n)
++        if (e == null) {
++            if (name == null) return null
++            val head = headLine0(n)
++            lines.add(head + 1, " ".repeat(ci) + key + ":")
++            lines.add(head + 2, " ".repeat(ci + 2) + "<<: *" + name)
++            return lines.joinToString("\n")
++        }
++        val v = e.node
++        val emptyValue = v == null || doc.isNullText(v)
++        if (!emptyValue && !(v.kind == YamlNode.Kind.MAP && !v.flow)) return null
++        val merges = ArrayList<String>()
++        val mergeLines = ArrayList<Int>()
++        if (v != null && v.kind == YamlNode.Kind.MAP) {
++            for (m in v.entries) {
++                if (!m.isMerge) continue
++                collectAliases(m.node, merges)
++                mergeLines.add(m.line + 1)
++            }
++        }
++        if (merges.size > 1 || mergeLines.size > 1) return null
++        if (mergeLines.isNotEmpty()) {
++            val li = mergeLines.first() - 1
++            val raw = lines[li]
++            val comment = trailingComment(raw)
++            val tail = if (comment.isEmpty()) "" else " " + comment
++            if (name == null) lines.removeAt(li)
++            else lines.replaceAt(li, " ".repeat(indentOf(raw)) + "<<: *" + name + tail)
++            return lines.joinToString("\n")
++        }
++        if (name == null) return null
++        val fieldIndent = e.keyIndent
++        lines.add(e.line + 1, " ".repeat(fieldIndent + 2) + "<<: *" + name)
++        return lines.joinToString("\n")
++    }
++
++    /** 摘除存量字段级 `&名`（定义动作下线后的唯一出口）：`键: &x 值` → `键: 值`。 */
++    fun removeFieldDef(doc: YamlDoc, base: YPath, key: String): String? {
++        val n = doc.get(base) ?: return null
++        if (n.kind != YamlNode.Kind.MAP || n.flow) return null
++        val e = doc.findEntry(n, key) ?: return null
++        val v = e.node ?: return null
++        val def = v.anchor ?: return null
++        val li = e.line
++        val lines = doc.lines.toMutableList()
++        val raw = lines[li]
++        val token = "&" + def
++        val at = raw.indexOf(token)
++        if (at < 0) return null
++        var tailStart = at + token.length
++        while (tailStart < raw.length && raw[tailStart] == ' ') tailStart++
++        val head = raw.substring(0, at).trimEnd(' ')
++        val tail = raw.substring(tailStart)
++        lines[li] = if (tail.isEmpty()) head else head + " " + tail
++        return lines.joinToString("\n")
++    }
++}
+diff --git a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
+new file mode 100644
+index 0000000..c8c7c27
+--- /dev/null
++++ b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
+@@ -0,0 +1,262 @@
++package top.yukonga.mishka.custom.forms
++
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.padding
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import top.yukonga.mishka.platform.showToast
++import top.yukonga.miuix.kmp.basic.BasicComponent
++import top.yukonga.miuix.kmp.basic.Card
++import top.yukonga.miuix.kmp.basic.CardDefaults
++import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.basic.TextButton
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++import top.yukonga.miuix.kmp.window.WindowDialog
++
++/**
++ * 详情页的「YAML 锚点」区（对齐 mihomo_box `anchorSection`）：一级 = 条目键行 `<<: *name` 合并继承
++ * （换绑 / 清除 / 新挂）；二级 = 条目内子字段的 `<<:` 合并与 `键: *name` 整体引用。
++ * `&定义` 动作已下线：存量字段级 `&名` 只能摘除。候选锚点只列**定义在本条目行之前**的（YAML 无前向别名），
++ * `<<:` 只列映射锚点——两条硬规则与锚点面板一致。
++ */
++
++/** 各合集的已知字段序（参考实现 knownFieldsByTop），二级选择器按它排。 */
++private val ANCHOR_FIELD_CANDIDATES: Map<String, List<String>> = mapOf(
++    "proxy-providers" to listOf(
++        "type", "url", "interval", "proxy", "path", "header", "format",
++        "health-check", "override", "filter", "exclude-filter", "exclude-type",
++    ),
++    "proxy-groups" to listOf(
++        "name", "type", "proxies", "use", "url", "interval", "timeout", "tolerance", "lazy",
++        "expected-status", "max-failed-times", "hidden", "icon", "filter", "exclude-filter",
++        "exclude-type", "strategy", "disable-udp", "interface-name", "routing-mark",
++    ),
++    "rule-providers" to listOf("type", "behavior", "url", "path", "interval", "proxy", "header", "format"),
++)
++
++@Composable
++internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
++    val doc = host.doc
++    val l1 = remember(doc, base) { AnchorInheritance.entryMerges(doc, base) }
++    val states = remember(doc, base) { AnchorInheritance.fieldStates(doc, base) }
++    val defs = remember(doc) { AnchorInheritance.anchorDefs(doc) }
++    val entry = doc.get(base)
++    val headLine1 = entry?.let { (if (it.dash >= 0) it.dash else it.start) + 1 } ?: 0
++    var pickL1 by remember { mutableStateOf(false) }
++    var pickField by remember { mutableStateOf(false) }
++
++    Column(modifier = Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
++        SectionHeader("YAML 锚点")
++        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
++            BasicComponent(
++                title = "继承锚点 <<:",
++                summary = when {
++                    l1.multi -> "合并来源 ${l1.merges.size} 个（${l1.merges.joinToString("、") { "*$it" }}），为不破坏原结构已锁定；如需调整请在编辑器里改"
++                    l1.merges.isNotEmpty() -> "继承 *${l1.merges.first()} · 可换绑到其它锚点，或选「(不继承)」删除这一行"
++                    else -> "未继承 · 选一个锚点，把它的字段并进来当默认（本地同名字段仍是覆写）"
++                },
++                endActions = { TextButton(text = "选择", onClick = { pickL1 = true }) },
++                onClick = { pickL1 = true },
++            )
++        }
++        val chipText = buildString {
++            val parts = ArrayList<String>()
++            states.forEach { f ->
++                f.defAnchor?.let { parts.add("${f.key} &${it}") }
++                if (f.merges.isNotEmpty()) parts.add("${f.key} <<:${if (f.multi) "多来源" else "*" + f.merges.first()}")
++                f.aliasRef?.let { parts.add("${f.key} *${it}") }
++            }
++            if (parts.isEmpty()) append("未设置字段级锚点") else append(parts.joinToString(" · "))
++            append(" · 字段级 &定义 已下线，存量点「编辑」里 × 摘除")
++        }
++        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
++            BasicComponent(
++                title = "二级锚点（字段级）",
++                summary = chipText,
++                endActions = { TextButton(text = "编辑", onClick = { pickField = true }) },
++                onClick = { pickField = true },
++            )
++        }
++    }
++
++    if (pickL1) {
++        val options = listOf(FormOption("", "(不继承)")) +
++            defs.filter { it.line1 < headLine1 && it.isMap }.map { FormOption(it.name, it.name) }
++        OptionPickerDialog(
++            title = "继承锚点",
++            summary = "只列定义在本条目之前、且是映射的锚点；选「(不继承)」删除 <<: 行",
++            options = options,
++            current = if (l1.merges.size == 1) l1.merges.first() else null,
++            onDismiss = { pickL1 = false },
++            onPick = { v ->
++                pickL1 = false
++                val want = v.ifEmpty { null }
++                if (l1.merges.size == 1 && want == l1.merges.first()) return@OptionPickerDialog
++                if (want == null && l1.merges.isEmpty()) return@OptionPickerDialog
++                val newText = AnchorInheritance.setEntryMerge(doc, base, want)
++                if (newText == null) showToast("继承未改动：这个位置不能这样写，请在编辑器里直接改", long = true)
++                else host.applyRawText(newText, "继承锚点", entry?.let { it.start + 1 })
++            },
++        )
++    }
++    if (pickField) {
++        FieldAnchorDialog(
++            host = host, base = base, topKey = topKey, states = states,
++            defs = defs, headLine1 = headLine1, entryLine0 = entry?.start ?: 0,
++            onDismiss = { pickField = false },
++        )
++    }
++}
++
++/** 二级锚点编辑弹层：现状 chips（× 摘除）+ 字段 / 动作 / 锚点三选 + 应用。 */
++@Composable
++private fun FieldAnchorDialog(
++    host: FormHost,
++    base: YPath,
++    topKey: String,
++    states: List<FieldAnchorState>,
++    defs: List<AnchorDefInfo>,
++    headLine1: Int,
++    entryLine0: Int,
++    onDismiss: () -> Unit,
++) {
++    val doc = host.doc
++    val known = ANCHOR_FIELD_CANDIDATES[topKey].orEmpty()
++    // 本地字段 + 已知但源码没写的字段（可新挂）；已知序在前
++    val fieldNames = (states.map { it.key } + known).distinct().sortedBy { k ->
++        val i = known.indexOf(k); if (i >= 0) i else 999
++    }
++    var field by remember { mutableStateOf<String?>(null) }
++    var mode by remember { mutableStateOf("merge") }
++    var anchor by remember { mutableStateOf<String?>(null) }
++    var pickField by remember { mutableStateOf(false) }
++    var pickMode by remember { mutableStateOf(false) }
++    var pickAnchor by remember { mutableStateOf(false) }
++
++    fun stateOf(key: String): FieldAnchorState? = states.firstOrNull { it.key == key }
++
++    fun apply() {
++        val key = field ?: run { showToast("请先选择字段", long = true); return }
++        val name = anchor
++        val out = when (mode) {
++            "alias" -> {
++                if (name == null) {
++                    // 清除整体引用：用展开视图里的生效标量回填；非标量宁不动
++                    val restore = FormValues.effectiveText(doc, base + key)
++                    AnchorInheritance.setFieldAlias(doc, base, key, null, restore)
++                } else AnchorInheritance.setFieldAlias(doc, base, key, name, null)
++            }
++            else -> AnchorInheritance.setFieldMerge(doc, base, key, name)
++        }
++        if (out == null) showToast("字段锚点未改动：该字段形态不支持这个操作，请在编辑器里直接改", long = true)
++        else host.applyRawText(out, "字段锚点 $key", entryLine0 + 1)
++    }
++
++    WindowDialog(
++        show = true,
++        title = "二级锚点（字段级）",
++        summary = "继承 <<: 要求字段是映射；整体引用 * 任意值都行。选中锚点后该字段即以锚点内容生效。",
++        onDismissRequest = onDismiss,
++    ) {
++        Column(modifier = Modifier.fillMaxWidth()) {
++            val active = states.filter { it.defAnchor != null || it.aliasRef != null || it.merges.isNotEmpty() }
++            if (active.isEmpty()) Text(
++                text = "条目内没有字段级锚点",
++                fontSize = 12.sp,
++                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++            )
++            active.forEach { f ->
++                val label = buildString {
++                    append(f.key)
++                    f.defAnchor?.let { append(" · 定义 &$it") }
++                    if (f.merges.isNotEmpty()) append(if (f.multi) " · 继承多来源（锁定）" else " · 继承 <<: *${f.merges.first()}")
++                    f.aliasRef?.let { append(" · 引用 *$it") }
++                }
++                BasicComponent(
++                    title = label,
++                    endActions = {
++                        if (!f.multi) TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
++                            val out = when {
++                                f.aliasRef != null -> AnchorInheritance.setFieldAlias(
++                                    doc, base, f.key, null, FormValues.effectiveText(doc, base + f.key),
++                                )
++                                f.merges.isNotEmpty() -> AnchorInheritance.setFieldMerge(doc, base, f.key, null)
++                                f.defAnchor != null -> AnchorInheritance.removeFieldDef(doc, base, f.key)
++                                else -> null
++                            }
++                            if (out == null) showToast("摘除未改动：请在编辑器里直接改", long = true)
++                            else { onDismiss(); host.applyRawText(out, "字段锚点 ${f.key}", f.line1) }
++                        })
++                    },
++                )
++            }
++            BasicComponent(
++                title = "字段",
++                summary = field ?: "(选择字段)",
++                endActions = { TextButton(text = "选择", onClick = { pickField = true }) },
++                onClick = { pickField = true },
++            )
++            BasicComponent(
++                title = "动作",
++                summary = if (mode == "merge") "继承合并 <<:" else "整体字段引用 *",
++                endActions = { TextButton(text = "切换", onClick = { pickMode = true }) },
++                onClick = { pickMode = true },
++            )
++            BasicComponent(
++                title = "锚点",
++                summary = anchor?.let { "*$it" } ?: if (mode == "merge") "(不继承)" else "(恢复为本地值)",
++                endActions = { TextButton(text = "选择", onClick = { pickAnchor = true }) },
++                onClick = { pickAnchor = true },
++            )
++            TextButton(text = "应用", onClick = { apply() })
++        }
++    }
++
++    if (pickField) {
++        OptionPickerDialog(
++            title = "选择字段",
++            options = fieldNames.map { k ->
++                val st = stateOf(k)
++                val mark = buildString {
++                    st?.defAnchor?.let { append(" &$it") }
++                    if (st?.merges?.isNotEmpty() == true) append(" «${st.merges.joinToString("+")}»")
++                    st?.aliasRef?.let { append(" *$it") }
++                }
++                FormOption(k, k + mark)
++            },
++            current = field,
++            onDismiss = { pickField = false },
++            onPick = { field = it; pickField = false; anchor = null },
++        )
++    }
++    if (pickMode) {
++        OptionPickerDialog(
++            title = "选择动作",
++            options = listOf(FormOption("merge", "继承合并 <<:"), FormOption("alias", "整体字段引用 *")),
++            current = mode,
++            onDismiss = { pickMode = false },
++            onPick = { mode = it; pickMode = false; anchor = null },
++        )
++    }
++    if (pickAnchor) {
++        // 字段级同样遵守「定义在引用行之前」：用字段行号（已有本地行）或条目行号（新挂）
++        val beforeLine = stateOf(field.orEmpty())?.line1 ?: headLine1
++        val options = listOf(FormOption("", if (mode == "merge") "(不继承)" else "(恢复为本地值)")) +
++            defs.filter { it.line1 < beforeLine && (mode == "alias" || it.isMap) }.map { FormOption(it.name, it.name) }
++        OptionPickerDialog(
++            title = "选择锚点",
++            options = options,
++            current = anchor,
++            onDismiss = { pickAnchor = false },
++            onPick = { anchor = it.ifEmpty { null }; pickAnchor = false },
++        )
++    }
++}
+diff --git a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
+index a4db457..e3d1b5d 100644
+--- a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
++++ b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
+@@ -72,6 +72,7 @@ fun MishkaConfigFormPanel(
+     controller: CodeEditorController,
+     fileName: String,
+     onClose: () -> Unit,
++    fileBaseDir: String? = null,
+ ) {
+     val version = if (visible) controller.documentVersion else -1
+     val text = remember(version) { if (visible) controller.getText() else "" }
+@@ -94,7 +95,7 @@ fun MishkaConfigFormPanel(
+         showToast(toast)
+     }
+ 
+-    val host = remember(doc) { FormHost(doc, ::apply) }
++    val host = remember(doc, fileBaseDir) { FormHost(doc, ::apply, fileBaseDir) }
+     val route = nav.current
+ 
+     WindowBottomSheet(
+@@ -183,7 +184,19 @@ private fun routeTitle(route: FormRoute, doc: YamlDoc): String = when (route) {
+ internal class FormHost(
+     val doc: YamlDoc,
+     private val applyText: (newText: String, toast: String, revealLine1: Int?) -> Unit,
++    /** 当前编辑文件所属订阅的 imported/ 目录；file 类型合集的源文件上传 / 编辑靠它落盘。null = 无文件能力。 */
++    val fileBaseDir: String? = null,
+ ) {
++    /** 行级手术（锚点继承等）的落地通道：整篇替换，与 set / batch 同一套「无变化」提示。 */
++    fun applyRawText(newText: String, label: String, revealLine1: Int? = null): Boolean {
++        if (newText == doc.dump()) {
++            showToast("$label 没有变化")
++            return false
++        }
++        applyText(newText, "已写入 $label", revealLine1)
++        return true
++    }
++
+     private fun refuse(label: String) {
+         // 引擎拒绝（路径下面是纯值 / 别名、flow 里装不下的集合或多行文本…）：宁可不动
+         showToast("$label 未改动：这个位置不能这样写，请在编辑器里直接改这一段", long = true)
+@@ -513,6 +526,7 @@ private fun ListenerListPage(host: FormHost, nav: FormNav) {
+     val count = if (node?.kind == YamlNode.Kind.SEQ) node.items.size else 0
+     var chooseType by remember(doc) { mutableStateOf(false) }
+     var deleting by remember(doc) { mutableStateOf<Int?>(null) }
++    var menu by remember(doc) { mutableStateOf<Int?>(null) }
+ 
+     Column(modifier = Modifier.fillMaxWidth()) {
+         SectionHeader("监听器（$count）")
+@@ -534,11 +548,9 @@ private fun ListenerListPage(host: FormHost, nav: FormNav) {
+                     summary = "$type · ${listenerSummary(doc, index)}",
+                     onClick = { nav.push(FormRoute.Listener(index)) },
+                     endActions = {
+-                        TextButton(text = "↑", minWidth = 0.dp, minHeight = 0.dp, onClick = {
+-                            if (index > 0) host.moveItem(path, index, index - 1, "监听器")
+-                        })
+-                        TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { nav.push(FormRoute.Listener(index)) })
+-                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { deleting = index })
++                        // 整行点按 = 编辑；挪 / 删收进「⋯」菜单（与其它列表页同款），
++                        // 旧版行内「↑ / 编辑 / 删」三按钮在窄屏上挤得摘要换行、「删」被截断
++                        TextButton(text = "⋯", minWidth = 0.dp, minHeight = 0.dp, onClick = { menu = index })
+                     },
+                 )
+             }
+@@ -551,6 +563,21 @@ private fun ListenerListPage(host: FormHost, nav: FormNav) {
+         )
+     }
+ 
++    menu?.let { index ->
++        if (index < count) {
++            ItemMenuDialog(
++                title = listenerName(doc, index).ifBlank { "监听器 #${index + 1}" },
++                summary = "`${pathText(path + index)}`",
++                canUp = index > 0,
++                canDown = index < count - 1,
++                onUp = { host.moveItem(path, index, index - 1, "监听器") },
++                onDown = { host.moveItem(path, index, index + 1, "监听器") },
++                onDelete = { deleting = index },
++                onDismiss = { menu = null },
++                deleteDirect = true,
++            )
++        } else menu = null
++    }
+     if (chooseType) {
+         OptionPickerDialog(
+             title = "选择监听器类型",
+@@ -1003,18 +1030,24 @@ internal fun FieldRow(
+         if (intercept != null && intercept(field, path, value)) return true
+         return if (value == null) host.clear(path, field.label) else host.set(path, value, field.label)
+     }
++    // 源码无本地行但展开视图（锚点继承）有值时照配置参数显示，尾标「继承」——可视化不丢继承来的参数
++    val inherited = if (hasVal) null else FormValues.describeEffective(doc, field, path)
+     val summary = when {
+         field.type == FormFieldType.BOOL -> {
+             val v = FormValues.readBool(doc, path)
+             when {
+                 hasVal && v != null -> if (v) "开" else "关"
+                 hasVal -> FormValues.readRaw(doc, path).orEmpty().take(40)
++                inherited != null -> inherited
+                 field.asSwitch -> "未设置（默认${if (field.default == true) "开" else "关"}）"
+                 field.default != null -> "默认（不覆写，内核默认${if (field.default) "开" else "关"}）"
+                 else -> if (tri) "默认（不覆写）" else "未设置"
+             }
+         }
+-        else -> FormValues.describe(doc, field, path)
++        else -> {
++            val local = FormValues.describe(doc, field, path)
++            if (local == "未设置" && inherited != null) inherited else local
++        }
+     }
+ 
+     fun openEditor() {
+diff --git a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
+index 05e4dbd..ce5401c 100644
+--- a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
++++ b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
+@@ -818,9 +818,14 @@ private fun ProviderListPage(host: FormHost, nav: FormNav) {
+         rowSummary = { name, node ->
+             if (node == null || node.kind != YamlNode.Kind.MAP) "（不是映射，只能在编辑器里改）"
+             else {
+-                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node).orEmpty()
++                // 本地行优先；纯经 <<: *锚点 继承来的参数走展开视图，列表摘要不丢配置参数
++                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node)
++                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "type")
++                    ?: ""
+                 val src = FormValues.scalarText(doc, doc.findEntry(node, "url")?.node)
+                     ?: FormValues.scalarText(doc, doc.findEntry(node, "path")?.node)
++                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "url")
++                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "path")
+                 buildString {
+                     append(typeLabel(PROVIDER_TYPES, type))
+                     if (type == "inline") append(" · ").append(FormValues.count(doc, PROVIDERS_PATH + name + "payload")).append(" 个节点")
+@@ -905,6 +910,20 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
+         host = host,
+         onlyType = type,
+         intercept = intercept,
++        footer = {
++            Column {
++            if (type == "file") {
++                ProviderFileOpsRow(
++                    host = host,
++                    base = base,
++                    kind = "sub",
++                    defaultPath = "./proxies/${safeFileStem(name, "provider")}.yaml",
++                    newFileText = "proxies:\n  # - { name: node1, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: xxx }\n",
++                )
++            }
++            AnchorSectionCard(host, "proxy-providers", base)
++            }
++        },
+         header = {
+             DetailHeader(
+                 title = name,
+@@ -1313,6 +1332,7 @@ private fun GroupDetailPage(host: FormHost, nav: FormNav, index: Int) {
+         base = base,
+         host = host,
+         onlyType = effType,
++        footer = { AnchorSectionCard(host, "proxy-groups", base) },
+         dynamicOptions = { field, path ->
+             when (field.path) {
+                 "proxies" -> host.candidates("policies", exclude = setOf(name), current = FormValues.readListField(doc, field, path))
+@@ -1676,11 +1696,18 @@ private fun RuleProviderListPage(host: FormHost, nav: FormNav) {
+         rowSummary = { name, node ->
+             if (node == null || node.kind != YamlNode.Kind.MAP) "（不是映射，只能在编辑器里改）"
+             else {
+-                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node).orEmpty()
++                // 本地行优先；纯经 <<: *锚点 继承来的参数走展开视图，列表摘要不丢配置参数
++                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node)
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "type")
++                    ?: ""
+                 val behavior = FormValues.scalarText(doc, doc.findEntry(node, "behavior")?.node)
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "behavior")
+                 val format = FormValues.scalarText(doc, doc.findEntry(node, "format")?.node)
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "format")
+                 val src = FormValues.scalarText(doc, doc.findEntry(node, "url")?.node)
+                     ?: FormValues.scalarText(doc, doc.findEntry(node, "path")?.node)
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "url")
++                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "path")
+                 buildString {
+                     append(typeLabel(RULE_PROVIDER_TYPES, type))
+                     behavior?.let { append(" · ").append(it) }
+@@ -1744,6 +1771,7 @@ private fun RuleProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
+         return
+     }
+     val type = FormValues.readRaw(doc, base + "type")?.ifBlank { null } ?: effectiveText(doc, base + "type") ?: "http"
++    val format = FormValues.readRaw(doc, base + "format")?.ifBlank { null } ?: effectiveText(doc, base + "format") ?: "yaml"
+     var renaming by remember { mutableStateOf(false) }
+     var payloadEditor by remember { mutableStateOf(false) }
+     var deleting by remember { mutableStateOf<DeleteFlow?>(null) }
+@@ -1770,6 +1798,20 @@ private fun RuleProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
+         host = host,
+         onlyType = type,
+         intercept = intercept,
++        footer = {
++            Column {
++            if (type == "file") {
++                ProviderFileOpsRow(
++                    host = host,
++                    base = base,
++                    kind = "ep",
++                    defaultPath = "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(format)}",
++                    newFileText = "# 新建规则集文件（内容取决于 behavior）\n# domain：每行一个域名/后缀\n#   .google.com\n# ipcidr：每行一个 CIDR\n#   91.108.56.0/22\n# classical：YAML payload 规则列表\npayload:\n  # - DOMAIN-SUFFIX,example.com\n",
++                )
++            }
++            AnchorSectionCard(host, "rule-providers", base)
++            }
++        },
+         header = {
+             DetailHeader(
+                 title = name,
+diff --git a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
+index 53eef41..29efe3d 100644
+--- a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
++++ b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
+@@ -169,6 +169,43 @@ internal object FormValues {
+         }
+     }
+ 
++    /**
++     * 展开视图（别名解开、`<<:` 合并后）里某条路径的值。源码没有本地行、值纯经锚点继承来的，
++     * 这里也能读到——可视化「读配置文件参数」走它，本地行优先于它（[readRaw] 等）。
++     */
++    fun effectiveValue(doc: YamlDoc, path: YPath): Any? {
++        var cur: Any? = PlainYaml.toPlain(doc)
++        for (seg in path) {
++            cur = when {
++                seg is Int && cur is List<*> -> cur.getOrNull(seg)
++                seg is String && cur is Map<*, *> -> cur[seg]
++                else -> return null
++            }
++        }
++        return cur
++    }
++
++    /** 展开视图里的标量文本（集合给 null）：继承来的 type / behavior 等判断用它。 */
++    fun effectiveText(doc: YamlDoc, path: YPath): String? = when (val v = effectiveValue(doc, path)) {
++        null -> null
++        is Map<*, *>, is List<*> -> null
++        is Boolean -> if (v) "true" else "false"
++        else -> v.toString()
++    }
++
++    /** 本地无值时按展开值给摘要（标量照写、布尔映开/关、集合报项数），尾标「继承」；无继承值返回 null。 */
++    fun describeEffective(doc: YamlDoc, field: FormField, path: YPath): String? = when (val v = effectiveValue(doc, path)) {
++        null -> null
++        is Map<*, *> -> "${v.size} 项（继承）"
++        is List<*> -> "${v.size} 项（继承）"
++        is Boolean -> (if (v) "开" else "关") + "（继承）"
++        else -> {
++            val s = v.toString()
++            val shown = if (field.type == FormFieldType.SELECT) field.options.firstOrNull { it.value == s }?.label ?: s else s
++            shown.take(60) + "（继承）"
++        }
++    }
++
+     fun count(doc: YamlDoc, path: YPath): Int {
+         val n = doc.get(path) ?: return 0
+         return when (n.kind) {
+diff --git a/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
+new file mode 100644
+index 0000000..71f3289
+--- /dev/null
++++ b/mishka-custom/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
+@@ -0,0 +1,213 @@
++package top.yukonga.mishka.custom.forms
++
++import android.net.Uri
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.LocalContext
++import java.io.File
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++import top.yukonga.mishka.platform.showToast
++import top.yukonga.miuix.kmp.basic.BasicComponent
++import top.yukonga.miuix.kmp.basic.Card
++import top.yukonga.miuix.kmp.basic.CardDefaults
++import top.yukonga.miuix.kmp.basic.TextButton
++import top.yukonga.miuix.kmp.basic.TextField
++import top.yukonga.miuix.kmp.window.WindowDialog
++
++/**
++ * file 类型合集的「源文件」操作（对齐 mihomo_box `fileOpsCtl` 的 Android 版）：上传（SAF，二进制安全，
++ * 支持 .mrs）/ 在线编辑内容。相对路径按本订阅 imported/ 目录解析（mihomo 以工作目录启动，语义一致）；
++ * 绝对路径原样用。写盘直接 java.io，不经编辑器草稿——源文件不是配置本身，内核按 path 单独读它。
++ */
++
++/** `path` 配置值 → 实际文件：绝对路径原样；相对去掉 `./` 挂到 imported/ 目录下；无基目录返回 null。 */
++internal fun resolveProviderFile(baseDir: String?, cfgPath: String): File? {
++    val p = cfgPath.trim()
++    if (p.isEmpty()) return null
++    if (p.startsWith("/")) return File(p)
++    val b = baseDir?.trim() ?: return null
++    if (b.isEmpty()) return null
++    return File(b, p.removePrefix("./"))
++}
++
++private const val MAX_EDIT_BYTES = 4L * 1024 * 1024
++private const val MAX_UPLOAD_BYTES = 8L * 1024 * 1024
++
++@Composable
++internal fun ProviderFileOpsRow(
++    host: FormHost,
++    base: YPath,
++    kind: String,
++    defaultPath: String,
++    newFileText: String,
++) {
++    val doc = host.doc
++    val context = LocalContext.current
++    val scope = rememberCoroutineScope()
++    val localPath = FormValues.readRaw(doc, base + "path")?.ifBlank { null }
++    val cfgPath = localPath ?: defaultPath
++    val file = remember(host.fileBaseDir, cfgPath) { resolveProviderFile(host.fileBaseDir, cfgPath) }
++    val stat = remember(file, doc) { file?.takeIf { it.exists() }?.let { "${it.length()} 字节" } }
++    val isMrs = cfgPath.endsWith(".mrs", ignoreCase = true)
++    var editOpen by remember { mutableStateOf(false) }
++
++    /** 源文件操作落地前确保配置里有 path（没有就写默认相对路径），返回实际目标文件。 */
++    fun ensureTarget(): File? {
++        if (localPath == null) host.set(base + "path", defaultPath, "本地路径")
++        return resolveProviderFile(host.fileBaseDir, localPath ?: defaultPath)
++    }
++
++    val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
++        if (uri == null) return@rememberLauncherForActivityResult
++        val target = ensureTarget()
++        if (target == null) {
++            showToast("无法确定写入位置：缺少订阅目录", long = true)
++            return@rememberLauncherForActivityResult
++        }
++        scope.launch {
++            val result = withContext(Dispatchers.IO) {
++                runCatching {
++                    context.contentResolver.openInputStream(uri)?.use { input ->
++                        val buf = readBytesLimited(input, MAX_UPLOAD_BYTES + 1)
++                        require(buf.size <= MAX_UPLOAD_BYTES) { "文件过大（>8MB）" }
++                        target.parentFile?.mkdirs()
++                        target.writeBytes(buf)
++                    } ?: error("读取所选文件失败")
++                }
++            }
++            result.fold(
++                onSuccess = {
++                    showToast("已上传 → ${target.path}")
++                    // 与参考实现一致：.mrs 文件名自动把 format 切到 mrs
++                    val name = target.name
++                    if (name.endsWith(".mrs", ignoreCase = true) && FormValues.readRaw(doc, base + "format") != "mrs") {
++                        host.set(base + "format", "mrs", "文件格式")
++                    }
++                },
++                onFailure = { showToast("上传失败：${it.message ?: it::class.simpleName}", long = true) },
++            )
++        }
++    }
++
++    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
++        BasicComponent(
++            title = "源文件",
++            summary = buildString {
++                append(cfgPath)
++                if (localPath == null) append("（默认路径，操作时写入配置）")
++                append(" · ")
++                append(stat ?: "文件不存在，上传 / 保存即创建")
++                if (isMrs) append(" · mrs 为二进制，只能上传替换")
++            },
++            endActions = {
++                TextButton(text = "上传", onClick = { uploadLauncher.launch(arrayOf("*/*")) })
++                TextButton(text = "编辑内容", onClick = {
++                    when {
++                        isMrs -> showToast("mrs 是二进制格式，不支持在线编辑，请用「上传」替换", long = true)
++                        file != null && file.exists() && file.length() > MAX_EDIT_BYTES ->
++                            showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
++                        host.fileBaseDir == null && !cfgPath.startsWith("/") ->
++                            showToast("当前编辑器不在订阅目录里，无法定位源文件", long = true)
++                        else -> editOpen = true
++                    }
++                })
++            },
++            onClick = { editOpen = true },
++        )
++    }
++
++    if (editOpen) {
++        FileContentDialog(
++            title = if (kind == "ep") "编辑规则集文件" else "编辑订阅文件",
++            file = file,
++            baseDir = host.fileBaseDir,
++            cfgPath = cfgPath,
++            newFileText = newFileText,
++            scope = scope,
++            onDismiss = { editOpen = false },
++            onSaved = {
++                editOpen = false
++                if (localPath == null) host.set(base + "path", defaultPath, "本地路径")
++                showToast("已保存源文件")
++            },
++        )
++    }
++}
++
++/** 在线编辑弹层：打开时 IO 读现有内容（不存在给模板），保存直接写文件。 */
++@Composable
++private fun FileContentDialog(
++    title: String,
++    file: File?,
++    baseDir: String?,
++    cfgPath: String,
++    newFileText: String,
++    scope: kotlinx.coroutines.CoroutineScope,
++    onDismiss: () -> Unit,
++    onSaved: () -> Unit,
++) {
++    var draft by remember { mutableStateOf<String?>(null) }
++    var failed by remember { mutableStateOf(false) }
++    val target = file ?: remember(baseDir, cfgPath) { resolveProviderFile(baseDir, cfgPath) }
++    LaunchedEffect(target) {
++        draft = withContext(Dispatchers.IO) {
++            runCatching {
++                target?.takeIf { it.exists() }?.readText() ?: newFileText
++            }.getOrElse { failed = true; null }
++        }
++    }
++    val text = draft
++    WindowDialog(
++        show = true,
++        title = title,
++        summary = target?.path ?: cfgPath,
++        onDismissRequest = onDismiss,
++    ) {
++        Column(modifier = Modifier.fillMaxWidth()) {
++            if (failed) DialogNote("读取文件失败，请在编辑器外检查权限。")
++            TextField(
++                value = text.orEmpty(),
++                onValueChange = { draft = it },
++                modifier = Modifier.fillMaxWidth(),
++                label = "文件内容",
++                singleLine = false,
++            )
++            TextButton(text = "保存文件", onClick = {
++                val t = target ?: return@TextButton
++                val content = draft.orEmpty()
++                scope.launch {
++                    val ok = withContext(Dispatchers.IO) {
++                        runCatching { t.parentFile?.mkdirs(); t.writeText(content) }.isSuccess
++                    }
++                    if (ok) onSaved() else showToast("写入失败", long = true)
++                }
++            })
++        }
++    }
++}
++
++private fun readBytesLimited(input: java.io.InputStream, limit: Long): ByteArray {
++    val out = java.io.ByteArrayOutputStream()
++    val buf = ByteArray(8192)
++    var total = 0L
++    while (true) {
++        val n = input.read(buf)
++        if (n < 0) break
++        total += n
++        if (total > limit) throw IllegalStateException("文件过大")
++        out.write(buf, 0, n)
++    }
++    return out.toByteArray()
++}
+diff --git a/mishka-custom/patches/app/anchor-panel.seed.patch b/mishka-custom/patches/app/anchor-panel.seed.patch
+index 7ce2d0a..c2a1d7e 100644
+--- a/mishka-custom/patches/app/anchor-panel.seed.patch
++++ b/mishka-custom/patches/app/anchor-panel.seed.patch
+@@ -11425,7 +11425,7 @@ index b1b2479..8466deb 100644
+                          val canSave = controller.isModified && !isSaving && fileManager != null
+                          IconButton(
+                              enabled = canSave,
+-@@ -192,6 +215,22 @@ fun FileManagerEditorScreen(
++@@ -192,6 +215,24 @@ fun FileManagerEditorScreen(
+                          .weight(1f),
+                  )
+              }
+@@ -11439,11 +11439,13 @@ index b1b2479..8466deb 100644
+ +            )
+ +
+ +            // [mishka-custom] 配置表单：同一套约定——只改被编辑的键，改动先落草稿
+++            // fileBaseDir：file 类型合集的源文件上传 / 编辑按本订阅 imported/ 目录解析相对 path
+ +            MishkaConfigFormPanel(
+ +                visible = showFormPanel,
+ +                controller = controller,
+ +                fileName = relativePath,
+ +                onClose = { showFormPanel = false },
+++                fileBaseDir = fileManager?.getImportedDir(uuid),
+ +            )
+          }
+      }
+diff --git a/mishka-custom/tools/forms/kotlin/AnchorInheritanceProps.kt b/mishka-custom/tools/forms/kotlin/AnchorInheritanceProps.kt
+new file mode 100644
+index 0000000..17cd82d
+--- /dev/null
++++ b/mishka-custom/tools/forms/kotlin/AnchorInheritanceProps.kt
+@@ -0,0 +1,128 @@
++package top.yukonga.mishka.custom.forms
++
++/** 锚点继承 / 二级锚点手术的性质测试：现状读取 + 行级手术 + 展开视图读参（可视化「读配置文件参数」）。 */
++
++private const val SAMPLE = """dl: &dl DIRECT
++base: &base
++  type: http
++  behavior: domain
++  interval: 86400
++hc: &hc
++  enable: true
++  interval: 600
++rule-providers:
++  ads:
++    <<: *base
++    url: https://example.com/ads.yaml
++  local-set:
++    type: file
++    behavior: classical
++    fmt: &fmt yaml
++    health-check:
++      <<: *hc
++    path: ./rules/x.yaml
++proxy-groups:
++  - <<: *base
++    name: g1
++    type: select
++"""
++
++private fun expect(condition: Boolean, message: String) {
++    check(condition) { message }
++}
++
++private fun reparsed(text: String): YamlDoc = YamlDoc.parse(text)
++
++fun main() {
++    val doc = reparsed(SAMPLE)
++    val ads: YPath = listOf("rule-providers", "ads")
++    val local: YPath = listOf("rule-providers", "local-set")
++    val group: YPath = listOf("proxy-groups", 0)
++
++    // ---- 展开视图读参：源码没有本地行、纯继承来的参数也要读得到 ----
++    expect(FormValues.effectiveText(doc, ads + "behavior") == "domain", "inherited behavior must be readable")
++    expect(FormValues.effectiveText(doc, ads + "type") == "http", "inherited type must be readable")
++    expect(FormValues.readRaw(doc, ads + "behavior") == null, "local read must stay local-only")
++    expect(FormValues.effectiveText(doc, local + "behavior") == "classical", "local value wins over inheritance")
++    expect(
++        FormValues.effectiveText(doc, local + "health-check" + "enable") == "true",
++        "nested inherited value must be readable",
++    )
++    val field = FormField(path = "behavior", label = "规则类型", type = FormFieldType.SELECT,
++        options = listOf(FormOption("domain", "domain 域名")))
++    expect(FormValues.describeEffective(doc, field, ads + "behavior") == "domain 域名（继承）", "inherited summary maps labels")
++
++    // ---- 锚点定义清单 ----
++    val defs = AnchorInheritance.anchorDefs(doc)
++    expect(defs.map { it.name } == listOf("dl", "base", "hc", "fmt"), "anchor defs order")
++    expect(defs.first { it.name == "base" }.isMap, "base is a map anchor")
++    expect(!defs.first { it.name == "dl" }.isMap, "dl is scalar anchor")
++
++    // ---- 一级现状 ----
++    val l1 = AnchorInheritance.entryMerges(doc, ads)
++    expect(l1.merges == listOf("base") && l1.mergeLines == listOf(11) && !l1.multi, "ads level-1 state")
++    val g1 = AnchorInheritance.entryMerges(doc, group)
++    expect(g1.merges == listOf("base") && g1.mergeLines == listOf(21), "dash-line merge detected")
++
++    // ---- 一级手术：换绑 / 清除 / 新挂 ----
++    val rebound = reparsed(AnchorInheritance.setEntryMerge(doc, ads, "hc") ?: error("rebind rejected"))
++    expect(AnchorInheritance.entryMerges(rebound, ads).merges == listOf("hc"), "rebind takes effect")
++    expect(rebound.lines[10] == "    <<: *hc", "rebind rewrites only the merge line")
++    expect(rebound.lines[1] == "base: &base" && rebound.lines[11] == "    url: https://example.com/ads.yaml", "other lines untouched")
++
++    val cleared = reparsed(AnchorInheritance.setEntryMerge(doc, ads, null) ?: error("clear rejected"))
++    expect(AnchorInheritance.entryMerges(cleared, ads).merges.isEmpty(), "clear removes merge")
++    expect(cleared.lines.size == doc.lines.size - 1 && cleared.lines[10] == "    url: https://example.com/ads.yaml", "clear deletes the line only")
++
++    val attached = reparsed(AnchorInheritance.setEntryMerge(doc, local, "base") ?: error("attach rejected"))
++    expect(attached.lines[13] == "    <<: *base", "attach inserts merge after entry head")
++    expect(AnchorInheritance.entryMerges(attached, local).merges == listOf("base"), "attached merge readable")
++    // 本地 type 仍是覆写：合并只补缺失键
++    expect(FormValues.effectiveText(attached, local + "type") == "file", "local key wins over merged default")
++
++    val dashRebound = reparsed(AnchorInheritance.setEntryMerge(doc, group, "hc") ?: error("dash rebind rejected"))
++    expect(dashRebound.lines[20] == "  - <<: *hc", "dash-line merge rebind keeps dash")
++    val dashCleared = reparsed(AnchorInheritance.setEntryMerge(doc, group, null) ?: error("dash clear rejected"))
++    expect(dashCleared.lines[20] == "  -", "dash-line merge clear leaves bare dash")
++    expect(dashCleared.lines[21] == "    name: g1", "dash clear keeps children")
++
++    // ---- 二级现状 ----
++    val states = AnchorInheritance.fieldStates(doc, local)
++    val hcState = states.first { it.key == "health-check" }
++    expect(hcState.merges == listOf("hc") && hcState.isMap && !hcState.multi, "field merge state")
++    val fmtState = states.first { it.key == "fmt" }
++    expect(fmtState.defAnchor == "fmt", "field def anchor state")
++
++    // ---- 二级手术 ----
++    val fmRebind = reparsed(AnchorInheritance.setFieldMerge(doc, local, "health-check", "base") ?: error("field rebind rejected"))
++    expect(fmRebind.lines[17] == "      <<: *base", "field merge rebind")
++    val fmClear = reparsed(AnchorInheritance.setFieldMerge(doc, local, "health-check", null) ?: error("field clear rejected"))
++    expect(fmClear.lines.size == doc.lines.size - 1, "field merge clear deletes line")
++    expect(AnchorInheritance.setFieldMerge(doc, local, "path", "base") == null, "scalar field must refuse merge")
++    val fmNew = reparsed(AnchorInheritance.setFieldMerge(doc, local, "override", "base") ?: error("field attach rejected"))
++    expect(fmNew.lines[13] == "    override:" && fmNew.lines[14] == "      <<: *base", "absent field gets key + merge lines")
++
++    val faSet = reparsed(AnchorInheritance.setFieldAlias(doc, local, "proxy", "dl", null) ?: error("alias rejected"))
++    expect(faSet.lines[13] == "    proxy: *dl", "field alias insert")
++    val faState = AnchorInheritance.fieldStates(faSet, local).first { it.key == "proxy" }
++    expect(faState.aliasRef == "dl", "alias state readable")
++    val faClear = reparsed(AnchorInheritance.setFieldAlias(faSet, local, "proxy", null, "DIRECT") ?: error("alias clear rejected"))
++    expect(faClear.lines[13] == "    proxy: DIRECT", "alias clear restores scalar")
++    expect(AnchorInheritance.setFieldAlias(faSet, local, "proxy", null, null) == null, "alias clear without restore refused")
++    // 别名替换掉块式字段：子行一起删
++    val faOver = reparsed(AnchorInheritance.setFieldAlias(doc, local, "health-check", "hc", null) ?: error("alias over map rejected"))
++    expect(faOver.lines[16] == "    health-check: *hc", "alias replaces block field")
++    expect(faOver.lines.size == doc.lines.size - 1, "block child lines removed with alias")
++
++    // ---- 存量字段级 & 摘除 ----
++    val defRemoved = reparsed(AnchorInheritance.removeFieldDef(doc, local, "fmt") ?: error("def removal rejected"))
++    expect(defRemoved.lines[15] == "    fmt: yaml", "field def stripped keeps value")
++
++    // ---- 多来源锁定 ----
++    val multiDoc = reparsed(SAMPLE.replace("    <<: *base\n    url:", "    <<: [*base, *hc]\n    url:"))
++    val multi = AnchorInheritance.entryMerges(multiDoc, ads)
++    expect(multi.multi && multi.merges.toSet() == setOf("base", "hc"), "flow multi merge locked")
++    expect(AnchorInheritance.setEntryMerge(multiDoc, ads, "hc") == null, "multi merge refuses surgery")
++
++    println("anchor inheritance and second-level anchor tests passed")
++}
+diff --git a/mishka-custom/tools/forms/run_editor_logic_tests.sh b/mishka-custom/tools/forms/run_editor_logic_tests.sh
+index 776a4a2..7e880f2 100644
+--- a/mishka-custom/tools/forms/run_editor_logic_tests.sh
++++ b/mishka-custom/tools/forms/run_editor_logic_tests.sh
+@@ -32,6 +32,9 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
+   "$FORMS/ConfigRefs.kt" \
+   "$FORMS/EbpfFormLogic.kt" \
+   "$FORMS/FormMapListLogic.kt" \
++  "$FORMS/AnchorInheritance.kt" \
+   "$SCRIPT_DIR/kotlin/EditorLogicProps.kt" \
++  "$SCRIPT_DIR/kotlin/AnchorInheritanceProps.kt" \
+   -d "$BUILD_DIR"
+ java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.forms.EditorLogicPropsKt
++java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.forms.AnchorInheritancePropsKt

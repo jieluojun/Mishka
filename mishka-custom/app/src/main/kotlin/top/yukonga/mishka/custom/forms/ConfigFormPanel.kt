@@ -72,6 +72,7 @@ fun MishkaConfigFormPanel(
     controller: CodeEditorController,
     fileName: String,
     onClose: () -> Unit,
+    fileBaseDir: String? = null,
 ) {
     val version = if (visible) controller.documentVersion else -1
     val text = remember(version) { if (visible) controller.getText() else "" }
@@ -94,7 +95,7 @@ fun MishkaConfigFormPanel(
         showToast(toast)
     }
 
-    val host = remember(doc) { FormHost(doc, ::apply) }
+    val host = remember(doc, fileBaseDir) { FormHost(doc, ::apply, fileBaseDir) }
     val route = nav.current
 
     WindowBottomSheet(
@@ -183,7 +184,19 @@ private fun routeTitle(route: FormRoute, doc: YamlDoc): String = when (route) {
 internal class FormHost(
     val doc: YamlDoc,
     private val applyText: (newText: String, toast: String, revealLine1: Int?) -> Unit,
+    /** 当前编辑文件所属订阅的 imported/ 目录；file 类型合集的源文件上传 / 编辑靠它落盘。null = 无文件能力。 */
+    val fileBaseDir: String? = null,
 ) {
+    /** 行级手术（锚点继承等）的落地通道：整篇替换，与 set / batch 同一套「无变化」提示。 */
+    fun applyRawText(newText: String, label: String, revealLine1: Int? = null): Boolean {
+        if (newText == doc.dump()) {
+            showToast("$label 没有变化")
+            return false
+        }
+        applyText(newText, "已写入 $label", revealLine1)
+        return true
+    }
+
     private fun refuse(label: String) {
         // 引擎拒绝（路径下面是纯值 / 别名、flow 里装不下的集合或多行文本…）：宁可不动
         showToast("$label 未改动：这个位置不能这样写，请在编辑器里直接改这一段", long = true)
@@ -513,6 +526,7 @@ private fun ListenerListPage(host: FormHost, nav: FormNav) {
     val count = if (node?.kind == YamlNode.Kind.SEQ) node.items.size else 0
     var chooseType by remember(doc) { mutableStateOf(false) }
     var deleting by remember(doc) { mutableStateOf<Int?>(null) }
+    var menu by remember(doc) { mutableStateOf<Int?>(null) }
 
     Column(modifier = Modifier.fillMaxWidth()) {
         SectionHeader("监听器（$count）")
@@ -534,11 +548,9 @@ private fun ListenerListPage(host: FormHost, nav: FormNav) {
                     summary = "$type · ${listenerSummary(doc, index)}",
                     onClick = { nav.push(FormRoute.Listener(index)) },
                     endActions = {
-                        TextButton(text = "↑", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-                            if (index > 0) host.moveItem(path, index, index - 1, "监听器")
-                        })
-                        TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { nav.push(FormRoute.Listener(index)) })
-                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { deleting = index })
+                        // 整行点按 = 编辑；挪 / 删收进「⋯」菜单（与其它列表页同款），
+                        // 旧版行内「↑ / 编辑 / 删」三按钮在窄屏上挤得摘要换行、「删」被截断
+                        TextButton(text = "⋯", minWidth = 0.dp, minHeight = 0.dp, onClick = { menu = index })
                     },
                 )
             }
@@ -551,6 +563,21 @@ private fun ListenerListPage(host: FormHost, nav: FormNav) {
         )
     }
 
+    menu?.let { index ->
+        if (index < count) {
+            ItemMenuDialog(
+                title = listenerName(doc, index).ifBlank { "监听器 #${index + 1}" },
+                summary = "`${pathText(path + index)}`",
+                canUp = index > 0,
+                canDown = index < count - 1,
+                onUp = { host.moveItem(path, index, index - 1, "监听器") },
+                onDown = { host.moveItem(path, index, index + 1, "监听器") },
+                onDelete = { deleting = index },
+                onDismiss = { menu = null },
+                deleteDirect = true,
+            )
+        } else menu = null
+    }
     if (chooseType) {
         OptionPickerDialog(
             title = "选择监听器类型",
@@ -1003,18 +1030,24 @@ internal fun FieldRow(
         if (intercept != null && intercept(field, path, value)) return true
         return if (value == null) host.clear(path, field.label) else host.set(path, value, field.label)
     }
+    // 源码无本地行但展开视图（锚点继承）有值时照配置参数显示，尾标「继承」——可视化不丢继承来的参数
+    val inherited = if (hasVal) null else FormValues.describeEffective(doc, field, path)
     val summary = when {
         field.type == FormFieldType.BOOL -> {
             val v = FormValues.readBool(doc, path)
             when {
                 hasVal && v != null -> if (v) "开" else "关"
                 hasVal -> FormValues.readRaw(doc, path).orEmpty().take(40)
+                inherited != null -> inherited
                 field.asSwitch -> "未设置（默认${if (field.default == true) "开" else "关"}）"
                 field.default != null -> "默认（不覆写，内核默认${if (field.default) "开" else "关"}）"
                 else -> if (tri) "默认（不覆写）" else "未设置"
             }
         }
-        else -> FormValues.describe(doc, field, path)
+        else -> {
+            val local = FormValues.describe(doc, field, path)
+            if (local == "未设置" && inherited != null) inherited else local
+        }
     }
 
     fun openEditor() {

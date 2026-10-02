@@ -818,9 +818,14 @@ private fun ProviderListPage(host: FormHost, nav: FormNav) {
         rowSummary = { name, node ->
             if (node == null || node.kind != YamlNode.Kind.MAP) "（不是映射，只能在编辑器里改）"
             else {
-                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node).orEmpty()
+                // 本地行优先；纯经 <<: *锚点 继承来的参数走展开视图，列表摘要不丢配置参数
+                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node)
+                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "type")
+                    ?: ""
                 val src = FormValues.scalarText(doc, doc.findEntry(node, "url")?.node)
                     ?: FormValues.scalarText(doc, doc.findEntry(node, "path")?.node)
+                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "url")
+                    ?: FormValues.effectiveText(doc, PROVIDERS_PATH + name + "path")
                 buildString {
                     append(typeLabel(PROVIDER_TYPES, type))
                     if (type == "inline") append(" · ").append(FormValues.count(doc, PROVIDERS_PATH + name + "payload")).append(" 个节点")
@@ -905,6 +910,20 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
         host = host,
         onlyType = type,
         intercept = intercept,
+        footer = {
+            Column {
+            if (type == "file") {
+                ProviderFileOpsRow(
+                    host = host,
+                    base = base,
+                    kind = "sub",
+                    defaultPath = "./proxies/${safeFileStem(name, "provider")}.yaml",
+                    newFileText = "proxies:\n  # - { name: node1, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: xxx }\n",
+                )
+            }
+            AnchorSectionCard(host, "proxy-providers", base)
+            }
+        },
         header = {
             DetailHeader(
                 title = name,
@@ -1313,6 +1332,7 @@ private fun GroupDetailPage(host: FormHost, nav: FormNav, index: Int) {
         base = base,
         host = host,
         onlyType = effType,
+        footer = { AnchorSectionCard(host, "proxy-groups", base) },
         dynamicOptions = { field, path ->
             when (field.path) {
                 "proxies" -> host.candidates("policies", exclude = setOf(name), current = FormValues.readListField(doc, field, path))
@@ -1676,11 +1696,18 @@ private fun RuleProviderListPage(host: FormHost, nav: FormNav) {
         rowSummary = { name, node ->
             if (node == null || node.kind != YamlNode.Kind.MAP) "（不是映射，只能在编辑器里改）"
             else {
-                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node).orEmpty()
+                // 本地行优先；纯经 <<: *锚点 继承来的参数走展开视图，列表摘要不丢配置参数
+                val type = FormValues.scalarText(doc, doc.findEntry(node, "type")?.node)
+                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "type")
+                    ?: ""
                 val behavior = FormValues.scalarText(doc, doc.findEntry(node, "behavior")?.node)
+                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "behavior")
                 val format = FormValues.scalarText(doc, doc.findEntry(node, "format")?.node)
+                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "format")
                 val src = FormValues.scalarText(doc, doc.findEntry(node, "url")?.node)
                     ?: FormValues.scalarText(doc, doc.findEntry(node, "path")?.node)
+                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "url")
+                    ?: FormValues.effectiveText(doc, RULE_PROVIDERS_PATH + name + "path")
                 buildString {
                     append(typeLabel(RULE_PROVIDER_TYPES, type))
                     behavior?.let { append(" · ").append(it) }
@@ -1744,6 +1771,7 @@ private fun RuleProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
         return
     }
     val type = FormValues.readRaw(doc, base + "type")?.ifBlank { null } ?: effectiveText(doc, base + "type") ?: "http"
+    val format = FormValues.readRaw(doc, base + "format")?.ifBlank { null } ?: effectiveText(doc, base + "format") ?: "yaml"
     var renaming by remember { mutableStateOf(false) }
     var payloadEditor by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<DeleteFlow?>(null) }
@@ -1770,6 +1798,20 @@ private fun RuleProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
         host = host,
         onlyType = type,
         intercept = intercept,
+        footer = {
+            Column {
+            if (type == "file") {
+                ProviderFileOpsRow(
+                    host = host,
+                    base = base,
+                    kind = "ep",
+                    defaultPath = "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(format)}",
+                    newFileText = "# 新建规则集文件（内容取决于 behavior）\n# domain：每行一个域名/后缀\n#   .google.com\n# ipcidr：每行一个 CIDR\n#   91.108.56.0/22\n# classical：YAML payload 规则列表\npayload:\n  # - DOMAIN-SUFFIX,example.com\n",
+                )
+            }
+            AnchorSectionCard(host, "rule-providers", base)
+            }
+        },
         header = {
             DetailHeader(
                 title = name,
