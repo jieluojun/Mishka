@@ -1,7 +1,6 @@
 package top.yukonga.mishka.custom.forms
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -1236,16 +1235,13 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.weight(1f),
                         )
-                        // ✎ / × 装进等宽格子：两个按钮占位一致，不再随字形宽度参差
-                        Box(modifier = Modifier.width(38.dp), contentAlignment = Alignment.Center) {
-                            TextButton(text = "✎", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = i })
-                        }
-                        Box(modifier = Modifier.width(38.dp), contentAlignment = Alignment.Center) {
-                            TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-                                val f = local.filterIndexed { j, _ -> j != i }
-                                if (onCommit(f)) local = f
-                            })
-                        }
+                        // ✎ / × 用与弹层其它按钮（＋ 添加表达式 / 完成）同款形状尺寸，不再压成 min 0 的小圆块
+                        TextButton(text = "✎", onClick = { editing = i })
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(text = "×", onClick = {
+                            val f = local.filterIndexed { j, _ -> j != i }
+                            if (onCommit(f)) local = f
+                        })
                     }
                 }
             }

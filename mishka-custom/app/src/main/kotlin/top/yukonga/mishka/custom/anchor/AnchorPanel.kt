@@ -192,6 +192,7 @@ fun MishkaAnchorPanel(
                         items(items = graph.anchors, key = { "anchor:" + it.name }) { anchor ->
                             AnchorCard(
                                 anchor = anchor,
+                                defBlock = anchor.primaryDef?.let { d -> blockOf(anchor.name, d.line) },
                                 onLocate = ::locate,
                                 onEditDef = { line ->
                                     val block = blockOf(anchor.name, line)
@@ -431,6 +432,7 @@ private fun PanelSummaryRow(graph: AnchorGraph, onCreate: () -> Unit) {
 @Composable
 private fun AnchorCard(
     anchor: AnchorInfo,
+    defBlock: DefBlock?,
     onLocate: (Int) -> Unit,
     onEditDef: (Int) -> Unit,
     onRename: () -> Unit,
@@ -478,13 +480,25 @@ private fun AnchorCard(
             BasicComponent(
                 modifier = Modifier.padding(top = 4.dp),
                 title = "定义在 L${def.line}",
-                summary = def.path + " · " + def.text.trim(),
+                summary = def.path + (defBlock?.let { " · " + kindLabel(it) } ?: ""),
                 insideMargin = PaddingValues(horizontal = 0.dp, vertical = 6.dp),
                 endActions = {
                     CompactTextButton(text = stringResource(R.string.common_edit)) { onEditDef(def.line) }
                 },
                 onClick = { onLocate(def.line) },
             )
+            // 键跟值分开展示：映射 / 序列拆成参数行（左键右值），标量单独值行；拆不动的形态才给原文
+            when {
+                defBlock != null && defBlock.entries.isNotEmpty() -> DefKeyValueRows(defBlock)
+                defBlock != null && defBlock.kind == DefKind.Scalar -> DefScalarRow(defBlock)
+                else -> Text(
+                    text = def.text.trim(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
         }
         anchor.refs.forEach { ref ->
             BasicComponent(
@@ -594,6 +608,103 @@ private fun CompactTextButton(
         insideMargin = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         textStyle = MiuixTheme.textStyles.button.copy(fontSize = 13.sp),
     )
+}
+
+/** 定义块形态一行标签：映射 / 序列 / 标量 / 复杂，行内 flow 单独标出。 */
+private fun kindLabel(block: DefBlock): String = when (block.kind) {
+    DefKind.Map -> if (block.flowInline) "行内 flow 映射 ${block.entries.size} 项" else "映射 ${block.entries.size} 项"
+    DefKind.Seq -> if (block.flowInline) "行内 flow 序列 ${block.entries.size} 项" else "序列 ${block.entries.size} 项"
+    DefKind.Scalar -> "标量值"
+    DefKind.Unknown -> "复杂形态"
+}
+
+/** 映射 / 序列定义拆成键值行：左列键名、右列值，键跟值不再糊成一条原文。 */
+@Composable
+private fun DefKeyValueRows(block: DefBlock) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 2.dp)) {
+        block.entries.take(6).forEach { e ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                if (block.kind == DefKind.Seq) {
+                    Text(
+                        text = "-",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.width(14.dp),
+                    )
+                    Text(
+                        text = e.value.ifEmpty { "（空）" },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Text(
+                        text = e.keyRaw,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(0.42f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (e.nested) {
+                            "（嵌套 ${e.endIdx - e.startIdx + 1} 行，编辑请切「文本」）"
+                        } else {
+                            e.value.ifEmpty { "（空）" }
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(0.58f),
+                    )
+                }
+            }
+        }
+        if (block.entries.size > 6) {
+            Text(
+                text = "… 还有 ${block.entries.size - 6} 项，点「编辑」看全部",
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+    }
+}
+
+/** 标量定义：键名与值分两列显示。 */
+@Composable
+private fun DefScalarRow(block: DefBlock) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = block.keyRaw,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(0.42f),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = block.headerValue.ifEmpty { "（空）" },
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            color = MiuixTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(0.58f),
+        )
+    }
 }
 
 @Composable

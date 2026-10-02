@@ -17,6 +17,7 @@ if [[ -z "$KOTLINC" || ! -x "$KOTLINC" ]]; then
 fi
 
 FORMS="$DELIVER/app/src/main/kotlin/top/yukonga/mishka/custom/forms"
+ANCHOR="$DELIVER/app/src/main/kotlin/top/yukonga/mishka/custom/anchor"
 KOTLIN_HOME="$(dirname "$(dirname "$(readlink -f "$KOTLINC")")")"
 STDLIB="$KOTLIN_HOME/lib/kotlin-stdlib.jar"
 if [[ ! -f "$STDLIB" ]]; then
@@ -35,12 +36,18 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
   "$FORMS/AnchorInheritance.kt" \
   "$FORMS/ProxyUri.kt" \
   "$FORMS/ListenerSpecs.kt" \
+  "$ANCHOR/AnchorScan.kt" \
+  "$ANCHOR/AnchorEdit.kt" \
+  "$ANCHOR/AnchorBlock.kt" \
+  "$SCRIPT_DIR/kotlin/ComposeRuntimeStubs.kt" \
   "$SCRIPT_DIR/kotlin/EditorLogicProps.kt" \
   "$SCRIPT_DIR/kotlin/AnchorInheritanceProps.kt" \
   "$SCRIPT_DIR/kotlin/ProxyUriProps.kt" \
   "$SCRIPT_DIR/kotlin/ListenerSpecsProps.kt" \
+  "$SCRIPT_DIR/kotlin/AnchorBlockProps.kt" \
   -d "$BUILD_DIR"
 java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.forms.EditorLogicPropsKt
 java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.forms.AnchorInheritancePropsKt
 java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.forms.ProxyUriPropsKt
 java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.forms.ListenerSpecsPropsKt
+java -cp "$BUILD_DIR:$STDLIB" top.yukonga.mishka.custom.anchor.AnchorBlockPropsKt

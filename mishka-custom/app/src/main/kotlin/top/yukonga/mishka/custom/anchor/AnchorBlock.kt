@@ -24,6 +24,8 @@ data class DefEntrySeed(
     val startIdx: Int,
     val endIdx: Int,
     val nested: Boolean,
+    /** 行内 flow 项的原文段（如 `interval: 3600`）：未改动的项写回时逐字保留，保住原有排版。 */
+    val rawSeg: String = "",
 )
 
 @Immutable
@@ -40,6 +42,12 @@ data class DefBlock(
     val lines: List<String>,
     val startLine1: Int,
     val path: String,
+    /** 值是单行行内 flow（`键: &名 { … }` / `键: &名 [ … ]`）：可视化按键值拆行显示，写回时仍压成一行。 */
+    val flowInline: Boolean = false,
+    /** 行内 flow 的原有排版：括号内两侧留白与项间分隔符，未改动项逐字回写时整体复原。 */
+    val flowPadOpen: String = "",
+    val flowPadClose: String = "",
+    val flowSep: String = ", ",
 ) {
     /** 能否用可视化表单编辑（Scalar 单值也走一个值框，故一并算可视化）。 */
     val visual: Boolean get() = kind != DefKind.Unknown
@@ -71,6 +79,25 @@ object AnchorBlock {
 
         val headerValue = AnchorScan.withoutComment(shape.value).trim()
         if (headerValue.isNotEmpty()) {
+            // 单行行内 flow（`键: &名 { a: 1, b: 2 }` / `键: &名 [a, b]`）：拆成键值行进可视化，
+            // 键跟值分开展示；写回仍压成一行 flow（[render] 里 flowInline 分支）。拆不动才回落标量。
+            val flow = parseFlow(headerValue)
+            if (flow != null) {
+                val (seq, segments, kv, padOpen, padClose, sep) = flow
+                val seeds = segments.mapIndexed { i, raw ->
+                    val (k, v) = if (seq) "" to raw else kv[i]
+                    DefEntrySeed(
+                        keyRaw = k, value = v, comment = "", indent = "  ",
+                        startIdx = i, endIdx = i, nested = false, rawSeg = raw,
+                    )
+                }
+                return DefBlock(
+                    name = name, keyDisplay = shape.key, keyRaw = shape.keyRaw, indent = shape.indent, dash = shape.dash,
+                    kind = if (seq) DefKind.Seq else DefKind.Map, headerValue = headerValue, headerComment = headerComment,
+                    entries = seeds, lines = blockLines, startLine1 = startIndex + 1, path = path, flowInline = true,
+                    flowPadOpen = padOpen, flowPadClose = padClose, flowSep = sep,
+                )
+            }
             return DefBlock(
                 name = name, keyDisplay = shape.key, keyRaw = shape.keyRaw, indent = shape.indent, dash = shape.dash,
                 kind = DefKind.Scalar, headerValue = headerValue, headerComment = headerComment,
@@ -157,6 +184,22 @@ object AnchorBlock {
      * 其余行逐字保留，新增行追加在块尾。
      */
     fun render(block: DefBlock, rows: List<DefRow>): String {
+        if (block.flowInline) {
+            // 行内 flow 压回一行：未改动的项用解析时记下的原文段逐字回写（保住原有排版），
+            // 改过 / 新增的项按 `键: 值` 重写；括号留白与项间分隔符沿用原文风格。
+            val parts = rows.map { row ->
+                val seed = row.seed
+                when {
+                    seed != null && seed.rawSeg.isNotEmpty() && row.key == seed.keyRaw && row.value == seed.value -> seed.rawSeg
+                    block.kind == DefKind.Seq -> row.value
+                    else -> if (row.value.isEmpty()) row.key + ":" else row.key + ": " + row.value
+                }
+            }
+            val open = if (block.kind == DefKind.Seq) "[" else "{"
+            val close = if (block.kind == DefKind.Seq) "]" else "}"
+            val body = open + block.flowPadOpen + parts.joinToString(block.flowSep) + block.flowPadClose + close
+            return renderHeader(block, body)
+        }
         if (block.kind == DefKind.Scalar) {
             val value = rows.firstOrNull()?.value.orEmpty()
             return renderHeader(block, value)
@@ -214,6 +257,111 @@ object AnchorBlock {
     private fun defaultIndent(block: DefBlock): String {
         val existing = block.entries.firstOrNull { it.indent.length > block.indent }?.indent
         return existing ?: " ".repeat(block.indent + 2)
+    }
+
+    // ==================== 单行 flow 拆解（键值分离显示用） ====================
+
+    /** 拆解结果：[seq] 是否序列；[segments] 各项原文（trim 后）；[kv] 映射项的键值；后三项是原有排版。 */
+    private data class FlowParts(
+        val seq: Boolean,
+        val segments: List<String>,
+        val kv: List<Pair<String, String>>,
+        val padOpen: String,
+        val padClose: String,
+        val sep: String,
+    )
+
+    /** 单行 flow 值拆项；`{…}` 里任何一段不像 `键: 值` 返回 null（回落标量显示）。 */
+    private fun parseFlow(body: String): FlowParts? {
+        val seq = body.startsWith("[")
+        if (!seq && !body.startsWith("{")) return null
+        val closeCh = if (seq) ']' else '}'
+        if (!body.endsWith(closeCh)) return null
+        val rawInner = body.substring(1, body.length - 1)
+        val padOpen = if (rawInner.startsWith(" ")) " " else ""
+        val padClose = if (rawInner.length > 1 && rawInner.endsWith(" ")) " " else ""
+        val inner = rawInner.trim()
+        if (inner.isEmpty()) return FlowParts(seq, emptyList(), emptyList(), padOpen, padClose, ", ")
+        val (segmentsRaw, seps) = splitTopLevel(inner)
+        val segments = segmentsRaw.map { it.trim() }.filter { it.isNotEmpty() }
+        if (segmentsRaw.size != segments.size) return null // 段里有全空或怪形态，别猜
+        val sep = seps.firstOrNull() ?: ", "
+        val kv = if (seq) {
+            segments.map { "" to it }
+        } else {
+            val out = ArrayList<Pair<String, String>>(segments.size)
+            for (t in segments) {
+                val pair = splitKeyValue(t) ?: return null
+                out += pair
+            }
+            out
+        }
+        return FlowParts(seq, segments, kv, padOpen, padClose, sep)
+    }
+
+    /** 顶层逗号切段（跳过引号内与嵌套 `{}` / `[]`），并记下段间分隔符原文（`, ` / `,`…）。 */
+    private fun splitTopLevel(body: String): Pair<List<String>, List<String>> {
+        val out = ArrayList<String>()
+        val seps = ArrayList<String>()
+        var depth = 0
+        var quote: Char? = null
+        var start = 0
+        var i = 0
+        while (i < body.length) {
+            val c = body[i]
+            if (quote != null) {
+                if (c == quote) {
+                    if (i + 1 < body.length && body[i + 1] == quote) i++ else quote = null
+                }
+            } else when (c) {
+                '"', '\'' -> quote = c
+                '{', '[' -> depth++
+                '}', ']' -> depth--
+                ',' -> if (depth == 0) {
+                    out.add(body.substring(start, i))
+                    var j = i + 1
+                    while (j < body.length && body[j] == ' ') j++
+                    seps.add(body.substring(i, j))
+                    start = j
+                    i = j
+                    continue
+                }
+            }
+            i++
+        }
+        out.add(body.substring(start))
+        return out to seps
+    }
+
+    /** `键: 值` 切分（键可带引号）；值里的嵌套 flow 整体保留。不像键值对返回 null。 */
+    private fun splitKeyValue(seg: String): Pair<String, String>? {
+        var i = 0
+        if (seg.startsWith("\"") || seg.startsWith("'")) {
+            val quote = seg[0]
+            i = 1
+            while (i < seg.length) {
+                if (seg[i] == quote) {
+                    if (i + 1 < seg.length && seg[i + 1] == quote) i++ else { i++; break }
+                }
+                i++
+            }
+            while (i < seg.length && seg[i] == ' ') i++
+            if (i >= seg.length || seg[i] != ':') return null
+            val key = seg.substring(0, i)
+            return key to seg.substring(i + 1).trim()
+        }
+        var depth = 0
+        while (i < seg.length) {
+            when (val c = seg[i]) {
+                '{', '[' -> depth++
+                '}', ']' -> depth--
+                ':' -> if (depth == 0 && (i == seg.lastIndex || seg[i + 1] == ' ' || seg[i + 1] == '\t')) {
+                    return seg.substring(0, i).trim() to seg.substring(i + 1).trim()
+                }
+            }
+            i++
+        }
+        return null
     }
 
     /**

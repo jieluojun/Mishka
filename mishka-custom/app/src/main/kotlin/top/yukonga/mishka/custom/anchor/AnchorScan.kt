@@ -221,11 +221,25 @@ object AnchorScan {
     private fun unquote(raw: String): String =
         raw.removeSurrounding("\"").removeSurrounding("'").trim()
 
-    /** 注释起点下标（0 基），没有注释返回 -1。只在裸文本区判定，引号里的 `#` 不算。 */
+    /**
+     * 注释起点下标（0 基），没有注释返回 -1。只在裸文本区判定，引号里的 `#` 不算。
+     * 注意不能用 [bareMask] 直接查 `#` 位：掩码里注释区间（含 `#` 自身）整段为 false，
+     * 那样永远查不到——这里按「行首或空白后、且不在引号内」单独走一遍。
+     */
     fun commentIndex(line: String): Int {
-        val mask = bareMask(line)
-        for (i in line.indices) {
-            if (line[i] == '#' && mask[i]) return i
+        var quote: Char? = null
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            if (quote != null) {
+                if (c == quote) {
+                    if (i + 1 < line.length && line[i + 1] == quote) i++ else quote = null
+                }
+            } else when (c) {
+                '"', '\'' -> quote = c
+                '#' -> if (i == 0 || line[i - 1].isWhitespace()) return i
+            }
+            i++
         }
         return -1
     }

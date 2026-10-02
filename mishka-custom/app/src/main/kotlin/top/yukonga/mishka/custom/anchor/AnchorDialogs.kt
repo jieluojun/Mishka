@@ -285,8 +285,8 @@ internal fun AnchorDefEditDialog(
 }
 
 private fun describeKind(block: DefBlock): String = when (block.kind) {
-    DefKind.Map -> "映射：${block.entries.size} 项"
-    DefKind.Seq -> "序列：${block.entries.size} 项"
+    DefKind.Map -> if (block.flowInline) "行内 flow 映射：${block.entries.size} 项（键 / 值分开编辑）" else "映射：${block.entries.size} 项"
+    DefKind.Seq -> if (block.flowInline) "行内 flow 序列：${block.entries.size} 项" else "序列：${block.entries.size} 项"
     DefKind.Scalar -> "标量值"
     DefKind.Unknown -> "复杂形态"
 }

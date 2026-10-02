@@ -1,9 +1,9 @@
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 new file mode 100644
-index 0000000..71d33d2
+index 0000000..c3e1f9e
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,384 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.runtime.Immutable
@@ -30,6 +30,8 @@ index 0000000..71d33d2
 +    val startIdx: Int,
 +    val endIdx: Int,
 +    val nested: Boolean,
++    /** 行内 flow 项的原文段（如 `interval: 3600`）：未改动的项写回时逐字保留，保住原有排版。 */
++    val rawSeg: String = "",
 +)
 +
 +@Immutable
@@ -46,6 +48,12 @@ index 0000000..71d33d2
 +    val lines: List<String>,
 +    val startLine1: Int,
 +    val path: String,
++    /** 值是单行行内 flow（`键: &名 { … }` / `键: &名 [ … ]`）：可视化按键值拆行显示，写回时仍压成一行。 */
++    val flowInline: Boolean = false,
++    /** 行内 flow 的原有排版：括号内两侧留白与项间分隔符，未改动项逐字回写时整体复原。 */
++    val flowPadOpen: String = "",
++    val flowPadClose: String = "",
++    val flowSep: String = ", ",
 +) {
 +    /** 能否用可视化表单编辑（Scalar 单值也走一个值框，故一并算可视化）。 */
 +    val visual: Boolean get() = kind != DefKind.Unknown
@@ -77,6 +85,25 @@ index 0000000..71d33d2
 +
 +        val headerValue = AnchorScan.withoutComment(shape.value).trim()
 +        if (headerValue.isNotEmpty()) {
++            // 单行行内 flow（`键: &名 { a: 1, b: 2 }` / `键: &名 [a, b]`）：拆成键值行进可视化，
++            // 键跟值分开展示；写回仍压成一行 flow（[render] 里 flowInline 分支）。拆不动才回落标量。
++            val flow = parseFlow(headerValue)
++            if (flow != null) {
++                val (seq, segments, kv, padOpen, padClose, sep) = flow
++                val seeds = segments.mapIndexed { i, raw ->
++                    val (k, v) = if (seq) "" to raw else kv[i]
++                    DefEntrySeed(
++                        keyRaw = k, value = v, comment = "", indent = "  ",
++                        startIdx = i, endIdx = i, nested = false, rawSeg = raw,
++                    )
++                }
++                return DefBlock(
++                    name = name, keyDisplay = shape.key, keyRaw = shape.keyRaw, indent = shape.indent, dash = shape.dash,
++                    kind = if (seq) DefKind.Seq else DefKind.Map, headerValue = headerValue, headerComment = headerComment,
++                    entries = seeds, lines = blockLines, startLine1 = startIndex + 1, path = path, flowInline = true,
++                    flowPadOpen = padOpen, flowPadClose = padClose, flowSep = sep,
++                )
++            }
 +            return DefBlock(
 +                name = name, keyDisplay = shape.key, keyRaw = shape.keyRaw, indent = shape.indent, dash = shape.dash,
 +                kind = DefKind.Scalar, headerValue = headerValue, headerComment = headerComment,
@@ -163,6 +190,22 @@ index 0000000..71d33d2
 +     * 其余行逐字保留，新增行追加在块尾。
 +     */
 +    fun render(block: DefBlock, rows: List<DefRow>): String {
++        if (block.flowInline) {
++            // 行内 flow 压回一行：未改动的项用解析时记下的原文段逐字回写（保住原有排版），
++            // 改过 / 新增的项按 `键: 值` 重写；括号留白与项间分隔符沿用原文风格。
++            val parts = rows.map { row ->
++                val seed = row.seed
++                when {
++                    seed != null && seed.rawSeg.isNotEmpty() && row.key == seed.keyRaw && row.value == seed.value -> seed.rawSeg
++                    block.kind == DefKind.Seq -> row.value
++                    else -> if (row.value.isEmpty()) row.key + ":" else row.key + ": " + row.value
++                }
++            }
++            val open = if (block.kind == DefKind.Seq) "[" else "{"
++            val close = if (block.kind == DefKind.Seq) "]" else "}"
++            val body = open + block.flowPadOpen + parts.joinToString(block.flowSep) + block.flowPadClose + close
++            return renderHeader(block, body)
++        }
 +        if (block.kind == DefKind.Scalar) {
 +            val value = rows.firstOrNull()?.value.orEmpty()
 +            return renderHeader(block, value)
@@ -222,6 +265,111 @@ index 0000000..71d33d2
 +        return existing ?: " ".repeat(block.indent + 2)
 +    }
 +
++    // ==================== 单行 flow 拆解（键值分离显示用） ====================
++
++    /** 拆解结果：[seq] 是否序列；[segments] 各项原文（trim 后）；[kv] 映射项的键值；后三项是原有排版。 */
++    private data class FlowParts(
++        val seq: Boolean,
++        val segments: List<String>,
++        val kv: List<Pair<String, String>>,
++        val padOpen: String,
++        val padClose: String,
++        val sep: String,
++    )
++
++    /** 单行 flow 值拆项；`{…}` 里任何一段不像 `键: 值` 返回 null（回落标量显示）。 */
++    private fun parseFlow(body: String): FlowParts? {
++        val seq = body.startsWith("[")
++        if (!seq && !body.startsWith("{")) return null
++        val closeCh = if (seq) ']' else '}'
++        if (!body.endsWith(closeCh)) return null
++        val rawInner = body.substring(1, body.length - 1)
++        val padOpen = if (rawInner.startsWith(" ")) " " else ""
++        val padClose = if (rawInner.length > 1 && rawInner.endsWith(" ")) " " else ""
++        val inner = rawInner.trim()
++        if (inner.isEmpty()) return FlowParts(seq, emptyList(), emptyList(), padOpen, padClose, ", ")
++        val (segmentsRaw, seps) = splitTopLevel(inner)
++        val segments = segmentsRaw.map { it.trim() }.filter { it.isNotEmpty() }
++        if (segmentsRaw.size != segments.size) return null // 段里有全空或怪形态，别猜
++        val sep = seps.firstOrNull() ?: ", "
++        val kv = if (seq) {
++            segments.map { "" to it }
++        } else {
++            val out = ArrayList<Pair<String, String>>(segments.size)
++            for (t in segments) {
++                val pair = splitKeyValue(t) ?: return null
++                out += pair
++            }
++            out
++        }
++        return FlowParts(seq, segments, kv, padOpen, padClose, sep)
++    }
++
++    /** 顶层逗号切段（跳过引号内与嵌套 `{}` / `[]`），并记下段间分隔符原文（`, ` / `,`…）。 */
++    private fun splitTopLevel(body: String): Pair<List<String>, List<String>> {
++        val out = ArrayList<String>()
++        val seps = ArrayList<String>()
++        var depth = 0
++        var quote: Char? = null
++        var start = 0
++        var i = 0
++        while (i < body.length) {
++            val c = body[i]
++            if (quote != null) {
++                if (c == quote) {
++                    if (i + 1 < body.length && body[i + 1] == quote) i++ else quote = null
++                }
++            } else when (c) {
++                '"', '\'' -> quote = c
++                '{', '[' -> depth++
++                '}', ']' -> depth--
++                ',' -> if (depth == 0) {
++                    out.add(body.substring(start, i))
++                    var j = i + 1
++                    while (j < body.length && body[j] == ' ') j++
++                    seps.add(body.substring(i, j))
++                    start = j
++                    i = j
++                    continue
++                }
++            }
++            i++
++        }
++        out.add(body.substring(start))
++        return out to seps
++    }
++
++    /** `键: 值` 切分（键可带引号）；值里的嵌套 flow 整体保留。不像键值对返回 null。 */
++    private fun splitKeyValue(seg: String): Pair<String, String>? {
++        var i = 0
++        if (seg.startsWith("\"") || seg.startsWith("'")) {
++            val quote = seg[0]
++            i = 1
++            while (i < seg.length) {
++                if (seg[i] == quote) {
++                    if (i + 1 < seg.length && seg[i + 1] == quote) i++ else { i++; break }
++                }
++                i++
++            }
++            while (i < seg.length && seg[i] == ' ') i++
++            if (i >= seg.length || seg[i] != ':') return null
++            val key = seg.substring(0, i)
++            return key to seg.substring(i + 1).trim()
++        }
++        var depth = 0
++        while (i < seg.length) {
++            when (val c = seg[i]) {
++                '{', '[' -> depth++
++                '}', ']' -> depth--
++                ':' -> if (depth == 0 && (i == seg.lastIndex || seg[i + 1] == ' ' || seg[i + 1] == '\t')) {
++                    return seg.substring(0, i).trim() to seg.substring(i + 1).trim()
++                }
++            }
++            i++
++        }
++        return null
++    }
++
 +    /**
 +     * 新建顶层定义块：内容少且不长时压成一行 flow（mihomo_box 的 160 字符规则），
 +     * 否则退回块式——两者对 mihomo 等价，前者在人读的配置里更省行。
@@ -242,7 +390,7 @@ index 0000000..71d33d2
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 new file mode 100644
-index 0000000..53d4105
+index 0000000..a4f7727
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 @@ -0,0 +1,818 @@
@@ -533,8 +681,8 @@ index 0000000..53d4105
 +}
 +
 +private fun describeKind(block: DefBlock): String = when (block.kind) {
-+    DefKind.Map -> "映射：${block.entries.size} 项"
-+    DefKind.Seq -> "序列：${block.entries.size} 项"
++    DefKind.Map -> if (block.flowInline) "行内 flow 映射：${block.entries.size} 项（键 / 值分开编辑）" else "映射：${block.entries.size} 项"
++    DefKind.Seq -> if (block.flowInline) "行内 flow 序列：${block.entries.size} 项" else "序列：${block.entries.size} 项"
 +    DefKind.Scalar -> "标量值"
 +    DefKind.Unknown -> "复杂形态"
 +}
@@ -1498,10 +1646,10 @@ index 0000000..44c2097
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 new file mode 100644
-index 0000000..f4a174d
+index 0000000..5d8e127
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
-@@ -0,0 +1,641 @@
+@@ -0,0 +1,752 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -1696,6 +1844,7 @@ index 0000000..f4a174d
 +                        items(items = graph.anchors, key = { "anchor:" + it.name }) { anchor ->
 +                            AnchorCard(
 +                                anchor = anchor,
++                                defBlock = anchor.primaryDef?.let { d -> blockOf(anchor.name, d.line) },
 +                                onLocate = ::locate,
 +                                onEditDef = { line ->
 +                                    val block = blockOf(anchor.name, line)
@@ -1935,6 +2084,7 @@ index 0000000..f4a174d
 +@Composable
 +private fun AnchorCard(
 +    anchor: AnchorInfo,
++    defBlock: DefBlock?,
 +    onLocate: (Int) -> Unit,
 +    onEditDef: (Int) -> Unit,
 +    onRename: () -> Unit,
@@ -1982,13 +2132,25 @@ index 0000000..f4a174d
 +            BasicComponent(
 +                modifier = Modifier.padding(top = 4.dp),
 +                title = "定义在 L${def.line}",
-+                summary = def.path + " · " + def.text.trim(),
++                summary = def.path + (defBlock?.let { " · " + kindLabel(it) } ?: ""),
 +                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 6.dp),
 +                endActions = {
 +                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditDef(def.line) }
 +                },
 +                onClick = { onLocate(def.line) },
 +            )
++            // 键跟值分开展示：映射 / 序列拆成参数行（左键右值），标量单独值行；拆不动的形态才给原文
++            when {
++                defBlock != null && defBlock.entries.isNotEmpty() -> DefKeyValueRows(defBlock)
++                defBlock != null && defBlock.kind == DefKind.Scalar -> DefScalarRow(defBlock)
++                else -> Text(
++                    text = def.text.trim(),
++                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
++                    fontFamily = FontFamily.Monospace,
++                    fontSize = 12.sp,
++                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                )
++            }
 +        }
 +        anchor.refs.forEach { ref ->
 +            BasicComponent(
@@ -2100,6 +2262,103 @@ index 0000000..f4a174d
 +    )
 +}
 +
++/** 定义块形态一行标签：映射 / 序列 / 标量 / 复杂，行内 flow 单独标出。 */
++private fun kindLabel(block: DefBlock): String = when (block.kind) {
++    DefKind.Map -> if (block.flowInline) "行内 flow 映射 ${block.entries.size} 项" else "映射 ${block.entries.size} 项"
++    DefKind.Seq -> if (block.flowInline) "行内 flow 序列 ${block.entries.size} 项" else "序列 ${block.entries.size} 项"
++    DefKind.Scalar -> "标量值"
++    DefKind.Unknown -> "复杂形态"
++}
++
++/** 映射 / 序列定义拆成键值行：左列键名、右列值，键跟值不再糊成一条原文。 */
++@Composable
++private fun DefKeyValueRows(block: DefBlock) {
++    Column(modifier = Modifier.fillMaxWidth().padding(top = 2.dp)) {
++        block.entries.take(6).forEach { e ->
++            Row(
++                modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp),
++                verticalAlignment = Alignment.Top,
++            ) {
++                if (block.kind == DefKind.Seq) {
++                    Text(
++                        text = "-",
++                        fontFamily = FontFamily.Monospace,
++                        fontSize = 12.sp,
++                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                        modifier = Modifier.width(14.dp),
++                    )
++                    Text(
++                        text = e.value.ifEmpty { "（空）" },
++                        fontFamily = FontFamily.Monospace,
++                        fontSize = 12.sp,
++                        color = MiuixTheme.colorScheme.onSurface,
++                        modifier = Modifier.weight(1f),
++                    )
++                } else {
++                    Text(
++                        text = e.keyRaw,
++                        fontFamily = FontFamily.Monospace,
++                        fontSize = 12.sp,
++                        fontWeight = FontWeight.Medium,
++                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                        maxLines = 1,
++                        overflow = TextOverflow.Ellipsis,
++                        modifier = Modifier.weight(0.42f),
++                    )
++                    Spacer(Modifier.width(8.dp))
++                    Text(
++                        text = if (e.nested) {
++                            "（嵌套 ${e.endIdx - e.startIdx + 1} 行，编辑请切「文本」）"
++                        } else {
++                            e.value.ifEmpty { "（空）" }
++                        },
++                        fontFamily = FontFamily.Monospace,
++                        fontSize = 12.sp,
++                        color = MiuixTheme.colorScheme.onSurface,
++                        modifier = Modifier.weight(0.58f),
++                    )
++                }
++            }
++        }
++        if (block.entries.size > 6) {
++            Text(
++                text = "… 还有 ${block.entries.size - 6} 项，点「编辑」看全部",
++                fontSize = 11.sp,
++                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                modifier = Modifier.padding(top = 2.dp),
++            )
++        }
++    }
++}
++
++/** 标量定义：键名与值分两列显示。 */
++@Composable
++private fun DefScalarRow(block: DefBlock) {
++    Row(
++        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
++        verticalAlignment = Alignment.Top,
++    ) {
++        Text(
++            text = block.keyRaw,
++            fontFamily = FontFamily.Monospace,
++            fontSize = 12.sp,
++            fontWeight = FontWeight.Medium,
++            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++            maxLines = 1,
++            overflow = TextOverflow.Ellipsis,
++            modifier = Modifier.weight(0.42f),
++        )
++        Spacer(Modifier.width(8.dp))
++        Text(
++            text = block.headerValue.ifEmpty { "（空）" },
++            fontFamily = FontFamily.Monospace,
++            fontSize = 12.sp,
++            color = MiuixTheme.colorScheme.onSurface,
++            modifier = Modifier.weight(0.58f),
++        )
++    }
++}
++
 +@Composable
 +private fun Badge(text: String, color: Color) {
 +    Text(
@@ -2145,10 +2404,10 @@ index 0000000..f4a174d
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
 new file mode 100644
-index 0000000..6c24053
+index 0000000..9fb5450
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,258 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.runtime.Immutable
@@ -2372,11 +2631,25 @@ index 0000000..6c24053
 +    private fun unquote(raw: String): String =
 +        raw.removeSurrounding("\"").removeSurrounding("'").trim()
 +
-+    /** 注释起点下标（0 基），没有注释返回 -1。只在裸文本区判定，引号里的 `#` 不算。 */
++    /**
++     * 注释起点下标（0 基），没有注释返回 -1。只在裸文本区判定，引号里的 `#` 不算。
++     * 注意不能用 [bareMask] 直接查 `#` 位：掩码里注释区间（含 `#` 自身）整段为 false，
++     * 那样永远查不到——这里按「行首或空白后、且不在引号内」单独走一遍。
++     */
 +    fun commentIndex(line: String): Int {
-+        val mask = bareMask(line)
-+        for (i in line.indices) {
-+            if (line[i] == '#' && mask[i]) return i
++        var quote: Char? = null
++        var i = 0
++        while (i < line.length) {
++            val c = line[i]
++            if (quote != null) {
++                if (c == quote) {
++                    if (i + 1 < line.length && line[i + 1] == quote) i++ else quote = null
++                }
++            } else when (c) {
++                '"', '\'' -> quote = c
++                '#' -> if (i == 0 || line[i - 1].isWhitespace()) return i
++            }
++            i++
 +        }
 +        return -1
 +    }
@@ -5221,14 +5494,13 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..48bb1be
+index 0000000..1b3364e
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2289 @@
+@@ -0,0 +1,2285 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
-+import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.Column
 +import androidx.compose.foundation.layout.PaddingValues
 +import androidx.compose.foundation.layout.Row
@@ -6463,16 +6735,13 @@ index 0000000..48bb1be
 +                            fontFamily = FontFamily.Monospace,
 +                            modifier = Modifier.weight(1f),
 +                        )
-+                        // ✎ / × 装进等宽格子：两个按钮占位一致，不再随字形宽度参差
-+                        Box(modifier = Modifier.width(38.dp), contentAlignment = Alignment.Center) {
-+                            TextButton(text = "✎", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = i })
-+                        }
-+                        Box(modifier = Modifier.width(38.dp), contentAlignment = Alignment.Center) {
-+                            TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-+                                val f = local.filterIndexed { j, _ -> j != i }
-+                                if (onCommit(f)) local = f
-+                            })
-+                        }
++                        // ✎ / × 用与弹层其它按钮（＋ 添加表达式 / 完成）同款形状尺寸，不再压成 min 0 的小圆块
++                        TextButton(text = "✎", onClick = { editing = i })
++                        Spacer(Modifier.width(8.dp))
++                        TextButton(text = "×", onClick = {
++                            val f = local.filterIndexed { j, _ -> j != i }
++                            if (onCommit(f)) local = f
++                        })
 +                    }
 +                }
 +            }
