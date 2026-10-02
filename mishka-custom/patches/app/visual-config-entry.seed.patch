@@ -1,0 +1,198 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+index 2341aa9..334bcdc 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+@@ -335,6 +335,9 @@ fun AppNavigation(
+                         onBack = { navigator.pop() },
+                         onSaved = { navigator.pop() },
+                         onNavigateOverrides = { navigator.push(Route.SubscriptionOverrides(route.uuid)) },
++                        onNavigateVisualConfig = { relativePath ->
++                            navigator.push(Route.FileManagerEditor(route.uuid, relativePath, showConfigForm = true))
++                        },
+                     )
+                 }
+             }
+@@ -509,6 +512,7 @@ fun AppNavigation(
+                     uuid = route.uuid,
+                     relativePath = route.relativePath,
+                     subscriptionViewModel = subscriptionViewModel,
++                    showConfigFormOnOpen = route.showConfigForm,
+                     onBack = { navigator.pop() },
+                 )
+             }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
+index bdb96f7..c5f8970 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
+@@ -56,7 +56,11 @@ sealed interface Route : NavKey {
+     data object BackupRestore : Route
+ 
+     @Serializable
+-    data class FileManagerEditor(val uuid: String, val relativePath: String) : Route
++    data class FileManagerEditor(
++        val uuid: String,
++        val relativePath: String,
++        val showConfigForm: Boolean = false,
++    ) : Route
+ 
+     @Serializable
+     data object AppProxy : Route
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
+index 8466deb..42a8975 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
+@@ -47,7 +47,6 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
+ import top.yukonga.miuix.kmp.icon.MiuixIcons
+ import top.yukonga.miuix.kmp.icon.extended.Back
+ import top.yukonga.miuix.kmp.icon.extended.Link
+-import top.yukonga.miuix.kmp.icon.extended.Tune
+ import top.yukonga.miuix.kmp.icon.extended.Ok
+ import top.yukonga.miuix.kmp.theme.MiuixTheme
+ import top.yukonga.scripta.editor.CodeEditor
+@@ -60,6 +59,7 @@ fun FileManagerEditorScreen(
+     uuid: String,
+     relativePath: String,
+     subscriptionViewModel: SubscriptionViewModel? = null,
++    showConfigFormOnOpen: Boolean = false,
+     onBack: () -> Unit = {},
+ ) {
+     val fileManager = subscriptionViewModel?.fileManager
+@@ -69,12 +69,17 @@ fun FileManagerEditorScreen(
+     var isSaving by remember { mutableStateOf(false) }
+     var showAnchorPanel by remember { mutableStateOf(false) }
+     var showFormPanel by remember { mutableStateOf(false) }
++    var contentLoaded by remember(uuid, relativePath) { mutableStateOf(false) }
+ 
+     LaunchedEffect(uuid, relativePath, fileManager) {
+         val content = withContext(Dispatchers.IO) {
+             fileManager?.readImportedFile(uuid, relativePath)
+         } ?: ""
+         controller.setDocument(content)
++        contentLoaded = true
++    }
++    LaunchedEffect(contentLoaded, showConfigFormOnOpen) {
++        if (contentLoaded && showConfigFormOnOpen) showFormPanel = true
+     }
+ 
+     val backdrop = rememberBlurBackdrop()
+@@ -104,6 +109,7 @@ fun FileManagerEditorScreen(
+                     actions = {
+                         // [mishka-custom] YAML 配置的锚点面板入口：&定义 / *引用 可视化编辑
+                         if (isYamlPath(relativePath)) {
++                            // 锚点面板入口保持在原位；用户明确要求不迁移锚点工具。
+                             IconButton(onClick = { showAnchorPanel = true }) {
+                                 Icon(
+                                     imageVector = MiuixIcons.Link,
+@@ -111,13 +117,6 @@ fun FileManagerEditorScreen(
+                                     tint = MiuixTheme.colorScheme.onSurface,
+                                 )
+                             }
+-                            IconButton(onClick = { showFormPanel = true }) {
+-                                Icon(
+-                                    imageVector = MiuixIcons.Tune,
+-                                    contentDescription = "配置表单",
+-                                    tint = MiuixTheme.colorScheme.onSurface,
+-                                )
+-                            }
+                         }
+                         val canSave = controller.isModified && !isSaving && fileManager != null
+                         IconButton(
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
+index cef7fbf..eeb582a 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
+@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import top.yukonga.mishka.R
+ import top.yukonga.mishka.domain.model.ProfileType
++import top.yukonga.mishka.platform.showToast
+ import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
+ import top.yukonga.mishka.ui.component.CardItem
+ import top.yukonga.mishka.ui.component.blur.BlurredBar
+@@ -61,6 +62,7 @@ fun SubscriptionEditScreen(
+     onBack: () -> Unit = {},
+     onSaved: () -> Unit = {},
+     onNavigateOverrides: () -> Unit = {},
++    onNavigateVisualConfig: (relativePath: String) -> Unit = {},
+ ) {
+     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+     val subscription = uiState.subscriptions.find { it.id == uuid }
+@@ -225,6 +227,34 @@ fun SubscriptionEditScreen(
+                 ),
+             )
+ 
++            if (subscription.imported) {
++                groupedCardItems(
++                    keyPrefix = "subscription_visual_config",
++                    outerTopPadding = 0.dp,
++                    outerBottomPadding = 12.dp,
++                    items = listOf(
++                        CardItem("open") {
++                            ArrowPreference(
++                                title = stringResource(R.string.subscription_visual_config),
++                                summary = stringResource(R.string.subscription_visual_config_summary),
++                                onClick = {
++                                    val files = viewModel.fileManager.listImportedFiles(uuid)
++                                    val relativePath = files.firstOrNull { it.equals("config.yaml", ignoreCase = true) }
++                                        ?: files.firstOrNull {
++                                            it.endsWith(".yaml", ignoreCase = true) || it.endsWith(".yml", ignoreCase = true)
++                                        }
++                                    if (relativePath == null) {
++                                        showToast("未找到此订阅的 YAML 配置文件", long = true)
++                                    } else {
++                                        onNavigateVisualConfig(relativePath)
++                                    }
++                                },
++                            )
++                        },
++                    ),
++                )
++            }
++
+             item {
+                 TextButton(
+                     text = stringResource(R.string.common_save),
+diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
+index 78fcd87..a34898d 100644
+--- a/app/src/main/res/values-ru/strings.xml
++++ b/app/src/main/res/values-ru/strings.xml
+@@ -615,4 +615,6 @@
+         <item quantity="other">Выбрано %1$d переопределения</item>
+     </plurals>
+     <string name="subscription_overrides">Переопределения</string>
++    <string name="subscription_visual_config">Визуальная настройка</string>
++    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
+ </resources>
+diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
+index cba1bbb..883eb7a 100644
+--- a/app/src/main/res/values-zh-rCN/strings.xml
++++ b/app/src/main/res/values-zh-rCN/strings.xml
+@@ -610,4 +610,6 @@
+         <item quantity="other">已选择 %1$d 项覆写</item>
+     </plurals>
+     <string name="subscription_overrides">覆写</string>
++    <string name="subscription_visual_config">可视化配置</string>
++    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
+ </resources>
+diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
+index f6895e0..5a3acf6 100644
+--- a/app/src/main/res/values-zh-rTW/strings.xml
++++ b/app/src/main/res/values-zh-rTW/strings.xml
+@@ -610,4 +610,6 @@
+         <item quantity="other">已選擇 %1$d 項覆寫</item>
+     </plurals>
+     <string name="subscription_overrides">覆寫</string>
++    <string name="subscription_visual_config">視覺化設定</string>
++    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
+ </resources>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index d1acc59..b419b27 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -613,4 +613,6 @@
+         <item quantity="other">%1$d overrides selected</item>
+     </plurals>
+     <string name="subscription_overrides">Overrides</string>
++    <string name="subscription_visual_config">Visual config</string>
++    <string name="subscription_visual_config_summary">Edit this subscription’s YAML config with structured forms</string>
+ </resources>

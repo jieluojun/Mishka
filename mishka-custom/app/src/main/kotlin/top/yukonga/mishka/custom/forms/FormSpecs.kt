@@ -6,6 +6,7 @@ package top.yukonga.mishka.custom.forms
 enum class FormFieldType {
     TEXT, BOOL, NUMBER, SELECT, LIST, NUMLIST, USERLIST, TEXTAREA, MAPTEXT, MAPLIST,
     DNSLIST, APPLIST, HEADERS, FAKEIPRULE, RULESETPICK, CHECKBOX, PASSWORD, FILE, BUTTON,
+    PICKLIST,   // P2：从动态候选（节点 / 代理组 / 集合）里多选并排序的字符串列表
 }
 
 data class FormOption(val value: String, val label: String)
@@ -32,6 +33,16 @@ data class FormField(
     val keyPlaceholder: String? = null,
     val dnsIpOnly: Boolean = false,
     val dns: Boolean = false,
+    /** P2：只在所属项的 type 属于这些值时显示（代理组 / 集合的类型专属字段）；空 = 总是显示。 */
+    val only: List<String> = emptyList(),
+    /** P2：select 的取值要按数字写回（snell version 等）。 */
+    val numeric: Boolean = false,
+    /** P2：select 允许留空时「空」那一项的文案。 */
+    val emptyLabel: String? = null,
+    /** P2：headers 的值是字符串列表（http-opts.headers / provider header）。 */
+    val arrayValues: Boolean = false,
+    /** P2：列表字段在 YAML 里是一个用该分隔符拼起来的字符串（exclude-type 的 `A|B`），读拆写合。 */
+    val join: String? = null,
 ) : FormRow
 
 sealed interface FormRow
@@ -903,6 +914,23 @@ val EBPF_SECTIONS: List<FormSection> = listOf(
             optional = true,
         ),
         FormCustomRow("network"),
+        FormField(
+            path = "dns-mode",
+            label = "DNS 处理 dns-mode（全角色）",
+            type = FormFieldType.SELECT,
+            options = listOf(FormOption("hijack", "hijack 劫持（内核默认）"), FormOption("respect_policy", "respect_policy 先按策略"), FormOption("off", "off 不处理")),
+            desc = "顶层 dns-mode 套用于所有已启用角色；local.dns-mode / shared.dns-mode 有独立值时优先。",
+            optional = true,
+            allowEmpty = true,
+        ),
+        FormField(
+            path = "bypass-private-address",
+            label = "绕过私有地址（全角色）",
+            type = FormFieldType.BOOL,
+            desc = "顶层值适用于所有已启用角色；local/shared 各自设置时以角色级值为准。",
+            optional = true,
+            boolAs = "pick",
+        ),
         FormField(
             path = "udp-timeout",
             label = "UDP 超时(秒)",

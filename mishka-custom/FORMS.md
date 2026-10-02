@@ -57,15 +57,16 @@ Mishka 里**没有任何 YAML 库**（`grep` 过 `app/build.gradle.kts`、`libs.
 
 ## 4. 界面结构
 
-* 入口：编辑器顶栏的「调节」图标（`MiuixIcons.Tune`），与「锚点」图标（`MiuixIcons.Link`）并排，
-  只在 YAML 文件上出现；两个面板共用同一份草稿与保存流程（改动进编辑器缓冲区，仍是一个撤销单元，
-  顶栏「确定」才写盘）。
+* 入口：订阅编辑页「覆写」行下方提供「可视化配置」，布局与模块配置页一致；仅导入型订阅显示。
+  点击后按 `config.yaml` 优先、否则首个 `.yaml` / `.yml` 选择配置文件，并在 YAML 内容载入后自动打开结构化表单。
+  配置表单不占用编辑器工具栏；锚点面板不迁移，仍留在 YAML 编辑器原有工具栏位置。表单修改进入同一个编辑器草稿 / 撤销单元，
+  写盘仍走编辑器顶栏「确定」。
 * 配置面板首页：**13 个格子的 hub**，与参考实现同构（全局配置 / DNS / 域名嗅探 / 入站 / 出站代理 /
   代理集合 / 代理组 / 路由规则 / 规则集合 / 子规则 / 流量隧道 / NTP / 实验性），每格显示子标题计数
   （`N 个节点`、`N 条规则`…）与当前开关态（DNS/嗅探/NTP 显示「已启用 / 未启用」）。
 * 每个分区页：小节标题 + 字段行（miuix 控件：开关、下拉、输入框、数字、列表编辑器…）；
   改动即时落草稿并跳到被改的那一行，写盘仍走编辑器顶栏「确定」。
-* 只对 **YAML 文件**显示入口（复用现有 `isYamlFile` 判定）。
+* 仅允许对 **YAML 文件**打开表单（复用现有 `isYamlFile` 判定）；导入订阅没有 YAML 时点击入口会提示，不会打开表单。
 * **不假装能改的就不让改**：路径落在序列/标量下面（`canSet` 为假）时，控件禁用 + 行摘要里说明原因，
   点按提示「请在编辑器里直接改」——宁可不动，也不写坏配置。
 
@@ -73,23 +74,23 @@ Mishka 里**没有任何 YAML 库**（`grep` 过 `app/build.gradle.kts`、`libs.
 
 | 阶段 | 内容 | 大致规模 | 状态 |
 | --- | --- | --- | --- |
-| **P0 引擎** | `YamlDoc` 解析 + `YamlPatch` 三层写回 + 值渲染 + flow 集合读写；Python 规范（性质测试 71 项）+ Kotlin 1:1 转写，**两边逐字节对拍 71/71 一致** | Python 780 行 / Kotlin 876 行 | ✅ |
-| **P1 配置主页** | hub 13 格 + 全局配置(43) + DNS(23) + 域名嗅探 + NTP(6) + 实验性(3) + 入站（端口 5 + TUN 28 + EBPF + listeners 模板）：`ConfigFormPanel.kt` 710 行，开关/下拉/文本/数字/多行/列表编辑器全部接通 | 移植 ~1000 行 JS | ✅ |
-| **P2 流量页** | 出站代理（`PER_TYPE` 全协议）、代理集合、代理组（含 Smart 专属字段）、路由规则（含各类型值编辑器）、规则集合、子规则、流量隧道；hub 里这 7 格已就位，点按提示「P2 落地」 | 移植 ~1400 行 JS | ⏳ |
-| **P3 专用编辑器** | DNS 服务器构建器、fake-ip 规则、应用多选（applist）、规则集选择器（rulesetpick）、headers/maptext/maplist、override-expr 可视化；P1 页里这些控件先显示「P3」标记 | 移植 ~700 行 JS | ⏳ |
-| **P4 收尾** | 与参考实现的**对拍**（用 `fields.json` 逐字段核对：路径、标签、类型、选项、默认值、校验规则一致） | 工具 + 修漏 | ⏳ |
+| **P0 引擎** | `YamlDoc` 解析 + `YamlPatch` 三层写回 + 值渲染 + flow 集合读写；P2 起有**序列级补丁**（改项 / 插项 / 删项 / 挪项 / 映射改名、`a[3].b` 下标路径、flow 项里在行内建嵌套键、多行字符串按 `|` 块写）与**批量补丁**（`FormHost.batch`）。Python 性质测试 **697 项**，Kotlin↔Python 逐字节对拍 **802/802**（含括号不配对 flow 用例） | Python 1276 行 / Kotlin 1124 行 | ✅ |
+| **P1 配置主页** | hub 13 格 + 全局配置(43) + DNS(23) + 域名嗅探 + NTP(6) + 实验性(3) + 入站（端口 5 + TUN 28 + eBPF + listeners）。当前 `ConfigFormPanel.kt` 1332 行，`FormDialogs.kt` 660 行，`FormValues.kt` 238 行，生成的 `FormSpecs.kt` 1240 行（154 个字段行）。订阅页入口已移到「覆写」下方；锚点工具栏位置不变 | 移植 ~1000 行 JS | ✅ |
+| **P2 流量页** | 出站代理（27 种协议 `PER_TYPE` + 传输层 / TLS / 多路复用 / 通用小节按协议特性拼装、「其他参数」YAML 整块编辑）、代理集合、代理组、路由规则（37 种类型）、规则集合、子规则、流量隧道；**删除前引用检查**与**改名级联**（`ConfigRefs.kt`，参考 JS 对拍 153 例 0 差异）。`FlowFormPages.kt` 2110 行 + `ConfigRefs.kt` 547 行 + `FlowText.kt` 120 行 + `FormSpecsP2.kt` 2188 行；详见 §5.3 与 `FORMS-P2.md` | 移植 ~2200 行 JS | ✅ |
+| **P3 专用编辑器** | DNS 服务器构建器、fake-ip 规则、应用多选、规则集选择器、headers、hosts / nameserver-policy maplist、P2 `override.proxy-name` 简表格编辑；eBPF/listener 页绑定 `listeners[index]`，显示并编辑 local/shared 角色。已有值摘要与编辑器、子键级写回、键改名暂存；未支持的嵌套/别名 map 值禁止重写。入口在订阅编辑页「覆写」下方，锚点面板不移动 | `P3FormEditors.kt` 1027 行 + eBPF / maplist 纯逻辑与定向测试 | ✅（实现完成；Android 编译待 SDK 环境验证） |
+| **P4 收尾** | 与参考实现的**字段级对拍**（路径、标签、类型、选项、默认值、校验规则）与补漏 | 工具 + 修漏 | ⏳ |
 
 交付方式与现在一致：Kotlin 进 `app/src/main/kotlin/.../custom/forms/`，补丁重新导出，
 `patches/app/BASELINE.txt` 更新，`tools/verify_app_patch.sh` 必须仍然 PASS。
 
-## 5.1 P1 已落地（`custom/forms/ConfigFormPanel.kt`，710 行）
+## 5.1 P1 已落地（`custom/forms/ConfigFormPanel.kt`，当前 1338 行）
 
 渲染层与引擎的分工：引擎只管「怎么安全地改一行」，面板只管「怎么让用户改」。
 
 | 控件 | 覆盖字段 | 行为 |
 | --- | --- | --- |
-| 开关 | 37 个 bool 字段（`tun.enable`、`dns.enable`、`sniffer.enable`…） | 明确写 `true`/`false`（不省键，避免「用默认值」和「显式关」混淆） |
-| 下拉 | 19 个枚举字段（`mode`、`log-level`、`tun.stack`、`dns.enhanced-mode`…） | 选项来自 P1 字段表；`allowEmpty` 的字段额外给「（未设置）」= 删键回默认 |
+| 开关 | 38 个 bool 字段（`tun.enable`、`dns.enable`、`sniffer.enable`…） | 明确写 `true`/`false`（不省键，避免「用默认值」和「显式关」混淆） |
+| 下拉 | 20 个枚举字段（`mode`、`log-level`、`tun.stack`、`dns.enhanced-mode`…） | 选项来自 P1 字段表；`allowEmpty` 的字段额外给「（未设置）」= 删键回默认 |
 | 文本 / 数字 / 密码 | 24 + 19 + 其余 | `WindowDialog` + `TextField`；数字框只在能解析成数字时才写数值，否则原样写文本（交给内核校验） |
 | 多行文本 | `tun.dns-hijack` 之类的 TEXTAREA | 按 `|` 块写入，换行在 YAML 里保留 |
 | 列表编辑 | 28 个 list + 11 个 numlist + 4 个 userlist | 逐项增/删/上移，确定时整键重写为块序列（flow 序列会被规范化成块式，这是 A/B 层写回的既有行为） |
@@ -114,6 +115,77 @@ Mishka 里**没有任何 YAML 库**（`grep` 过 `app/build.gradle.kts`、`libs.
 * 行内 flow 集合（`geox-url: {geoip: …, geosite: …}`）可读可写：改值只替换行内那一段，
   新增/删除键在同一行完成，行尾注释保留；
 * CRLF 文档不被转成 LF；`'geosites:cn'` 这类**带冒号的引号键**正确解析（这是实测抓到的一个真 bug）。
+
+## 5.3 P2 已落地（`FlowFormPages.kt` 2110 行 + `ConfigRefs.kt` 547 行 + `FlowText.kt` 120 行 + `FormDialogs.kt` 660 行 + 生成的 `FormSpecsP2.kt` 2188 行）
+
+参考实现是 **jieluojun/mihomo_box** 的 WebUI（`openwrt/files/webroot/ui/js/`，源码只在历史提交里，取的是
+`657e799778`：`pages-flow.js` 2223 行 + `pages-config.js` 的内置策略表 + `config-references.js` / `reference-delete.js`）。
+字段表、新建模板、选项清单、规则类型表全部由 `tools/forms/extract_flow.mjs` 从这份源码**求值提取**成
+`tools/forms/fields_p2.json`（文件头记了 commit），再由 `gen_specs.py` 生成 `FormSpecsP2.kt`（266 个字段 / 37 种规则 /
+27 种协议模板）与 `FORMS-P2.md`；`gen_specs.py --check` 保证三者同步。页面层则逐个函数对照
+`editProxySheet / addSubSheet / editGroupSheet / editRuleSheet / addEpSheet / tunnels` 移植，七个入口都是「列表页 → 详情页」，
+全部写回仍只走 `FormHost`（`YamlPatch.setValue / removeKey / setItem / insertItem / removeItem / moveItem / renameKey`
+与批量 `batch`），hub 不再显示「P2」占位。
+
+| 页 | 配置键 / 形态 | 列表页 | 详情页（与参考实现逐条对齐的行为） |
+| --- | --- | --- | --- |
+| 出站代理 | `proxies`（序列） | 名称 · 协议 · `server:port`；新建先选协议（27 种模板，名字重复自动加序号）/ 上移 / 下移 / 删除（**先查引用**） | 协议只在新建时选（编辑态只读）；小节按 `PROXY_FEATURES` 拼：基础（含 `PER_TYPE`）→ 传输层（`network` 选择器停在 tcp 也显式写 `network: tcp`，切换时清掉其它 `*-opts`，http 补 `http-opts.method: GET`）→ TLS（`tls` 开 → 没有 servername / sni 时补 `example.com`；关 → 删掉两者；anytls 只认显式 false）→ 多路复用 → 通用链式 / 拨号（`dialer-proxy` 候选 = 出站池排除自己）；表单之外的键在「其他参数（YAML）」整块编辑（锚点 / 别名 / 括号不配对一律拒绝）；改名同步所有代理组 `proxies` 里的引用 |
+| 代理集合 | `proxy-providers`（映射） | 名称 · 类型 · 来源 / inline 节点数；新建（名字 + http / file / inline + 链接，http 必填 url；file 自动 `./proxies/<名>.yaml` 并去掉远程字段；inline 预置 `payload: []`）/ 改名 / 删除（先查引用） | 来源 / 健康检查（三态：默认 = 删整块；开启补 `HC_DEFAULTS` 缺失项）/ 筛选 / 覆写（`override-expr` 可视化 ⇄ 文本，常用表达式一键填入；`proxy-name` 改名表）/ 请求头，按 `type` 显隐，切到 file 时清掉 `FILE_HIDDEN_KEYS`；inline 的 `payload` 点进去就是**同一套节点编辑器**（路径换成 `proxy-providers.<名>.payload[i]`）；改名同步代理组 `use` |
+| 代理组 | `proxy-groups`（序列） | 名称 · 类型 · 成员数 · 引用集合数 · include-all；新建选类型 / 上移 / 下移 / 删除（先查引用） | `GROUP_SECTIONS` 按 `type` 显隐（Smart 的 `policy-priority / uselightgbm / collectdata / sample-rate` 等）；类型可选「默认（不覆写）」= 删掉本地 `type`（锚点继承时显示生效值）；`proxies` 候选 = 内置策略 + 代理组 + 节点（排除自己），`use` 只能挑现有集合，留空 = 删键；改名同步其它组的成员 + `rules` / `sub-rules` 的尾部策略 |
+| 路由规则 | `rules`（字符串序列） | 每行「类型 匹配值 → 目标 · 参数」；新增 / 点行编辑 / 在上方插入 / 上移 / 下移 / 删除 / **文本模式**（一行一条整列表重写） | 规则对话框：类型（37 种）→ 匹配值（`RULE-SET` 可从规则集合名里选；MATCH / 无载荷类型不填）→ 目标（策略池；`SUB-RULE` 换成子规则名）→ no-resolve 开关 ⇄ 原文编辑互相同步；拆合照内核 `ParseRulePayload`（[`FlowText.kt`]），确定前校验匹配值 / 目标非空；原规则里 `src` 这类附加参数原样保留在末尾 |
+| 规则集合 | `rule-providers`（映射） | 名称 · 类型 · behavior/format · 来源；新建（类型 / behavior / format / 链接；file 自动 `./rules/<名>.<yaml|txt|mrs>`）/ 改名 / 删除（先查引用） | `RULE_PROVIDER_SECTIONS` 按 `type` 显隐，切到 file 清掉远程字段；inline 的 `payload` 一行一条编辑；改名同步 `rules` 里的 `RULE-SET,<名>` |
+| 子规则 | `sub-rules`（映射 → 字符串序列） | 名称 · 条数；新建（空列表）/ 改名 / 删除 | 复用路由规则列表页，路径 `sub-rules.<名>` |
+| 流量隧道 | `tunnels`（序列，项是字符串或映射） | 协议 · 监听 → 目标 · 策略；新建（映射 / 单行两种写法，监听与目标必填，单行按内核 3 / 4 段校验）/ 上移 / 下移 / 删除 | 映射项用 `TUNNEL_SECTIONS`（`network` 多选 tcp / udp，`proxy` 从策略里选，address / target 不许清空）；字符串项展示原文 + 直接改字符串 + 一键「转成映射写法」 |
+
+**删除保护**（`ConfigRefs.kt`，照 `config-references.js` / `reference-delete.js`）：删出站代理 / 代理集合 / 代理组 / 规则集合
+前先在当前草稿里找引用（代理组成员与 `use`、`rules` / `sub-rules` 的目标 / `RULE-SET` / 逻辑条件、`dns.fake-ip-filter` 与
+`nameserver-policy` 里的 `rule-set:`、DNS 服务器地址 `#策略` 形式的出口、任意位置的 `dialer-proxy` / `proxy` 键、隧道的出口策略，
+位置按参考实现的 `path` 文案逐行列出），有引用 → 「无法删除」说明；
+没有 → 确认，确认时**再查一次**才真删。改名级联（`RenameSync`）也照各编辑器里的同步片段。两边与参考 JS 用同一批语料
+对拍：`tools/forms/refs_diff.mjs` 153 例 0 差异（3 次改名因引用落在别名 / 锚点里被 Kotlin 侧明确拒绝，参考实现对展开后的
+对象改会把共享块一起改掉——这是「不写坏 YAML」优先于「和参考实现一样」的取舍）。
+
+引擎为 P2 加的东西（Python 规范与 Kotlin 转写同步，性质测试 T7–T16 覆盖）：
+
+* 路径段可以是下标（`proxies[3].ws-opts.path` → `["proxies", 3, "ws-opts", "path"]`），`YamlDoc.quoteSeg` 处理含 `.` / `[` 的名字；
+* 序列级补丁：`setItem / insertItem / removeItem / moveItem`（块式与 flow 序列都行，flow 超过 160 列自动转块式；
+  删到只剩空就写 `key: []`；序列缺失或空值时 `insertItem` 直接建整键）；映射改名 `renameKey`（同名拒绝）；
+* `- {name: a, …}` 这类 flow 项里新建嵌套键在**同一行**完成（`{…, ws-opts: {path: /ws}}`），装不下的集合与多行文本直接拒绝、不动；
+* 含换行的字符串（证书 `ca`、多行 `payload`）按 `|` / `|-` 块写，读回逐字相同；
+* 对齐参考实现时新加的 `f10-refs.yaml`（锚点 / 别名 / 带冒号的键 / 块标量混在一起的流程页语料）又抓到并修掉 **6 个引擎 bug**：
+  裸键含冒号（`geosite:cn: …`）被拒、`- "a: b"` 被当成键；整块重写丢掉 `&anchor`；`key: &x [a, b]` 被当纯标量；
+  flow 项里改 `|` 多行 / `*alias` 节点会写坏；块标量结尾吞掉后面的空行；**`[1, 2}` 这类括号不配对的 flow 写法让两边
+  解析器死循环**（表单面板开着时编辑器每次改动都会重新解析，这一条会直接卡死界面）——现在按解析失败处理成不透明节点。
+
+页面层与参考实现**有意不同**的地方（都写在 UI 文案里）：
+
+* 隧道映射写法的 `network` 写成**列表**（参考实现写成 `tcp/udp` 字符串；内核 `listener/config/tunnel.go` 的 `UnmarshalYAML`
+  对映射写法要求序列，字符串形态会报错——参考实现这里是个 bug，不照抄）；
+* 规则串末尾的 `src` 等附加参数原样保留（参考实现会丢）；节点改名不改 `rules` 里直接写节点名的规则（参考实现同样不改，
+  只是文案点明）；规则集合改名不动子规则里的 `RULE-SET`；
+* 引用落在别名 / 锚点里（`proxies: *members`）的改名一律拒绝并提示去编辑器改（见上）；
+* 新建节点重名自动加序号而不是报错；新建代理组先选类型再建（参考实现先建 select 再在弹层里改类型，语义相同）；
+* 「其他参数（YAML）」确定后在原位逐键写回（参考实现整个对象重排），注释与顺序得以保留；
+* 规则 / 子规则 / 隧道（没有引用保护的列表）删除走菜单里两步确认；代理集合 inline payload 的节点删除同理；
+* 参考实现里把 WebUI 专有的「代理 URI 导入 / 二维码」没有移植（App 里没有对应入口）；
+* 参考源码取自 `657e799778`，比 mihomo_box 当前发布版（`20261001-1620`）略旧——发布包里的 `fields.js` 多了一个
+  `cns` 选项，本次字段表没有收录（抓不到对应源码，不猜）。
+
+## 5.4 P3 专用编辑器与入口迁移（实现完成）
+
+* `P3FormEditors.kt` 已接入 DNS server 构建器、APPLIST、FAKEIPRULE、RULESETPICK、HEADERS 与 MAPLIST 专用编辑器；
+  `override.proxy-name` 继续用 P2 的 pattern/target 表格。字段摘要会读出现有列表项、map/header 键值与布尔 select 的当前值，
+  而不是只显示条数或因 YAML `true` / 选项 `True` 大小写不同而丢失选中态。`P3_ONLY` 现在只保留罕见的 CHECKBOX、FILE、BUTTON；其余常用类型由专用编辑器处理。
+* `FormMapListLogic.kt` 生成逐键补丁：未编辑条目保持原文，单键改名、改名到被删除的旧键、A↔B 键交换均先暂存再落位；
+  重复键及嵌套映射 / 别名值拒绝写入，避免丢结构。`EditorLogicProps.kt` 覆盖这些路径。
+* eBPF listener 详情页按 `listeners[index]` 绑定，读 `mode`（默认 local / shared / hybrid）与 `local/shared.enable`，兼容旧 `enabled`；
+  总开关在任一角色启用时显示开启，角色开关只改自身 enable 状态并保留其它参数。新建模板不猜 `shared.interface`，安全从 local 开始；
+  顶层 `dns-mode` 与 `bypass-private-address` 也纳入 eBPF 字段表，角色级值可以覆盖全局值。scalar 与 sequence 两种 `network` 写法都能读取；
+  `fakeip-icmp: reply` 会检查 FakeIP 段及可用 TC hook（启用的 local+tc，或启用且配置网卡的 shared）。
+* 专用表单入口已从编辑器 toolbar 移到订阅编辑页「覆写」下方（仅导入型订阅）；点击后选 `config.yaml` 或首个 YAML 并自动展开表单。
+  锚点面板仍在原 toolbar 位置，不在迁移范围内。
+* 定向测试脚本：`bash tools/forms/run_editor_logic_tests.sh`（eBPF role state / FakeIP ICMP 的 TC hook 前置条件 / listener 路径 / FormValues readers / MAPLIST rename、swap、删除目标键）
+  通过；引擎对拍 802/802、引用对拍 153 例 0 差异。Android Gradle 编译仍需本机 Android SDK。
 
 ## 6. 对拍（怎么证明“和参考实现一样”）
 

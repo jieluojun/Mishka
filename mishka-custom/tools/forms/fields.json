@@ -1064,6 +1064,36 @@
        "custom": "network"
       },
       {
+       "path": "dns-mode",
+       "label": "DNS 处理 dns-mode（全角色）",
+       "type": "select",
+       "optional": true,
+       "allowEmpty": true,
+       "options": [
+        [
+         "hijack",
+         "hijack 劫持（内核默认）"
+        ],
+        [
+         "respect_policy",
+         "respect_policy 先按策略"
+        ],
+        [
+         "off",
+         "off 不处理"
+        ]
+       ],
+       "desc": "顶层 dns-mode 套用于所有已启用角色；local.dns-mode / shared.dns-mode 有独立值时优先。"
+      },
+      {
+       "path": "bypass-private-address",
+       "label": "绕过私有地址（全角色）",
+       "type": "bool",
+       "optional": true,
+       "boolAs": "pick",
+       "desc": "顶层值适用于所有已启用角色；local/shared 各自设置时以角色级值为准。"
+      },
+      {
        "path": "udp-timeout",
        "label": "UDP 超时(秒)",
        "type": "number",

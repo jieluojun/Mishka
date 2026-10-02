@@ -1,0 +1,1869 @@
+{
+ "source": {
+  "repo": "jieluojun/mihomo_box",
+  "commit": "657e799778",
+  "dir": "/home/user/work/ref/mihomo_box/webroot/ui/js",
+  "note": "由 tools/forms/extract_flow.mjs 从参考实现求值提取；provenance 里是每张表在源码里的位置（文件:行）。"
+ },
+ "provenance": {
+  "OVPN_CIPHERS": {
+   "file": "pages-flow.js",
+   "line": 22
+  },
+  "OVPN_AUTHS": {
+   "file": "pages-flow.js",
+   "line": 31
+  },
+  "FP_OPTS": {
+   "file": "pages-flow.js",
+   "line": 128
+  },
+  "EXCLUDE_TYPE_OPTIONS": {
+   "file": "pages-flow.js",
+   "line": 1236
+  },
+  "BUILTIN_POLICIES": {
+   "file": "pages-config.js",
+   "line": 11
+  },
+  "NO_SERVER": {
+   "file": "pages-flow.js",
+   "line": 345
+  },
+  "SHOW_NET": {
+   "file": "pages-flow.js",
+   "line": 348
+  },
+  "SHOW_SMUX": {
+   "file": "pages-flow.js",
+   "line": 349
+  },
+  "SHOW_TLS": {
+   "file": "pages-flow.js",
+   "line": 350
+  },
+  "SHOW_HYTLS": {
+   "file": "pages-flow.js",
+   "line": 351
+  },
+  "NET_TYPES": {
+   "file": "pages-flow.js",
+   "line": 352
+  },
+  "NET_OPTS_KEYS": {
+   "file": "pages-flow.js",
+   "line": 434
+  },
+  "PROXY_TEMPLATES": {
+   "file": "pages-flow.js",
+   "line": 64
+  },
+  "PROXY_BASE_FIELDS": {
+   "file": "pages-flow.js",
+   "line": 420
+  },
+  "FILE_HIDDEN_KEYS": {
+   "file": "pages-flow.js",
+   "line": 702
+  },
+  "GROUP_TYPES": {
+   "file": "pages-flow.js",
+   "line": 1238
+  },
+  "RULE_TYPES": {
+   "file": "pages-flow.js",
+   "line": 1732
+  },
+  "HC_DEFAULTS": {
+   "file": "pages-flow.js",
+   "line": 921
+  },
+  "HC_SUB": {
+   "file": "pages-flow.js",
+   "line": 922
+  },
+  "EXPR_PRESETS": {
+   "file": "pages-flow.js",
+   "line": 1128
+  },
+  "PROVIDER_DEFAULT": {
+   "file": "pages-flow.js",
+   "line": 831
+  },
+  "SUB_BASIC": {
+   "file": "pages-flow.js",
+   "line": 840
+  },
+  "SUB_HTTP_ONLY_IDX": {
+   "file": "pages-flow.js",
+   "line": 883
+  },
+  "SUB_filter": {
+   "file": "pages-flow.js",
+   "line": 908
+  },
+  "SUB_exclude-filter": {
+   "file": "pages-flow.js",
+   "line": 909
+  },
+  "SUB_exclude-type": {
+   "file": "pages-flow.js",
+   "line": 910
+  },
+  "SUB_OVERRIDE": {
+   "file": "pages-flow.js",
+   "line": 963
+  },
+  "GROUP_TEMPLATE": {
+   "file": "pages-flow.js",
+   "line": 1486
+  },
+  "GROUP_SMART": {
+   "file": "pages-flow.js",
+   "line": 1541
+  },
+  "GROUP_POLICY_PRIORITY": {
+   "file": "pages-flow.js",
+   "line": 1548
+  },
+  "GROUP_COMMON": {
+   "file": "pages-flow.js",
+   "line": 1562
+  },
+  "GROUP_HEALTH": {
+   "file": "pages-flow.js",
+   "line": 1572
+  },
+  "GROUP_TOLERANCE": {
+   "file": "pages-flow.js",
+   "line": 1582
+  },
+  "GROUP_STRATEGY": {
+   "file": "pages-flow.js",
+   "line": 1590
+  },
+  "GROUP_DEFAULT_SELECTED": {
+   "file": "pages-flow.js",
+   "line": 1601
+  },
+  "GROUP_EMPTY_FALLBACK": {
+   "file": "pages-flow.js",
+   "line": 1609
+  },
+  "GROUP_OTHERS": {
+   "file": "pages-flow.js",
+   "line": 1613
+  },
+  "GROUP_PROXIES": {
+   "file": "pages-flow.js",
+   "line": 1630
+  },
+  "GROUP_USE": {
+   "file": "pages-flow.js",
+   "line": 1631
+  },
+  "GROUP_HEALTH_TYPES": {
+   "file": "pages-flow.js",
+   "line": 1558
+  },
+  "RULE_HINTS": {
+   "file": "pages-flow.js",
+   "line": 1906
+  },
+  "RULE_MULTI_TYPES": {
+   "file": "pages-flow.js",
+   "line": 1875
+  },
+  "RULE_PROVIDER_DEFAULT": {
+   "file": "pages-flow.js",
+   "line": 2068
+  },
+  "EP_FIELDS": {
+   "file": "pages-flow.js",
+   "line": 2083
+  },
+  "EP_HTTP_ONLY_IDX": {
+   "file": "pages-flow.js",
+   "line": 2115
+  },
+  "TUNNEL_FIELDS": {
+   "file": "pages-config.js",
+   "line": 1591
+  },
+  "TUNNEL_TEMPLATE": {
+   "file": "pages-config.js",
+   "line": 1574
+  }
+ },
+ "PROXY_TYPE_ORDER": [
+  "direct",
+  "dns",
+  "reject",
+  "rematch",
+  "http",
+  "socks5",
+  "ss",
+  "ssr",
+  "snell",
+  "vmess",
+  "vless",
+  "trojan",
+  "anytls",
+  "mieru",
+  "sudoku",
+  "hysteria",
+  "hysteria2",
+  "tuic",
+  "shadowquic",
+  "wireguard",
+  "tailscale",
+  "ssh",
+  "masque",
+  "trusttunnel",
+  "zerotier",
+  "openvpn"
+ ],
+ "PROXY_SETS": {
+  "NO_SERVER": [
+   "direct",
+   "dns",
+   "rematch",
+   "reject",
+   "tailscale",
+   "zerotier"
+  ],
+  "SHOW_NET": [
+   "vmess",
+   "vless",
+   "trojan"
+  ],
+  "SHOW_SMUX": [
+   "vmess",
+   "vless",
+   "trojan",
+   "ss",
+   "ssr",
+   "anytls",
+   "hysteria",
+   "hysteria2",
+   "tuic"
+  ],
+  "SHOW_TLS": [
+   "vmess",
+   "vless",
+   "trojan",
+   "anytls"
+  ],
+  "SHOW_HYTLS": [
+   "hysteria2",
+   "hysteria",
+   "tuic",
+   "socks5",
+   "http"
+  ]
+ },
+ "PROXY_FEATURES": {
+  "direct": [
+   "tail"
+  ],
+  "dns": [
+   "tail"
+  ],
+  "reject": [
+   "tail"
+  ],
+  "rematch": [
+   "tail"
+  ],
+  "http": [
+   "server",
+   "tls",
+   "tail"
+  ],
+  "socks5": [
+   "server",
+   "tls",
+   "tail"
+  ],
+  "ss": [
+   "server",
+   "smux",
+   "tail"
+  ],
+  "ssr": [
+   "server",
+   "smux",
+   "tail"
+  ],
+  "snell": [
+   "server",
+   "tail"
+  ],
+  "vmess": [
+   "server",
+   "net",
+   "tls",
+   "tlsbool",
+   "smux",
+   "tail"
+  ],
+  "vless": [
+   "server",
+   "net",
+   "tls",
+   "tlsbool",
+   "smux",
+   "tail"
+  ],
+  "trojan": [
+   "server",
+   "net",
+   "tls",
+   "tlsbool",
+   "smux",
+   "tail"
+  ],
+  "anytls": [
+   "server",
+   "tls",
+   "tlsbool",
+   "smux",
+   "tail"
+  ],
+  "mieru": [
+   "server",
+   "tail"
+  ],
+  "sudoku": [
+   "server",
+   "tail"
+  ],
+  "hysteria": [
+   "server",
+   "tls",
+   "smux",
+   "tail"
+  ],
+  "hysteria2": [
+   "server",
+   "tls",
+   "smux",
+   "tail"
+  ],
+  "tuic": [
+   "server",
+   "tls",
+   "smux",
+   "tail"
+  ],
+  "shadowquic": [
+   "server",
+   "tail"
+  ],
+  "wireguard": [
+   "server",
+   "tail"
+  ],
+  "tailscale": [
+   "tail"
+  ],
+  "ssh": [
+   "server",
+   "tail"
+  ],
+  "masque": [
+   "server",
+   "tail"
+  ],
+  "trusttunnel": [
+   "server",
+   "tail"
+  ],
+  "zerotier": [
+   "tail"
+  ],
+  "openvpn": [
+   "server",
+   "tail"
+  ]
+ },
+ "PROXY_BASE_FIELDS": [
+  {
+   "path": "server",
+   "label": "服务器地址",
+   "type": "text",
+   "optional": true
+  },
+  {
+   "path": "port",
+   "label": "端口",
+   "type": "number",
+   "optional": true
+  }
+ ],
+ "PROXY_NETWORKS": [
+  [
+   "tcp",
+   "tcp（默认）"
+  ],
+  [
+   "ws",
+   "ws · WebSocket"
+  ],
+  [
+   "h2",
+   "h2 · HTTP/2"
+  ],
+  [
+   "grpc",
+   "grpc"
+  ],
+  [
+   "http",
+   "http"
+  ],
+  [
+   "xhttp",
+   "xhttp · 新版"
+  ]
+ ],
+ "NET_OPTS_KEYS": [
+  "ws-opts",
+  "h2-opts",
+  "grpc-opts",
+  "http-opts",
+  "xhttp-opts"
+ ],
+ "PROXY_SECTION_TITLES": {
+  "net": "传输层",
+  "tls": "TLS / Reality",
+  "smux": "多路复用 smux",
+  "tail": "通用链式 / 拨号",
+  "other": "其他参数（YAML，可选）"
+ },
+ "BUILTIN_POLICIES": [
+  [
+   "DIRECT",
+   "直连，数据直接出站"
+  ],
+  [
+   "REJECT",
+   "拒绝，拦截数据出站"
+  ],
+  [
+   "REJECT-DROP",
+   "拒绝，静默抛弃请求，不像 REJECT 那样回应错误"
+  ],
+  [
+   "PASS",
+   "绕过，跳过当前命中的规则分支继续匹配；在 SUB-RULE 中会跳出子规则回到主规则"
+  ],
+  [
+   "PASS-RULE",
+   "绕过，同 PASS，但在 SUB-RULE 中不跳出，继续在子规则内向后匹配"
+  ],
+  [
+   "COMPATIBLE",
+   "兼容，策略组筛选不出节点时出现，等效 DIRECT"
+  ]
+ ],
+ "GROUP_TYPES": [
+  [
+   "select",
+   "select 手动选择"
+  ],
+  [
+   "url-test",
+   "url-test 自动测速"
+  ],
+  [
+   "fallback",
+   "fallback 自动回退"
+  ],
+  [
+   "load-balance",
+   "load-balance 负载均衡"
+  ],
+  [
+   "smart",
+   "smart 智能(Smart内核)"
+  ],
+  [
+   "relay",
+   "relay 链式"
+  ]
+ ],
+ "GROUP_TEMPLATE": {
+  "name": "手动选择",
+  "type": "select",
+  "proxies": [
+   "DIRECT"
+  ],
+  "use": [],
+  "url": "https://cp.cloudflare.com/generate_204",
+  "interval": 300,
+  "timeout": 5000,
+  "lazy": true
+ },
+ "GROUP_HEALTH_TYPES": [
+  "url-test",
+  "fallback",
+  "load-balance",
+  "smart"
+ ],
+ "GROUP_SECTIONS": [
+  {
+   "title": "成员",
+   "fields": [
+    {
+     "path": "proxies",
+     "label": "成员(顺序生效)",
+     "type": "picklist",
+     "optional": true,
+     "optionsDynamic": "policies"
+    },
+    {
+     "path": "use",
+     "label": "使用订阅(use)",
+     "type": "picklist",
+     "optional": true,
+     "optionsDynamic": "providers"
+    }
+   ]
+  },
+  {
+   "title": "通用参数（按类型自动显示）",
+   "fields": [
+    {
+     "path": "include-all",
+     "label": "包含全部 (代理+订阅)",
+     "type": "bool",
+     "optional": true,
+     "desc": "自动包含全部 proxies 和 providers（按名称排序）",
+     "boolAs": "pick"
+    },
+    {
+     "path": "include-all-proxies",
+     "label": "包含全部代理",
+     "type": "bool",
+     "optional": true,
+     "desc": "仅包含全部 proxies",
+     "boolAs": "pick"
+    },
+    {
+     "path": "include-all-providers",
+     "label": "包含全部订阅",
+     "type": "bool",
+     "optional": true,
+     "desc": "仅包含全部 providers",
+     "boolAs": "pick"
+    },
+    {
+     "path": "filter",
+     "label": "节点名称过滤(正则)",
+     "type": "text",
+     "optional": true,
+     "placeholder": "如 (?i)港|hk|hongkong",
+     "desc": "仅对 include-all/use 引入的节点生效，多正则用 ` 分隔"
+    },
+    {
+     "path": "exclude-filter",
+     "label": "排除节点(正则)",
+     "type": "text",
+     "optional": true,
+     "desc": "排除匹配的节点"
+    },
+    {
+     "path": "exclude-type",
+     "label": "排除节点类型",
+     "type": "picklist",
+     "optional": true,
+     "join": "|",
+     "desc": "按类型排除，仅对 proxies 引入生效，无视大小写",
+     "options": [
+      [
+       "Shadowsocks",
+       "Shadowsocks"
+      ],
+      [
+       "ShadowsocksR",
+       "ShadowsocksR"
+      ],
+      [
+       "Snell",
+       "Snell"
+      ],
+      [
+       "Socks5",
+       "Socks5"
+      ],
+      [
+       "Http",
+       "Http"
+      ],
+      [
+       "Vmess",
+       "Vmess"
+      ],
+      [
+       "Vless",
+       "Vless"
+      ],
+      [
+       "Trojan",
+       "Trojan"
+      ],
+      [
+       "Hysteria",
+       "Hysteria"
+      ],
+      [
+       "Hysteria2",
+       "Hysteria2"
+      ],
+      [
+       "WireGuard",
+       "WireGuard"
+      ],
+      [
+       "Tuic",
+       "Tuic"
+      ],
+      [
+       "Ssh",
+       "Ssh"
+      ],
+      [
+       "Mieru",
+       "Mieru"
+      ],
+      [
+       "AnyTLS",
+       "AnyTLS"
+      ],
+      [
+       "ShadowQuic",
+       "ShadowQuic"
+      ],
+      [
+       "OpenVPN",
+       "OpenVPN"
+      ],
+      [
+       "Tailscale",
+       "Tailscale"
+      ],
+      [
+       "ZeroTier",
+       "ZeroTier"
+      ],
+      [
+       "Sudoku",
+       "Sudoku"
+      ],
+      [
+       "Masque",
+       "Masque"
+      ],
+      [
+       "TrustTunnel",
+       "TrustTunnel"
+      ],
+      [
+       "GostRelay",
+       "GostRelay"
+      ]
+     ]
+    },
+    {
+     "path": "url",
+     "label": "测速 URL",
+     "type": "text",
+     "optional": true,
+     "placeholder": "https://www.gstatic.com/generate_204",
+     "desc": "url-test/fallback/load-balance 必填",
+     "only": [
+      "url-test",
+      "fallback",
+      "load-balance",
+      "smart"
+     ]
+    },
+    {
+     "path": "interval",
+     "label": "测速间隔(秒)",
+     "type": "number",
+     "optional": true,
+     "placeholder": "300",
+     "only": [
+      "url-test",
+      "fallback",
+      "load-balance",
+      "smart"
+     ]
+    },
+    {
+     "path": "timeout",
+     "label": "测速超时(ms)",
+     "type": "number",
+     "optional": true,
+     "placeholder": "5000",
+     "only": [
+      "url-test",
+      "fallback",
+      "load-balance",
+      "smart"
+     ]
+    },
+    {
+     "path": "lazy",
+     "label": "懒加载",
+     "type": "bool",
+     "optional": true,
+     "desc": "未被选中时不测速（默认 true）",
+     "only": [
+      "url-test",
+      "fallback",
+      "load-balance",
+      "smart"
+     ],
+     "boolAs": "pick"
+    },
+    {
+     "path": "tolerance",
+     "label": "容差(ms)",
+     "type": "number",
+     "optional": true,
+     "placeholder": "50",
+     "desc": "仅 url-test/smart：新节点快于当前多少才切换",
+     "only": [
+      "url-test",
+      "smart"
+     ]
+    },
+    {
+     "path": "max-failed-times",
+     "label": "最大失败次数",
+     "type": "number",
+     "optional": true,
+     "placeholder": "5",
+     "desc": "超过则强制健康检查",
+     "only": [
+      "url-test",
+      "fallback",
+      "load-balance",
+      "smart"
+     ]
+    },
+    {
+     "path": "expected-status",
+     "label": "期望状态码",
+     "type": "text",
+     "optional": true,
+     "placeholder": "204 或 2xx 或 200/302/400-503",
+     "desc": "支持 / - 组合，默认 *",
+     "only": [
+      "url-test",
+      "fallback",
+      "load-balance",
+      "smart"
+     ]
+    },
+    {
+     "path": "strategy",
+     "label": "负载策略",
+     "type": "select",
+     "allowEmpty": true,
+     "options": [
+      [
+       "consistent-hashing",
+       "consistent-hashing（一致性哈希）"
+      ],
+      [
+       "round-robin",
+       "round-robin（轮询）"
+      ],
+      [
+       "sticky-sessions",
+       "sticky-sessions（粘性会话）"
+      ]
+     ],
+     "desc": "load-balance 专属，默认 consistent-hashing",
+     "only": [
+      "load-balance"
+     ]
+    },
+    {
+     "path": "default-selected",
+     "label": "默认选中",
+     "type": "select",
+     "allowEmpty": true,
+     "desc": "组的默认选择项；留空或填了不存在的名字则用第一个成员",
+     "only": [
+      "select"
+     ],
+     "optionsDynamic": "group-members"
+    },
+    {
+     "path": "empty-fallback",
+     "label": "空组回退",
+     "type": "select",
+     "allowEmpty": true,
+     "options": [
+      [
+       "DIRECT",
+       "DIRECT（直连，数据直接出站）"
+      ],
+      [
+       "REJECT",
+       "REJECT（拒绝，拦截数据出站）"
+      ],
+      [
+       "REJECT-DROP",
+       "REJECT-DROP（拒绝，静默抛弃请求，不像 REJECT 那样回应错误）"
+      ],
+      [
+       "PASS",
+       "PASS（绕过，跳过当前命中的规则分支继续匹配；在 SUB-RULE 中会跳出子规则回到主规则）"
+      ],
+      [
+       "PASS-RULE",
+       "PASS-RULE（绕过，同 PASS，但在 SUB-RULE 中不跳出，继续在子规则内向后匹配）"
+      ],
+      [
+       "COMPATIBLE",
+       "COMPATIBLE（兼容，策略组筛选不出节点时出现，等效 DIRECT）"
+      ]
+     ],
+     "desc": "组内一个可用节点都没有时走哪条内置策略，默认 COMPATIBLE"
+    },
+    {
+     "path": "disable-udp",
+     "label": "禁用 UDP",
+     "type": "bool",
+     "optional": true,
+     "desc": "该组禁用 UDP 转发",
+     "boolAs": "pick"
+    },
+    {
+     "path": "interface-name",
+     "label": "绑定出口网卡",
+     "type": "text",
+     "optional": true,
+     "placeholder": "如 en0 / eth0",
+     "desc": "已废弃，建议在节点上配置；优先级 节点>组>全局"
+    },
+    {
+     "path": "routing-mark",
+     "label": "路由标记",
+     "type": "number",
+     "optional": true,
+     "desc": "已废弃，建议在节点上配置"
+    },
+    {
+     "path": "hidden",
+     "label": "隐藏代理组",
+     "type": "bool",
+     "optional": true,
+     "desc": "在仪表盘隐藏",
+     "boolAs": "pick"
+    },
+    {
+     "path": "icon",
+     "label": "图标 URL",
+     "type": "text",
+     "optional": true,
+     "placeholder": "https://...",
+     "desc": "仪表盘显示图标"
+    }
+   ]
+  },
+  {
+   "title": "Smart 专属参数",
+   "fields": [
+    {
+     "path": "uselightgbm",
+     "label": "使用 LightGBM 预测权重",
+     "type": "bool",
+     "optional": true,
+     "only": [
+      "smart"
+     ],
+     "boolAs": "pick"
+    },
+    {
+     "path": "collectdata",
+     "label": "采样数据统计",
+     "type": "bool",
+     "optional": true,
+     "only": [
+      "smart"
+     ],
+     "boolAs": "pick"
+    },
+    {
+     "path": "sample-rate",
+     "label": "采样率 (0~1)",
+     "type": "number",
+     "optional": true,
+     "placeholder": "默认 1",
+     "only": [
+      "smart"
+     ]
+    },
+    {
+     "path": "prefer-asn",
+     "label": "ASN 粒度权重",
+     "type": "bool",
+     "optional": true,
+     "desc": "按目标 ASN 训练/选择",
+     "only": [
+      "smart"
+     ],
+     "boolAs": "pick"
+    },
+    {
+     "path": "tolerance",
+     "label": "切换容差(ms)",
+     "type": "number",
+     "optional": true,
+     "desc": "延迟差小于该值不切换",
+     "only": [
+      "smart"
+     ]
+    },
+    {
+     "path": "policy-priority",
+     "label": "节点权重策略",
+     "type": "text",
+     "optional": true,
+     "placeholder": "如 Premium:0.9;SG:1.3",
+     "desc": "<1 降权 >1 加权，正则/串匹配",
+     "only": [
+      "smart"
+     ]
+    }
+   ]
+  }
+ ],
+ "PROVIDER_TYPES": [
+  [
+   "http",
+   "http 远程下载"
+  ],
+  [
+   "file",
+   "file 本地文件"
+  ],
+  [
+   "inline",
+   "inline 内联节点"
+  ]
+ ],
+ "RULE_PROVIDER_TYPES": [
+  [
+   "http",
+   "http"
+  ],
+  [
+   "file",
+   "file"
+  ],
+  [
+   "inline",
+   "inline"
+  ]
+ ],
+ "PROVIDER_DEFAULT": {
+  "type": "http",
+  "url": "",
+  "interval": 86400,
+  "path": ""
+ },
+ "RULE_PROVIDER_DEFAULT": {
+  "type": "http",
+  "behavior": "domain",
+  "format": "yaml",
+  "url": "",
+  "interval": 86400
+ },
+ "FILE_HIDDEN_KEYS": {
+  "sub": [
+   "url",
+   "interval",
+   "size-limit",
+   "proxy",
+   "age-secret-key",
+   "header"
+  ],
+  "ep": [
+   "url",
+   "interval",
+   "proxy"
+  ]
+ },
+ "HC_DEFAULTS": {
+  "url": "https://cp.cloudflare.com/generate_204",
+  "interval": 300
+ },
+ "EXPR_PRESETS": [
+  [
+   "前缀改名",
+   [
+    ".name = \"[机场] \" + .name"
+   ]
+  ],
+  [
+   "后缀改名",
+   [
+    ".name = .name + \" | 专线\""
+   ]
+  ],
+  [
+   "开启 UDP",
+   [
+    ".udp = true"
+   ]
+  ],
+  [
+   "删除跳过证书校验",
+   [
+    "del(.skip-cert-verify)"
+   ]
+  ],
+  [
+   "仅保留 TLS",
+   [
+    "(select(.port == 443) | .tls) = true"
+   ]
+  ],
+  [
+   "混淆覆写",
+   [
+    ".servername = \"填免流混淆\"",
+    ".sni = .servername",
+    "(select(.network == \"ws\") | .[\"ws-opts\"].headers.Host) = .servername",
+    "(select(.network == \"http\") | .[\"http-opts\"].headers.Host) = [.servername]",
+    "(select(.network == \"h2\") | .[\"h2-opts\"].headers.Host) = [.servername]",
+    "(select(.network == \"xhttp\") | .[\"xhttp-opts\"].headers.Host) = .servername"
+   ]
+  ]
+ ],
+ "PROXY_PROVIDER_SECTIONS": [
+  {
+   "title": "基础",
+   "fields": [
+    {
+     "path": "type",
+     "label": "类型",
+     "type": "select",
+     "options": [
+      [
+       "http",
+       "http 远程下载"
+      ],
+      [
+       "file",
+       "file 本地文件"
+      ],
+      [
+       "inline",
+       "inline 内联节点"
+      ]
+     ]
+    },
+    {
+     "path": "url",
+     "label": "订阅链接",
+     "type": "text",
+     "desc": "http 类型必填",
+     "only": [
+      "http",
+      "inline"
+     ]
+    },
+    {
+     "path": "path",
+     "label": "保存路径",
+     "type": "text",
+     "optional": true,
+     "placeholder": "默认 ./proxies/ 目录"
+    },
+    {
+     "path": "interval",
+     "label": "自动更新间隔(秒)",
+     "type": "number",
+     "optional": true,
+     "only": [
+      "http",
+      "inline"
+     ]
+    },
+    {
+     "path": "size-limit",
+     "label": "订阅大小限制(字节)",
+     "type": "number",
+     "optional": true,
+     "desc": "0 为不限制",
+     "only": [
+      "http",
+      "inline"
+     ]
+    },
+    {
+     "path": "proxy",
+     "label": "下载出口",
+     "type": "select",
+     "allowEmpty": true,
+     "emptyLabel": "默认（不覆写）",
+     "desc": "下载订阅使用的出口",
+     "only": [
+      "http",
+      "inline"
+     ],
+     "optionsDynamic": "outbound"
+    },
+    {
+     "path": "age-secret-key",
+     "label": "AGE 解密密钥",
+     "type": "text",
+     "optional": true,
+     "desc": "加密订阅内容自动解密",
+     "tag": "新版",
+     "only": [
+      "http",
+      "inline"
+     ]
+    },
+    {
+     "custom": "provider-payload"
+    }
+   ]
+  },
+  {
+   "title": "请求 / 过滤",
+   "fields": [
+    {
+     "path": "header",
+     "label": "请求头 header",
+     "type": "headers",
+     "optional": true,
+     "arrayValues": true,
+     "desc": "如 UA / Authorization，每行一条",
+     "only": [
+      "http",
+      "inline"
+     ]
+    },
+    {
+     "path": "filter",
+     "label": "筛选节点 filter",
+     "type": "text",
+     "optional": true,
+     "placeholder": "(?i)港|hk|hongkong",
+     "desc": "筛选满足关键词或正则表达式的节点"
+    },
+    {
+     "path": "exclude-filter",
+     "label": "排除节点 exclude-filter",
+     "type": "text",
+     "optional": true,
+     "desc": "排除匹配的节点"
+    },
+    {
+     "path": "exclude-type",
+     "label": "排除协议类型",
+     "type": "picklist",
+     "optional": true,
+     "join": "|",
+     "desc": "按类型排除节点；无视大小写",
+     "options": [
+      [
+       "Shadowsocks",
+       "Shadowsocks"
+      ],
+      [
+       "ShadowsocksR",
+       "ShadowsocksR"
+      ],
+      [
+       "Snell",
+       "Snell"
+      ],
+      [
+       "Socks5",
+       "Socks5"
+      ],
+      [
+       "Http",
+       "Http"
+      ],
+      [
+       "Vmess",
+       "Vmess"
+      ],
+      [
+       "Vless",
+       "Vless"
+      ],
+      [
+       "Trojan",
+       "Trojan"
+      ],
+      [
+       "Hysteria",
+       "Hysteria"
+      ],
+      [
+       "Hysteria2",
+       "Hysteria2"
+      ],
+      [
+       "WireGuard",
+       "WireGuard"
+      ],
+      [
+       "Tuic",
+       "Tuic"
+      ],
+      [
+       "Ssh",
+       "Ssh"
+      ],
+      [
+       "Mieru",
+       "Mieru"
+      ],
+      [
+       "AnyTLS",
+       "AnyTLS"
+      ],
+      [
+       "ShadowQuic",
+       "ShadowQuic"
+      ],
+      [
+       "OpenVPN",
+       "OpenVPN"
+      ],
+      [
+       "Tailscale",
+       "Tailscale"
+      ],
+      [
+       "ZeroTier",
+       "ZeroTier"
+      ],
+      [
+       "Sudoku",
+       "Sudoku"
+      ],
+      [
+       "Masque",
+       "Masque"
+      ],
+      [
+       "TrustTunnel",
+       "TrustTunnel"
+      ],
+      [
+       "GostRelay",
+       "GostRelay"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "title": "健康检查",
+   "fields": [
+    {
+     "custom": "provider-health-enable"
+    },
+    {
+     "path": "health-check.url",
+     "label": "测速 URL",
+     "type": "text",
+     "optional": true
+    },
+    {
+     "path": "health-check.interval",
+     "label": "测速间隔(秒)",
+     "type": "number",
+     "optional": true
+    },
+    {
+     "path": "health-check.timeout",
+     "label": "测速超时(ms)",
+     "type": "number",
+     "optional": true
+    },
+    {
+     "path": "health-check.lazy",
+     "label": "懒加载",
+     "type": "bool",
+     "optional": true,
+     "boolAs": "pick"
+    },
+    {
+     "path": "health-check.expected-status",
+     "label": "期望状态码",
+     "type": "text",
+     "optional": true,
+     "placeholder": "204 或 2xx"
+    }
+   ]
+  },
+  {
+   "title": "覆写 override（对该订阅全部节点生效）",
+   "fields": [
+    {
+     "path": "override.additional-prefix",
+     "label": "节点名前缀",
+     "type": "text",
+     "optional": true,
+     "placeholder": "[机场名] "
+    },
+    {
+     "path": "override.additional-suffix",
+     "label": "节点名后缀",
+     "type": "text",
+     "optional": true
+    },
+    {
+     "path": "override.tfo",
+     "label": "TFO (TCP Fast Open)",
+     "type": "bool",
+     "optional": true,
+     "boolAs": "pick"
+    },
+    {
+     "path": "override.mptcp",
+     "label": "MPTCP",
+     "type": "bool",
+     "optional": true,
+     "boolAs": "pick"
+    },
+    {
+     "path": "override.udp",
+     "label": "UDP",
+     "type": "bool",
+     "optional": true,
+     "boolAs": "pick"
+    },
+    {
+     "path": "override.udp-over-tcp",
+     "label": "UDP over TCP (UoT)",
+     "type": "bool",
+     "optional": true,
+     "boolAs": "pick"
+    },
+    {
+     "path": "override.up",
+     "label": "上行带宽",
+     "type": "text",
+     "optional": true,
+     "placeholder": "10 Mbps"
+    },
+    {
+     "path": "override.down",
+     "label": "下行带宽",
+     "type": "text",
+     "optional": true,
+     "placeholder": "50 Mbps"
+    },
+    {
+     "path": "override.skip-cert-verify",
+     "label": "跳过证书校验",
+     "type": "bool",
+     "optional": true,
+     "boolAs": "pick"
+    },
+    {
+     "path": "override.name-cert-verify",
+     "label": "证书 DNSName 校验目标",
+     "type": "text",
+     "optional": true,
+     "desc": "不改 SNI，只改校验对象"
+    },
+    {
+     "path": "override.dialer-proxy",
+     "label": "链式出口 dialer-proxy",
+     "type": "select",
+     "allowEmpty": true,
+     "emptyLabel": "默认（不覆写）",
+     "desc": "订阅内全部节点经此出口建立连接",
+     "optionsDynamic": "outbound"
+    },
+    {
+     "path": "override.interface-name",
+     "label": "绑定出口网卡",
+     "type": "text",
+     "optional": true
+    },
+    {
+     "path": "override.routing-mark",
+     "label": "路由标记 routing-mark",
+     "type": "number",
+     "optional": true
+    },
+    {
+     "path": "override.ip-version",
+     "label": "IP 版本偏好",
+     "type": "select",
+     "allowEmpty": true,
+     "options": [
+      [
+       "dual",
+       "dual"
+      ],
+      [
+       "ipv4",
+       "ipv4"
+      ],
+      [
+       "ipv6",
+       "ipv6"
+      ],
+      [
+       "ipv4-prefer",
+       "ipv4-prefer"
+      ],
+      [
+       "ipv6-prefer",
+       "ipv6-prefer"
+      ]
+     ]
+    },
+    {
+     "path": "override.proxy-name",
+     "label": "proxy-name 批量重命名",
+     "type": "maplist",
+     "optional": true,
+     "desc": "正则 pattern→target，支持 $1 引用"
+    }
+   ]
+  },
+  {
+   "title": "override-expr（按表达式批量修改节点 · 新版）",
+   "fields": [
+    {
+     "custom": "override-expr"
+    }
+   ]
+  }
+ ],
+ "RULE_PROVIDER_SECTIONS": [
+  {
+   "title": "基础",
+   "fields": [
+    {
+     "path": "type",
+     "label": "类型",
+     "type": "select",
+     "options": [
+      [
+       "http",
+       "http"
+      ],
+      [
+       "file",
+       "file"
+      ],
+      [
+       "inline",
+       "inline"
+      ]
+     ]
+    },
+    {
+     "path": "behavior",
+     "label": "规则类型",
+     "type": "select",
+     "options": [
+      [
+       "domain",
+       "domain 域名"
+      ],
+      [
+       "ipcidr",
+       "ipcidr IP段"
+      ],
+      [
+       "classical",
+       "classical 经典"
+      ]
+     ]
+    },
+    {
+     "path": "format",
+     "label": "格式",
+     "type": "select",
+     "allowEmpty": true,
+     "options": [
+      [
+       "yaml",
+       "yaml"
+      ],
+      [
+       "text",
+       "text"
+      ],
+      [
+       "mrs",
+       "mrs(二进制)"
+      ]
+     ]
+    },
+    {
+     "path": "url",
+     "label": "下载链接",
+     "type": "text",
+     "optional": true,
+     "only": [
+      "http",
+      "inline"
+     ]
+    },
+    {
+     "path": "path",
+     "label": "本地路径",
+     "type": "text",
+     "optional": true,
+     "placeholder": "默认 ./rules/ 目录"
+    },
+    {
+     "path": "interval",
+     "label": "更新间隔(秒)",
+     "type": "number",
+     "optional": true,
+     "only": [
+      "http",
+      "inline"
+     ]
+    },
+    {
+     "path": "proxy",
+     "label": "下载出口",
+     "type": "select",
+     "allowEmpty": true,
+     "emptyLabel": "默认（不覆写）",
+     "desc": "下载规则集使用的出口",
+     "only": [
+      "http",
+      "inline"
+     ],
+     "optionsDynamic": "outbound"
+    },
+    {
+     "custom": "rule-provider-payload"
+    }
+   ]
+  }
+ ],
+ "RULE_TYPES": [
+  {
+   "value": "DOMAIN",
+   "label": "DOMAIN",
+   "placeholder": "完整域名，如 www.google.com"
+  },
+  {
+   "value": "DOMAIN-SUFFIX",
+   "label": "DOMAIN-SUFFIX",
+   "placeholder": "域名后缀，如 google.com / .google.com"
+  },
+  {
+   "value": "DOMAIN-KEYWORD",
+   "label": "DOMAIN-KEYWORD",
+   "placeholder": "域名关键词，如 google"
+  },
+  {
+   "value": "DOMAIN-REGEX",
+   "label": "DOMAIN-REGEX",
+   "placeholder": "正则，如 ^.*google.*"
+  },
+  {
+   "value": "DOMAIN-WILDCARD",
+   "label": "DOMAIN-WILDCARD",
+   "placeholder": "通配，如 *.google.com"
+  },
+  {
+   "value": "GEOSITE",
+   "label": "GEOSITE",
+   "placeholder": "geosite 类别，如 cn / google / category-ads-all"
+  },
+  {
+   "value": "GEOIP",
+   "label": "GEOIP",
+   "placeholder": "国家码，如 CN / 私有地址 private",
+   "ipRule": true
+  },
+  {
+   "value": "IP-CIDR",
+   "label": "IP-CIDR",
+   "placeholder": "IPv4 段，如 91.108.4.0/22",
+   "ipRule": true
+  },
+  {
+   "value": "IP-CIDR6",
+   "label": "IP-CIDR6",
+   "placeholder": "IPv6 段，如 2001:db8::/32",
+   "ipRule": true
+  },
+  {
+   "value": "IP-SUFFIX",
+   "label": "IP-SUFFIX",
+   "placeholder": "IP 后缀，如 8.8.8.8/24",
+   "ipRule": true
+  },
+  {
+   "value": "IP-ASN",
+   "label": "IP-ASN",
+   "placeholder": "ASN 号，如 13335",
+   "ipRule": true
+  },
+  {
+   "value": "SRC-GEOIP",
+   "label": "SRC-GEOIP",
+   "placeholder": "源 GeoIP，如 CN",
+   "ipRule": true
+  },
+  {
+   "value": "SRC-IP-ASN",
+   "label": "SRC-IP-ASN",
+   "placeholder": "源 ASN，如 9808",
+   "ipRule": true
+  },
+  {
+   "value": "SRC-IP-CIDR",
+   "label": "SRC-IP-CIDR",
+   "placeholder": "源 IP 段，如 192.168.1.0/24",
+   "ipRule": true
+  },
+  {
+   "value": "SRC-IP-SUFFIX",
+   "label": "SRC-IP-SUFFIX",
+   "placeholder": "源 IP 后缀",
+   "ipRule": true
+  },
+  {
+   "value": "DST-PORT",
+   "label": "DST-PORT",
+   "placeholder": "目标端口，如 443 / 80-443"
+  },
+  {
+   "value": "SRC-PORT",
+   "label": "SRC-PORT",
+   "placeholder": "源端口"
+  },
+  {
+   "value": "IN-PORT",
+   "label": "IN-PORT",
+   "placeholder": "入站端口，如 7890"
+  },
+  {
+   "value": "IN-TYPE",
+   "label": "IN-TYPE",
+   "placeholder": "入站类型，如 SOCKS / HTTP"
+  },
+  {
+   "value": "IN-USER",
+   "label": "IN-USER",
+   "placeholder": "入站用户，如 mihomo"
+  },
+  {
+   "value": "IN-NAME",
+   "label": "IN-NAME",
+   "placeholder": "入站名称，如 ss"
+  },
+  {
+   "value": "REMATCH-NAME",
+   "label": "REMATCH-NAME",
+   "placeholder": "Rematch 名称"
+  },
+  {
+   "value": "PROCESS-NAME",
+   "label": "PROCESS-NAME",
+   "placeholder": "进程名，如 chrome.exe"
+  },
+  {
+   "value": "PROCESS-NAME-REGEX",
+   "label": "PROCESS-NAME-REGEX",
+   "placeholder": "进程名正则"
+  },
+  {
+   "value": "PROCESS-NAME-WILDCARD",
+   "label": "PROCESS-NAME-WILDCARD",
+   "placeholder": "进程名通配，如 *telegram*"
+  },
+  {
+   "value": "PROCESS-PATH",
+   "label": "PROCESS-PATH",
+   "placeholder": "进程路径，如 /usr/bin/curl"
+  },
+  {
+   "value": "PROCESS-PATH-REGEX",
+   "label": "PROCESS-PATH-REGEX",
+   "placeholder": "路径正则"
+  },
+  {
+   "value": "PROCESS-PATH-WILDCARD",
+   "label": "PROCESS-PATH-WILDCARD",
+   "placeholder": "路径通配"
+  },
+  {
+   "value": "UID",
+   "label": "UID",
+   "placeholder": "用户 ID"
+  },
+  {
+   "value": "NETWORK",
+   "label": "NETWORK",
+   "placeholder": "TCP / UDP"
+  },
+  {
+   "value": "DSCP",
+   "label": "DSCP",
+   "placeholder": "DSCP 值，如 4"
+  },
+  {
+   "value": "RULE-SET",
+   "label": "RULE-SET",
+   "placeholder": "规则集名称（需在规则集页面创建）",
+   "ipRule": true,
+   "targetKind": "rule-providers"
+  },
+  {
+   "value": "AND",
+   "label": "AND",
+   "placeholder": "逻辑与，如 ((DOMAIN,example.com),(NETWORK,UDP))",
+   "multi": true
+  },
+  {
+   "value": "OR",
+   "label": "OR",
+   "placeholder": "逻辑或",
+   "multi": true
+  },
+  {
+   "value": "NOT",
+   "label": "NOT",
+   "placeholder": "逻辑非，如 ((DOMAIN,example.com))",
+   "multi": true
+  },
+  {
+   "value": "SUB-RULE",
+   "label": "SUB-RULE",
+   "placeholder": "子规则名称",
+   "multi": true,
+   "targetKind": "sub-rules"
+  },
+  {
+   "value": "MATCH",
+   "label": "MATCH",
+   "placeholder": "兜底规则，无需匹配值",
+   "noPayload": true
+  }
+ ],
+ "TUNNEL_TEMPLATE": {
+  "network": "tcp",
+  "address": "",
+  "target": ""
+ },
+ "TUNNEL_SECTIONS": [
+  {
+   "title": "隧道",
+   "fields": [
+    {
+     "path": "network",
+     "label": "协议 network",
+     "type": "picklist",
+     "options": [
+      [
+       "tcp",
+       "tcp"
+      ],
+      [
+       "udp",
+       "udp"
+      ]
+     ],
+     "desc": "映射写法里是列表（内核 Tunnel.network []string）"
+    },
+    {
+     "path": "address",
+     "label": "监听地址 address",
+     "type": "text",
+     "placeholder": "如 0.0.0.0:8080"
+    },
+    {
+     "path": "target",
+     "label": "目标地址 target",
+     "type": "text",
+     "placeholder": "如 example.com:80"
+    },
+    {
+     "path": "proxy",
+     "label": "出口代理 proxy（留空直连）",
+     "type": "select",
+     "allowEmpty": true,
+     "optionsDynamic": "policies"
+    }
+   ]
+  }
+ ],
+ "OVPN": {
+  "ciphers": [
+   [
+    "AES-128-GCM",
+    "AES-128-GCM（默认）"
+   ],
+   [
+    "AES-192-GCM",
+    "AES-192-GCM"
+   ],
+   [
+    "AES-256-GCM",
+    "AES-256-GCM"
+   ],
+   [
+    "CHACHA20-POLY1305",
+    "CHACHA20-POLY1305"
+   ],
+   [
+    "AES-128-CBC",
+    "AES-128-CBC"
+   ],
+   [
+    "AES-192-CBC",
+    "AES-192-CBC"
+   ],
+   [
+    "AES-256-CBC",
+    "AES-256-CBC"
+   ]
+  ],
+  "auths": [
+   [
+    "SHA256",
+    "SHA256（默认）"
+   ],
+   [
+    "SHA1",
+    "SHA1"
+   ],
+   [
+    "SHA384",
+    "SHA384"
+   ],
+   [
+    "SHA512",
+    "SHA512"
+   ],
+   [
+    "MD5",
+    "MD5"
+   ]
+  ]
+ }
+}

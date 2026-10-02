@@ -4,6 +4,7 @@
 用法: python3 tools/check_kotlin.py <文件或目录> [...]
 退出码非 0 表示存在解析错误。
 """
+import re
 import sys
 from pathlib import Path
 
@@ -25,7 +26,13 @@ def walk(node):
 
 def check(path: Path) -> int:
     src = path.read_bytes()
-    tree = PARSER.parse(src)
+    # The bundled tree-sitter Kotlin grammar predates Compose's type-use
+    # annotation syntax (`@Composable () -> Unit`) and can cascade into false
+    # ERROR nodes across otherwise valid lambdas. The annotation is orthogonal
+    # to Kotlin grammar shape, so parse a copy without it; the original files
+    # remain untouched.
+    parse_src = re.sub(rb"@Composable\b", b"", src)
+    tree = PARSER.parse(parse_src)
     problems = list(walk(tree.root_node))
     if not problems:
         print(f"OK   {path}")

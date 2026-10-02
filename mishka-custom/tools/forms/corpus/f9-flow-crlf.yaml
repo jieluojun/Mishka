@@ -1,0 +1,15 @@
+# P2 语料：flow 风格的列表 + CRLF
+mode: rule
+proxies:
+  - {name: p1, type: ss, server: s1, port: 1, cipher: aes-128-gcm, password: x}
+  - {name: p2, type: http, server: s2, port: 8080}
+proxy-groups:
+  - {name: G, type: select, proxies: [p1, p2, DIRECT]}
+  - name: U
+    type: url-test
+    proxies: [p1, p2]
+    url: http://cp.cloudflare.com/generate_204
+    interval: 300
+rules: ['DOMAIN-SUFFIX,a.com,G', 'GEOIP,CN,DIRECT', 'MATCH,DIRECT']
+sub-rules: {}
+tunnels: []

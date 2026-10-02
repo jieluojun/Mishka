@@ -1,0 +1,226 @@
+package top.yukonga.mishka.custom.forms
+
+private fun expect(condition: Boolean, message: String) {
+    check(condition) { message }
+}
+
+private fun applyBatch(text: String, ops: List<BatchOp>): YamlDoc? {
+    var current = YamlDoc.parse(text)
+    for (op in ops) {
+        val next = when (op) {
+            is BatchOp.Set -> {
+                if (!current.canSet(op.path)) return null
+                YamlPatch.setValue(current, op.path, op.value)
+            }
+            is BatchOp.Remove -> {
+                if (current.get(op.path) == null) continue
+                YamlPatch.removeKey(current, op.path)
+            }
+            is BatchOp.SetItem -> YamlPatch.setItem(current, op.seqPath, op.index, op.value)
+            is BatchOp.Rename -> {
+                val parent = current.get(op.path.dropLast(1))
+                if (parent != null && current.findEntry(parent, op.newKey) != null) return null
+                YamlPatch.renameKey(current, op.path, op.newKey)
+            }
+        }
+        if (next === current) return null
+        current = next
+    }
+    return current
+}
+
+private fun roleState(listenerYaml: String): Pair<Boolean, Boolean> {
+    val doc = YamlDoc.parse("listeners:\n  - name: test\n    type: ebpf\n$listenerYaml")
+    return ebpfRoleState(doc, listOf("listeners", 0))
+}
+
+private fun testEbpfRoleStateAndWrites() {
+    expect(roleState("    mode: local\n") == (true to false), "mode=local must enable only local")
+    expect(roleState("    mode: shared\n") == (false to true), "mode=shared must enable only shared")
+    expect(roleState("    mode: hybrid\n") == (true to true), "mode=hybrid must enable both roles")
+    expect(roleState("") == (true to false), "missing mode must use the documented local default")
+    expect(
+        roleState("    mode: hybrid\n    local:\n      enable: null\n    shared:\n      enable: null\n") == (true to true),
+        "null role flags should not override the legacy mode",
+    )
+    expect(
+        roleState("    mode: hybrid\n    local:\n      enable: false\n    shared:\n      enable: true\n") == (false to true),
+        "explicit role flags should take precedence over mode",
+    )
+    expect(
+        roleState("    local:\n      enabled: true\n    shared:\n      enabled: false\n") == (true to false),
+        "legacy enabled spelling should still be read",
+    )
+
+    val source = """listeners:
+  - name: keep-me
+    type: ebpf
+    mode: hybrid
+    local:
+      enable: true
+      enabled: true
+      data-plane: tc
+      include-package: [com.example.app]
+    shared:
+      enable: false
+      enabled: true
+      interface: [br0]
+      data-plane: packet_rewrite
+  - name: other-listener
+    type: http
+    port: 8080
+unrelated:
+  keep: true
+"""
+    val base = listOf<Any>("listeners", 0)
+    val before = YamlDoc.parse(source)
+    val updated = applyBatch(source, ebpfRoleUpdateOps(base, localOn = false, sharedOn = true))
+        ?: error("eBPF role update batch was rejected")
+    expect(updated.get(base + "mode") == null, "role update should remove legacy mode")
+    expect(updated.get(base + listOf("local", "enabled")) == null, "role update should remove local.enabled")
+    expect(updated.get(base + listOf("shared", "enabled")) == null, "role update should remove shared.enabled")
+    expect(FormValues.readBool(updated, base + listOf("local", "enable")) == false, "local role flag should be written false")
+    expect(FormValues.readBool(updated, base + listOf("shared", "enable")) == true, "shared role flag should be written true")
+    expect(FormValues.readRaw(updated, base + listOf("local", "data-plane")) == "tc", "unrelated local settings must survive")
+    expect(FormValues.readList(updated, base + listOf("local", "include-package")) == listOf("com.example.app"), "local package list must survive")
+    expect(FormValues.readList(updated, base + listOf("shared", "interface")) == listOf("br0"), "shared interface must survive")
+    expect(FormValues.readRaw(updated, listOf("listeners", 1, "name")) == "other-listener", "neighbor listener must survive")
+    expect(FormValues.readBool(updated, listOf("unrelated", "keep")) == true, "unrelated top-level data must survive")
+    expect(before.dump().contains("mode: hybrid"), "test fixture should remain independent from the edited document")
+}
+
+private fun testFakeIpIcmpPrerequisites() {
+    val localTc = YamlDoc.parse("""listeners:
+  - type: ebpf
+    local:
+      enable: true
+      data-plane: tc
+    shared:
+      enable: false
+      interface: []
+""")
+    expect(ebpfHasFakeIpIcmpHook(localTc, listOf("listeners", 0), localOn = true, sharedOn = false), "active local tc should supply the FakeIP ICMP hook")
+    expect(!ebpfHasFakeIpIcmpHook(localTc, listOf("listeners", 0), localOn = false, sharedOn = false), "disabled local must not count as an active TC hook")
+
+    val sharedNoInterface = YamlDoc.parse("""listeners:
+  - type: ebpf
+    local:
+      enable: false
+    shared:
+      enable: true
+      interface: []
+""")
+    expect(!ebpfHasFakeIpIcmpHook(sharedNoInterface, listOf("listeners", 0), localOn = false, sharedOn = true), "shared without a downstream interface must not count as an active hook")
+    val sharedReady = YamlDoc.parse("""listeners:
+  - type: ebpf
+    shared:
+      enable: true
+      interface: [br0]
+""")
+    expect(ebpfHasFakeIpIcmpHook(sharedReady, listOf("listeners", 0), localOn = false, sharedOn = true), "active shared with an interface should supply the FakeIP ICMP hook")
+}
+
+private fun testFormValueReaders() {
+    val text = """base-list: &servers [1.1.1.1, 8.8.8.8]
+hosts:
+  alpha.example: 192.0.2.10, 192.0.2.11
+  beta.example:
+    - 198.51.100.20
+    - 198.51.100.21
+dns:
+  nameserver-policy:
+    "rule-set:ads": [rcode://success, 1.1.1.1]
+    "*.lan": rcode://success
+    nested: {server: 1.1.1.1}
+    alias: *servers
+  use-hosts: true
+headers:
+  Host: [one.example, two.example]
+  User-Agent: Mishka
+"""
+    val doc = YamlDoc.parse(text)
+    val hosts = FormValues.readMapListRows(doc, listOf("hosts"), splitScalar = true)
+    expect(hosts.size == 2, "map-list reader should read both hosts keys")
+    expect(hosts[0].key == "alpha.example" && hosts[0].values == listOf("192.0.2.10", "192.0.2.11"), "scalar host list should split into values")
+    expect(hosts[0].supported, "simple scalar host entries should be editable")
+    expect(hosts[1].isSequence && hosts[1].values == listOf("198.51.100.20", "198.51.100.21"), "sequence form should retain its shape")
+
+    val policy = FormValues.readMapListRows(doc, listOf("dns", "nameserver-policy"))
+    expect(policy[0].key == "rule-set:ads" && policy[0].isSequence, "quoted nameserver-policy keys and sequences should be read")
+    expect(policy[1].supported, "scalar nameserver-policy values should be editable")
+    expect(!policy[2].supported && !policy[3].supported, "nested and alias values should be marked unsupported")
+
+    val headerRows = FormValues.readHeaderRows(doc, listOf("headers"))
+    expect(headerRows == listOf("Host" to "one.example", "Host" to "two.example", "User-Agent" to "Mishka"), "header arrays should expand into rows")
+
+    val boolField = FormField(
+        path = "use-hosts",
+        label = "Use hosts",
+        type = FormFieldType.SELECT,
+        options = listOf(FormOption("True", "启用"), FormOption("False", "关闭")),
+        boolKind = "bool",
+    )
+    expect(FormValues.describe(doc, boolField, listOf("dns", "use-hosts")) == "启用", "boolean select summary should match YAML true case-insensitively")
+
+    val mapField = FormField(path = "hosts", label = "Hosts", type = FormFieldType.MAPLIST)
+    expect(FormValues.describe(doc, mapField, listOf("hosts")).contains("alpha.example→192.0.2.10"), "map-list summary should echo existing keys and values")
+}
+
+private fun testMapListRenameAndSwap() {
+    val source = """hosts:
+  alpha.example: 192.0.2.10 # keep alpha value
+  beta.example: 198.51.100.20 # keep beta value
+  stable.example: 203.0.113.30
+other: keep
+"""
+    val path = listOf<Any>("hosts")
+    val oldRows = FormValues.readMapListRows(YamlDoc.parse(source), path, splitScalar = true)
+    val alpha = oldRows.single { it.key == "alpha.example" }
+    val beta = oldRows.single { it.key == "beta.example" }
+    val stable = oldRows.single { it.key == "stable.example" }
+
+    val swapEdits = listOf(
+        FormMapListEdit(alpha, "beta.example", alpha.values, alpha.isSequence),
+        FormMapListEdit(beta, "alpha.example", beta.values, beta.isSequence),
+        FormMapListEdit(stable, stable.key, stable.values, stable.isSequence),
+    )
+    val swapOps = buildMapListEditOps(path, oldRows, swapEdits) ?: error("valid key swap was rejected")
+    val swapped = applyBatch(source, swapOps) ?: error("key swap batch was rejected")
+    val swappedRows = FormValues.readMapListRows(swapped, path, splitScalar = true).associateBy { it.key }
+    expect(swappedRows["alpha.example"]?.values == beta.values, "A↔B swap must move B's original value under A")
+    expect(swappedRows["beta.example"]?.values == alpha.values, "A↔B swap must move A's original value under B")
+    expect(swappedRows["stable.example"]?.values == stable.values, "unmodified map-list entries must survive a swap")
+    expect(swapped.dump().contains("# keep alpha value") && swapped.dump().contains("# keep beta value"), "comments must survive a key swap")
+    expect(FormValues.readRaw(swapped, listOf("other")) == "keep", "unrelated keys must survive a key swap")
+
+    val renameEdits = listOf(
+        FormMapListEdit(alpha, "gamma.example", alpha.values, alpha.isSequence),
+        FormMapListEdit(beta, beta.key, beta.values, beta.isSequence),
+        FormMapListEdit(stable, stable.key, stable.values, stable.isSequence),
+    )
+    val renamed = applyBatch(source, buildMapListEditOps(path, oldRows, renameEdits) ?: error("single rename was rejected"))
+        ?: error("single rename batch was rejected")
+    val renamedKeys = FormValues.readMapListRows(renamed, path, splitScalar = true).map { it.key }.toSet()
+    expect("gamma.example" in renamedKeys && "alpha.example" !in renamedKeys, "single rename must not delete its source before staging")
+
+    val replaceEdits = listOf(
+        FormMapListEdit(alpha, "beta.example", alpha.values, alpha.isSequence),
+        FormMapListEdit(stable, stable.key, stable.values, stable.isSequence),
+    )
+    val replaced = applyBatch(source, buildMapListEditOps(path, oldRows, replaceEdits) ?: error("rename onto deleted key was rejected"))
+        ?: error("rename onto deleted key batch was rejected")
+    val replacedRows = FormValues.readMapListRows(replaced, path, splitScalar = true).associateBy { it.key }
+    expect(replacedRows["beta.example"]?.values == alpha.values && "alpha.example" !in replacedRows, "renaming onto a deleted key must remove the old target first")
+
+    expect(buildMapListEditOps(path, oldRows, swapEdits + swapEdits.first()) == null, "duplicate target keys should be rejected")
+    val unsupported = FormMapListRow("complex", emptyList(), isSequence = false, supported = false)
+    expect(buildMapListEditOps(path, listOf(unsupported), listOf(FormMapListEdit(unsupported, "complex", emptyList(), false))) == null, "unsupported nested values must not be rewritten")
+}
+
+fun main() {
+    testEbpfRoleStateAndWrites()
+    testFakeIpIcmpPrerequisites()
+    testFormValueReaders()
+    testMapListRenameAndSwap()
+    println("eBPF role, FormValues reader, and MAPLIST rename/swap tests passed")
+}

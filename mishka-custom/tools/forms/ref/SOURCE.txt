@@ -1,0 +1,9 @@
+对拍用的参考实现片段（原样复制，勿改）：
+
+  config-references.js   jieluojun/mihomo_box @ 657e799778  openwrt/files/webroot/ui/js/config-references.js
+                         （删除前的引用检查：DELETE_LABELS / findConfigReferences / deletionState）
+  vendor/js-yaml.min.js  同上目录 vendor/js-yaml.min.js（js-yaml 4.1.0，MIT；参考实现读写配置用的解析器）
+
+用途：tools/forms/refs_diff.mjs 用它们跑参考实现的 deletionState()，与 Kotlin 的 ConfigRefs.kt 逐行比对；
+改名同步（RenameSync）那半边按参考实现各编辑器里的同步片段照抄在 refs_diff.mjs 里（pages-flow.js 不是模块，抽不出来）。
+取法：gh api repos/jieluojun/mihomo_box/contents/openwrt/files/webroot/ui/js/<文件>?ref=657e799778

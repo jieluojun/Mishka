@@ -1,4 +1,4 @@
-# Mishka 定制交付包（锚点面板 + 配置表单 + jieluojun 内核 + 只出 release）
+# Mishka 定制交付包（锚点面板 + 配置表单 + 订阅入口迁移 + jieluojun 内核 + 只出 release）
 
 给你的 Mishka fork 用的定制包。**原则：不改仓库里任何已有文件**，全部以「新增文件 + 可撤销补丁」的形式落地，
 随时可以一条命令还原到干净工作区去 `git pull`。
@@ -25,26 +25,27 @@ bash mishka-custom/scripts/build-release.sh --repo .
 | 路径 | 内容 |
 | --- | --- |
 | `scripts/` | `setup.sh`（装配）、`apply-patches.sh` / `revert-patches.sh`（重打/还原）、`build-release.sh`（只出 release）、`gen-keystore.sh`（签名） |
-| `patches/app/` | app 侧补丁 `0001-anchor-panel.patch`（8 个新文件 + 编辑器入口，9 files / 5198 insertions）+ 基线 `BASELINE.txt` |
+| `patches/app/` | app 侧完整补丁 `0001-anchor-panel.patch`（锚点/表单编辑器、订阅页入口迁移与路由）+ 基线 `BASELINE.txt`；`anchor-panel.seed.patch` + `visual-config-entry.seed.patch` 供可重复导出 |
 | `patches/mihomo/` | 内核 4 个补丁（`0001`…`0004`）+ 基线 `BASELINE.txt`（含基线 commit 与逐文件 blob） |
 | `kernel/` | `go.work` + `go.work.sum`：让「换了分支的内核」不依赖改仓库 `go.mod`/`go.sum` 就能编译 |
 | `init/` | `no-debug.init.gradle`：构建 debug 变体时直接失败（默认只出 release） |
 | `ci/` | `build-release.yml`：只出 release 的 GitHub Actions 工作流（新增文件，不动上游 `build.yml`） |
 | `app/src/main/kotlin/top/yukonga/mishka/custom/anchor/` | 锚点面板的 5 个 Kotlin 源文件（方便直接阅读；补丁里也含同一份） |
-| `app/src/main/kotlin/top/yukonga/mishka/custom/forms/` | 配置表单的 3 个 Kotlin 源文件：`YamlEngine.kt`（保真写回引擎 876 行）、`FormSpecs.kt`（152 字段表，生成物 1212 行）、`ConfigFormPanel.kt`（界面 710 行） |
+| `app/src/main/kotlin/top/yukonga/mishka/custom/forms/` | 配置表单的 12 个 Kotlin 源文件：保真 YAML 引擎、P1（26 小节 / 154 字段）、P2（266 字段 / 37 种规则 / 27 种协议）、P3 专用编辑器、表单值读取、引用检查、MAPLIST 写回逻辑及 eBPF listener 编辑逻辑 |
 | `tools/` | 自检工具：补丁双向校验、语法门、API/具名参数核对、锚点算法三方可对拍、性质测试、模型新鲜度、表单引擎双实现对拍、可复现打包（`pack_deliver.sh`） |
-| `README.md` / `CUSTOMIZATION.md` / `BUILD.md` / `INSTALL.md` / `VERIFY.md` / `FORMS.md` / `FORMS-P1.md` | 交付说明、定制详解、构建、安装与回滚、已验证事实、配置表单设计与字段清单 |
+| `README.md` / `CUSTOMIZATION.md` / `BUILD.md` / `INSTALL.md` / `VERIFY.md` / `FORMS.md` / `FORMS-P1.md` / `FORMS-P2.md` | 交付说明、定制详解、构建、安装与回滚、已验证事实、配置表单设计与 P1 / P2 字段清单 |
 
-## 三块定制做了什么事（细节见 `CUSTOMIZATION.md`）
+## 四块定制做了什么事（细节见 `CUSTOMIZATION.md`）
 
 1. **锚点可视化面板**（对齐 mihomo_box 的「配置页 → 锚点面板」）：锚点总览（`&定义` / `*引用` / 悬空告警）、
    定位跳转、定义块可视化编辑、引用行改绑/清除继承/删行、新建顶层定义块、重命名（含顶层键级联）、删除定义
    （mihomo 配置段只摘 `&名`）。所有手术都是**行级、字节保真**的原文替换，改动只落在编辑器草稿里，
    写盘仍走 Mishka 原有的保存路径（内核校验 + 失败回滚）。
-2. **内核换成 `jieluojun/mihomo`（`Alpha` 分支）**：Mishka 应用依赖的 4 处内核行为被移植到 Alpha 之上
+2. **可视化配置表单与入口迁移**：P1 / P2 / P3 表单读取并写回已有 YAML 值；订阅编辑页在「覆写」下方提供入口，优先打开 `config.yaml`，否则选择首个 YAML 文件。锚点入口仍留在 YAML 编辑器工具栏。
+3. **内核换成 `jieluojun/mihomo`（`Alpha` 分支）**：Mishka 应用依赖的 4 处内核行为被移植到 Alpha 之上
    （`--override-json`、`mishka` build tag、DNS/TUN 的 Android 适配、fd TUN 的 forwarder 绑定），
    并解决「Alpha 多出来的依赖没有 go.sum 哈希」的问题（`go.work` + `go.work.sum`）。
-3. **只构建 release**：本地脚本与 CI 都只跑 `:app:assembleRelease`；`init/no-debug.init.gradle`
+4. **只构建 release**：本地脚本与 CI 都只跑 `:app:assembleRelease`；`init/no-debug.init.gradle`
    在命令行点名 debug 任务时直接失败。签名支持仓库 secrets，也支持没有 secrets 时用固定参数的
    debug 风格密钥兜底（能装、能覆盖升级）。
 
@@ -59,7 +60,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
 | --- | --- |
 | `.github/workflows/release.yml` | 由 `mishka-custom/ci/build-release.yml` 复制而来。**唯一需要放到 `mishka-custom/` 之外的文件**；GitHub 只运行仓库里已提交的工作流，所以要出现在 Actions 页面并手动触发，它必须在默认分支上 |
 | `mishka-custom/scripts/setup.sh`、`scripts/lib.sh` | 工作流第 3 步就是执行 `setup.sh --ci`（换内核、打补丁、生成 go.work） |
-| `mishka-custom/patches/app/0001-anchor-panel.patch` + `patches/app/BASELINE.txt` | 锚点面板补丁与校验基线 |
+| `mishka-custom/patches/app/0001-anchor-panel.patch` + `patches/app/BASELINE.txt` | app 完整补丁与逐文件校验基线；`anchor-panel.seed.patch` / `visual-config-entry.seed.patch` 是导出过程的稳定种子补丁 |
 | `mishka-custom/patches/mihomo/*.patch`（4 个）+ `patches/mihomo/BASELINE.txt` | 内核补丁与基线（`setup.sh` 预检会读基线里的 `base_commit`/`patched_tree`） |
 | `mishka-custom/kernel/go.work.sum` | 少了它，换内核后依赖哈希不全，Gradle 里的 Go 编译会直接失败（这是整套方案的关键文件） |
 | `mishka-custom/init/no-debug.init.gradle` | CI 的构建命令 `-I mishka-custom/init/no-debug.init.gradle` 指向它，负责挡掉 debug 变体 |
@@ -70,10 +71,10 @@ bash mishka-custom/scripts/build-release.sh --repo .
 `README.md` / `CUSTOMIZATION.md` / `BUILD.md` / `INSTALL.md` / `VERIFY.md`、
 `scripts/` 里其余脚本（`build-release.sh`、`apply-patches.sh`、`revert-patches.sh`、`gen-keystore.sh`、`verify.sh`）、
 `tools/` 其余（`check_kotlin.py`、`check_api.py`、`api_paths.json`、`export_app_patch.sh`、`verify_app_patch.sh`、`equiv/` 全套）、
-`app/src/main/kotlin/top/yukonga/mishka/custom/`（anchor 5 个 + forms 3 个源文件，供阅读；注意 `tools/` 的离线自检读的正是这里，两个目录要一起传）、
+`app/src/main/kotlin/top/yukonga/mishka/custom/`（anchor 5 个 + forms 12 个源文件，供阅读；注意 `tools/` 的离线自检读的正是这里，两个目录要一起传）、
 `kernel/go.work`（模板）、`kernel/README.md`、`ci/build-release.yml`。
 
-合起来不到 600 KB，全传最省心。
+以上文档、脚本、种子补丁与源码建议一并传，最省心。
 
 ### ❌ 不要提交（生成的、机密的、巨大的）
 
@@ -105,7 +106,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
 ## 随时回到干净状态
 
 ```bash
-# 只撤 app 补丁（还原编辑器入口 + 删掉 custom/ 源码目录）
+# 只撤 app 补丁（还原订阅入口、路由与编辑器改动 + 删掉 custom/ 源码目录）
 bash mishka-custom/scripts/revert-patches.sh --repo .
 
 # 连内核一起还原（mihomo 子模块回到上游、删掉 go.work / go.work.sum）
@@ -116,8 +117,8 @@ git pull && bash mishka-custom/scripts/setup.sh --repo .
 ```
 
 `mishka-custom/` 自身、`go.work`、`go.work.sum`、`app/src/main/kotlin/.../custom/` 都在 `.git/info/exclude` 里登记过
-（改的是本地 exclude，不动 `.gitignore`），所以正常情况下 `git status` 只会看到那一个被改了入口的
-`FileManagerEditorScreen.kt`。
+（改的是本地 exclude，不动 `.gitignore`）。安装 app 补丁后，`git status` 会显示订阅页、路由、编辑器入口与多语言资源文件的改动；
+如需还原，使用 `revert-patches.sh`，不要手动只还原其中一个文件。
 
 ## 已验证的事实（摘要，完整命令与输出见 `VERIFY.md`）
 
@@ -144,8 +145,8 @@ git pull && bash mishka-custom/scripts/setup.sh --repo .
   Alpha 默认 TUN 栈是 mips）需要你实机验证。要退回官方内核：`revert-patches.sh --all`。
 * **签名**：与官方 Mishka 的签名不同，无法覆盖安装官方版（先卸载或用不同 `applicationId`）；
   CI 在没配 secrets 时用的 debug 风格密钥是公开的，只适合自用。
-* 本包**没有在沙箱里跑过完整的 Gradle/APK 构建**（构建机资源不够），Android 端的最终验证请以 CI 或本地
-  `build-release.sh` 的结果为准；沙箱内验证到的是「内核编译 + 补丁双向应用 + 算法等价/性质测试 + 语法与 API 门」。
+* 本包**尚未完成 Android Gradle/APK 构建**：当前沙箱没有 Android SDK，`:app:compileDebugKotlin` 在 Gradle 配置阶段因 SDK 路径缺失而停止。
+  Android 端的最终验证请以 CI 或本地 `build-release.sh` 的结果为准；沙箱内已通过离线自检、补丁往返、引擎与表单逻辑对拍、Kotlin 语法和可用依赖 API 核对。
 
 ## 来源与许可
 

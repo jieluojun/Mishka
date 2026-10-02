@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 应用补丁（幂等）：app 侧锚点面板补丁；--kernel 时连内核补丁一起打。
+# 应用补丁（幂等）：app 侧锚点面板与订阅可视化配置入口补丁；--kernel 时连内核补丁一起打。
 #
 #   scripts/apply-patches.sh [--repo <Mishka 仓库>] [--kernel] [--kernel-dir <内核目录>]
 set -euo pipefail
@@ -37,7 +37,7 @@ else
     ok "已应用 $APP_PATCH_REL"
   elif git -C "$REPO" apply --check --3way "$patch"; then
     git -C "$REPO" apply --3way "$patch"
-    warn "3way 合并成功——上游改过入口文件，请确认 FileManagerEditorScreen.kt 的改动"
+    warn "3way 合并成功——上游改过 app 入口文件，请确认订阅页、路由和 YAML 编辑器的改动"
   else
     die "补丁打不上（上游 $FMES_REL 可能已变）。试试 git -C \"$REPO\" apply -v --3way $patch 看冲突"
   fi

@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# 从「交付根目录里的 Kotlin 源码」重新导出 app 侧补丁（patches/app/0001-anchor-panel.patch）+ 基线。
+# 从交付源码重新导出 app 侧补丁（patches/app/0001-anchor-panel.patch）+ 基线。
 #
 # 用法: tools/export_app_patch.sh --repo <Mishka 仓库>
 #
-# 过程：在干净仓库上先打旧补丁（拿到入口 UI 改动），再用交付目录里的最新源码覆盖（custom/ 整棵树），
-# 于是新补丁 = 入口改动 + 最新源文件；最后把工作区还原干净，并刷新 patches/app/BASELINE.txt。
+# 流程：在干净仓库上先打稳定的锚点面板 seed，再打订阅页可视化入口迁移 seed，
+# 然后以交付目录中的最新 custom/ 源码覆盖，最终导出完整 app 补丁与逐文件基线。
+# 导出物 0001 可能不断更新；必须使用独立 seed，不能把上一次 0001 再作为生成输入。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PATCH_DIR="$ROOT/patches/app"
 PATCH="$PATCH_DIR/0001-anchor-panel.patch"
+ANCHOR_SEED="$PATCH_DIR/anchor-panel.seed.patch"
+ENTRY_SEED="$PATCH_DIR/visual-config-entry.seed.patch"
 CUSTOM_ROOT_REL="app/src/main/kotlin/top/yukonga/mishka/custom"
-FMES_REL="app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt"
 
 REPO=""
 while [[ $# -gt 0 ]]; do
@@ -25,51 +27,60 @@ done
 [[ -n "$REPO" ]] || { echo "错误：必须给 --repo <Mishka 仓库>" >&2; exit 2; }
 REPO="$(cd "$REPO" && pwd)"
 [[ -d "$REPO/.git" ]] || { echo "错误：$REPO 不是 git 仓库" >&2; exit 2; }
+[[ -f "$ANCHOR_SEED" ]] || { echo "错误：缺少锚点面板 seed 补丁：$ANCHOR_SEED" >&2; exit 1; }
+[[ -f "$ENTRY_SEED" ]] || { echo "错误：缺少订阅入口迁移 seed 补丁：$ENTRY_SEED" >&2; exit 1; }
 
 if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
-  echo "错误：仓库工作区不干净，先还原（git -C \"$REPO\" checkout -- . && git -C \"$REPO\" clean -fd）" >&2
+  echo "错误：仓库工作区不干净，先还原（本脚本只应在基线干净仓库运行）" >&2
+  exit 1
+fi
+if [[ -e "$REPO/$CUSTOM_ROOT_REL" ]]; then
+  echo "错误：仓库里已存在 $CUSTOM_ROOT_REL（可能被 .git/info/exclude 忽略），请先移走后再导出" >&2
   exit 1
 fi
 
 upstream_commit="$(git -C "$REPO" rev-parse HEAD)"
-fmes_before="$(git -C "$REPO" rev-parse "HEAD:$FMES_REL")"
+restore_repo() {
+  git -C "$REPO" reset -q >/dev/null 2>&1 || true
+  git -C "$REPO" checkout -- . >/dev/null 2>&1 || true
+  rm -rf "$REPO/$CUSTOM_ROOT_REL"
+}
+trap restore_repo EXIT
 
-echo "1/5 打旧补丁（取入口 UI 改动）"
-if [[ -f "$PATCH" ]]; then
-  git -C "$REPO" apply "$PATCH"
-else
-  echo "   没有旧补丁：假定入口改动已在工作区（首次导出请手工改好入口）" >&2
-fi
+echo "1/6 打锚点面板基础 seed（保留原工具栏入口）"
+git -C "$REPO" apply "$ANCHOR_SEED"
 
-echo "2/5 用交付目录里的最新源文件覆盖（整棵 custom/ 树：anchor + forms）"
+echo "2/6 打订阅页可视化入口迁移 seed"
+git -C "$REPO" apply "$ENTRY_SEED"
+
+echo "3/6 用交付目录中的最新 custom/ 源码覆盖"
 mkdir -p "$REPO/$CUSTOM_ROOT_REL"
 cp -r "$ROOT/$CUSTOM_ROOT_REL"/. "$REPO/$CUSTOM_ROOT_REL"/
 
-echo "3/5 导出补丁"
-# -f：setup.sh 会把 app/.../custom/ 写进 .git/info/exclude 保持 git status 干净，
-# 导出时必须强制入索引，否则补丁里会缺掉整棵源码树。
+echo "4/6 导出完整 app 补丁"
+# setup.sh 会将 custom/ 登记到 .git/info/exclude；导出时必须强制入索引。
 git -C "$REPO" add -f -A
 git -C "$REPO" diff --cached --binary > "$PATCH"
-git -C "$REPO" diff --cached --stat | tail -3
+git -C "$REPO" diff --cached --stat | tail -5
 
-echo "4/5 写基线"
-fmes_after="$(git -C "$REPO" hash-object "$FMES_REL")"
+echo "5/6 写逐文件基线"
 {
   echo "# app 侧补丁基线（导出时生成）"
   echo "upstream_commit=$upstream_commit"
   echo "patch_file=patches/app/0001-anchor-panel.patch"
   echo "patch_sha256=$(sha256sum "$PATCH" | cut -d' ' -f1)"
-  echo "blob_before=$fmes_before $FMES_REL"
-  echo "blob_after=$fmes_after $FMES_REL"
   while read -r rel; do
-    echo "blob_new=$(git -C "$REPO" hash-object "$rel") $rel"
-  done < <(cd "$REPO" && find "$CUSTOM_ROOT_REL" -name '*.kt' | sort)
+    if git -C "$REPO" cat-file -e "HEAD:$rel" 2>/dev/null; then
+      echo "blob_after=$(git -C "$REPO" hash-object "$rel") $rel"
+    else
+      echo "blob_new=$(git -C "$REPO" hash-object "$rel") $rel"
+    fi
+  done < <(git -C "$REPO" diff --cached --name-only | sort)
 } > "$PATCH_DIR/BASELINE.txt"
 
-echo "5/5 还原工作区"
-git -C "$REPO" reset -q
-git -C "$REPO" checkout -- "$FMES_REL"
-rm -rf "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom"
+echo "6/6 还原仓库工作区"
+restore_repo
+trap - EXIT
 if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
   echo "警告：还原后工作区仍有改动：" >&2
   git -C "$REPO" status --porcelain >&2

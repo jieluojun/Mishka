@@ -10,13 +10,13 @@
 | 2 | DNS | 已启用 · 增强模式 | ✅ P1 |
 | 3 | 域名嗅探 | TLS/HTTP/QUIC 域名恢复 | ✅ P1 |
 | 4 | 入站 | N 个端口 · TUN 开/关 · N 个监听器 | ✅ P1 |
-| 5 | 出站代理 | N 个节点 | P2 |
-| 6 | 代理集合 | N 个订阅 | P2 |
-| 7 | 代理组 | N 个代理组 | P2 |
-| 8 | 路由规则 | N 条规则 | P2 |
-| 9 | 规则集合 | N 个规则集 | P2 |
-| 10 | 子规则 | N 组子规则 | P2 |
-| 11 | 流量隧道 | TCP/UDP 端口转发 | P2 |
+| 5 | 出站代理 | N 个节点 | ✅ P2（见 FORMS-P2.md） |
+| 6 | 代理集合 | N 个订阅 | ✅ P2（见 FORMS-P2.md） |
+| 7 | 代理组 | N 个代理组 | ✅ P2（见 FORMS-P2.md） |
+| 8 | 路由规则 | N 条规则 | ✅ P2（见 FORMS-P2.md） |
+| 9 | 规则集合 | N 个规则集 | ✅ P2（见 FORMS-P2.md） |
+| 10 | 子规则 | N 组子规则 | ✅ P2（见 FORMS-P2.md） |
+| 11 | 流量隧道 | TCP/UDP 端口转发 | ✅ P2（见 FORMS-P2.md） |
 | 12 | NTP | 时间同步 | ✅ P1 |
 | 13 | 实验性配置 | QUIC / 拨号器 | ✅ P1 |
 
@@ -240,15 +240,17 @@
 | `tun.include-mac-address` | 包含 MAC 地址 | list | 格式：AA:BB:CC:DD:EE:FF |
 | `tun.exclude-mac-address` | 排除 MAC 地址 | list |  |
 
-### 入站·eBPF（EBPF_SECTIONS，共 35 个字段）
+### 入站·eBPF（EBPF_SECTIONS，共 37 个字段）
 
-**基础（listeners[].type=ebpf）**（8）
+**基础（listeners[].type=ebpf）**（10）
 
 | 路径 | 标签 | 类型 | 说明 |
 | --- | --- | --- | --- |
 | — | （专门控件） | `ebpf.master` | 由代码实现的定制行，见 P1 渲染层 |
 | `name` | 名称 name | text |  |
 | — | （专门控件） | `network` | 由代码实现的定制行，见 P1 渲染层 |
+| `dns-mode` | DNS 处理 dns-mode（全角色） | select | 取值：hijack / respect_policy / off；顶层 dns-mode 套用于所有已启用角色；local.dns-mode / shared.dns-mode 有独立值 |
+| `bypass-private-address` | 绕过私有地址（全角色） | bool | 顶层值适用于所有已启用角色；local/shared 各自设置时以角色级值为准。 |
 | `udp-timeout` | UDP 超时(秒) | number | 提示：内核默认 300，最小 5；可热更新：单独改它不重建入站，已建立的会话与热点客户端不会被打断 |
 | `tc-priority` | TC 优先级 tc-priority | number | 提示：默认 1；默认 1：内核支持时经 TCX 挂载，否则 clsact；填其他值一律用 clsact 过滤器 |
 | `bypass-rule-set` | 绕行规则集 | rulesetpick | 从已添加的规则集（rule-providers）中选择，命中的 CIDR 在内核里直接绕行。仅 behavior: ip |

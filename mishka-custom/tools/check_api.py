@@ -146,6 +146,16 @@ def main(argv: list[str]) -> int:
     for i, a in enumerate(argv):
         if a == "--root" and i + 1 < len(argv):
             cfg["repo_root"] = argv[i + 1]
+    # If --root points at an upstream Mishka checkout, prefer its app sources
+    # and resources over stale machine-specific paths in api_paths.json.
+    hinted_root = Path(cfg["repo_root"]) if cfg.get("repo_root") else None
+    if hinted_root:
+        app_source = hinted_root / "app/src/main/kotlin"
+        app_res = hinted_root / "app/src/main/res"
+        if app_source.is_dir() and not Path(cfg["sources"].get("mishka-app", "")).is_dir():
+            cfg["sources"]["mishka-app"] = str(app_source)
+        if app_res.is_dir() and not Path(cfg.get("android_res", "")).is_dir():
+            cfg["android_res"] = str(app_res)
     print("依赖源码路径：")
     decls = Decls()
     missing: list[str] = []
@@ -206,9 +216,25 @@ def main(argv: list[str]) -> int:
         files += sorted((root / d).rglob("*.kt"))
 
     unknown_imports: list[str] = []
+    unverified_imports: list[str] = []
     bad_params: list[str] = []
     checked_imports = 0
     checked_calls = 0
+
+    def dependency_path(fq: str) -> str | None:
+        if fq.startswith("top.yukonga.mishka."):
+            return cfg["sources"].get("mishka-app")
+        if fq.startswith("top.yukonga.scripta."):
+            return cfg["sources"].get("scripta-editor")
+        if fq.startswith("top.yukonga.miuix.kmp.icon.extended."):
+            return cfg.get("class_dirs", {}).get("miuix-icons")
+        if fq.startswith("top.yukonga.miuix.kmp.icon."):
+            return cfg.get("class_dirs", {}).get("miuix-icons-base")
+        if fq.startswith("top.yukonga.miuix.kmp.preference."):
+            return cfg["sources"].get("miuix-preference")
+        if fq.startswith("top.yukonga.miuix."):
+            return cfg["sources"].get("miuix-ui")
+        return None
 
     pkg_re = re.compile(r"^import\s+([\w.]+)(?:\s+as\s+\w+)?$", re.M)
     call_re = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\s*\(")
@@ -229,6 +255,10 @@ def main(argv: list[str]) -> int:
                     bad_params.append(f"{f.name}: 资源 R.{res} 不存在")
                 continue
             if fq.startswith(("top.yukonga.miuix.", "top.yukonga.mishka.", "top.yukonga.scripta.")):
+                dep_path = dependency_path(fq)
+                if dep_path and not Path(dep_path).exists() and fq not in upstream_fqns:
+                    unverified_imports.append(f"{f.name}: import {fq}")
+                    continue  # 依赖源码缺失时明确记为未核对，不误报为 API 不存在
                 checked_imports += 1
                 if not decls.has(fq) and fq not in upstream_fqns:
                     unknown_imports.append(f"{f.name}: import {fq} —— 在依赖源码里找不到声明")
@@ -268,6 +298,8 @@ def main(argv: list[str]) -> int:
     print(f"\n核对 import {checked_imports} 条、调用点 {checked_calls} 个")
     if missing:
         print(f"未核对的依赖（路径缺失，{len(missing)} 个）：{', '.join(missing)}")
+    if unverified_imports:
+        print(f"未核对的 import：{len(unverified_imports)} 条（缺少对应依赖源码/类文件）")
     problems = unknown_imports + bad_params
     if problems:
         print("\n发现问题：")

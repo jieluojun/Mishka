@@ -1,0 +1,2 @@
+# Python 自检脚本的字节码缓存（verify.sh 已设 PYTHONDONTWRITEBYTECODE，手跑脚本时也别把它提交进来）
+__pycache__/
