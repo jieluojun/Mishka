@@ -1,6 +1,7 @@
 package top.yukonga.mishka.custom.forms
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -965,24 +967,28 @@ private fun exprItems(doc: YamlDoc, base: YPath): List<String> = FormValues.expr
  * （`<<: *锚点` 与其它键逐字保留）再写；块式 / 缺失则直接交引擎。清空且值是纯继承时没有本地行
  * 可删，提示去「YAML 锚点」区解除继承。
  */
-private fun commitExprList(host: FormHost, doc: YamlDoc, base: YPath, list: List<String>) {
+private fun commitExprList(host: FormHost, doc: YamlDoc, base: YPath, list: List<String>): Boolean {
     val path = base + "override" + "override-expr"
     val ov = doc.get(base + "override")
     if (ov != null && ov.kind == YamlNode.Kind.MAP && ov.flow) {
         val text = AnchorInheritance.setFlowMapListField(doc, base + "override", "override-expr", list)
-        if (text == null) showToast("override 是跨多行的 flow 映射，请在编辑器里直接改", long = true)
-        else host.applyRawText(text, "override-expr", ov.start + 1)
-        return
+        if (text == null) {
+            showToast("override 是跨多行的 flow 映射，请在编辑器里直接改", long = true)
+            return false
+        }
+        return host.applyRawText(text, "override-expr", ov.start + 1)
     }
     if (list.isEmpty()) {
-        when {
+        return when {
             doc.get(path) != null -> host.clear(path, "override-expr")
-            exprItems(doc, base).isNotEmpty() -> showToast("表达式来自锚点继承：要清除请在「YAML 锚点」区解除继承，或改锚点定义", long = true)
-            else -> showToast("未设置表达式")
+            exprItems(doc, base).isNotEmpty() -> {
+                showToast("表达式来自锚点继承：要清除请在「YAML 锚点」区解除继承，或改锚点定义", long = true)
+                false
+            }
+            else -> { showToast("未设置表达式"); false }
         }
-        return
     }
-    host.set(path, list, "override-expr")
+    return host.set(path, list, "override-expr")
 }
 
 @Composable
@@ -1168,8 +1174,13 @@ private fun exprBuild(p: ExprParts): String? {
 }
 
 @Composable
-private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit: (List<String>) -> Unit) {
+private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit: (List<String>) -> Boolean) {
     var editing by remember { mutableStateOf<Int?>(null) }   // -1 = 新建
+    // 本地镜像：写回成功后立即同步显示——不依赖整篇替换后的重组时机，快捷填入立刻可见。
+    // onCommit 返回 false（写被拒）时镜像不动，显示始终等于草稿真实内容；
+    // 外层 items 变化（写回成功后文档换新版本）时以文档为准回填。
+    var local by remember { mutableStateOf(items) }
+    LaunchedEffect(items) { local = items }
     WindowDialog(
         show = true,
         title = "override-expr",
@@ -1193,11 +1204,16 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
                         title = label,
                         summary = exprs.joinToString(" ; ").take(80),
                         onClick = {
-                            val a = ArrayList(items)
+                            val a = ArrayList(local)
                             var added = 0
                             for (e in exprs) if (e !in a) { a.add(e); added++ }
-                            // 先报「已填入」再提交：若提交失败（如 flow 形态不支持），失败提示不会被成功提示盖掉
-                            if (added == 0) showToast("这些表达式已在列表中") else { showToast("已填入 $added 条表达式"); onCommit(a) }
+                            if (added == 0) {
+                                showToast("这些表达式已在列表中")
+                            } else if (onCommit(a)) {
+                                local = a
+                                showToast("已填入 $added 条表达式")
+                            }
+                            // 写被拒时 onCommit 已给出原因提示，镜像与列表保持原状
                         },
                     )
                 }
@@ -1208,8 +1224,8 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
                     .heightIn(max = 220.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
-                if (items.isEmpty()) DialogNote("未设置表达式（点「＋ 添加表达式」可视化新建，或点上方快捷按钮填入）")
-                items.forEachIndexed { i, ex ->
+                if (local.isEmpty()) DialogNote("未设置表达式（点「＋ 添加表达式」可视化新建，或点上方快捷按钮填入）")
+                local.forEachIndexed { i, ex ->
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1220,11 +1236,16 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(text = "✎", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = i })
-                        Spacer(Modifier.width(6.dp))
-                        TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-                            onCommit(items.filterIndexed { j, _ -> j != i })
-                        })
+                        // ✎ / × 装进等宽格子：两个按钮占位一致，不再随字形宽度参差
+                        Box(modifier = Modifier.width(38.dp), contentAlignment = Alignment.Center) {
+                            TextButton(text = "✎", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = i })
+                        }
+                        Box(modifier = Modifier.width(38.dp), contentAlignment = Alignment.Center) {
+                            TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
+                                val f = local.filterIndexed { j, _ -> j != i }
+                                if (onCommit(f)) local = f
+                            })
+                        }
                     }
                 }
             }
@@ -1240,14 +1261,14 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
     }
     editing?.let { idx ->
         ExprEditDialog(
-            initial = if (idx >= 0) items.getOrNull(idx).orEmpty() else "",
+            initial = if (idx >= 0) local.getOrNull(idx).orEmpty() else "",
             title = if (idx >= 0) "编辑表达式 #${idx + 1}" else "新建表达式",
             onDismiss = { editing = null },
             onConfirm = { v ->
                 editing = null
-                val a = ArrayList(items)
+                val a = ArrayList(local)
                 if (idx < 0) a.add(v) else a[idx] = v
-                onCommit(a)
+                if (onCommit(a)) local = a
             },
         )
     }

@@ -2395,10 +2395,10 @@ index 0000000..6c24053
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
 new file mode 100644
-index 0000000..c518231
+index 0000000..e51b0a3
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
-@@ -0,0 +1,463 @@
+@@ -0,0 +1,466 @@
 +package top.yukonga.mishka.custom.forms
 +
 +/**
@@ -2431,8 +2431,11 @@ index 0000000..c518231
 +    val absent: Boolean = false,
 +)
 +
-+/** 全文锚点定义：名字 / 定义行（1 基）/ 是否为映射（`<<:` 只能指向映射）。 */
-+internal data class AnchorDefInfo(val name: String, val line1: Int, val isMap: Boolean)
++/**
++ * 全文锚点定义：名字 / 定义行（1 基）/ 是否为映射（`<<:` 只能指向映射）/
++ * [ownerKey] = 定义它的 YAML 键名（如 `host-def: &host { … }` 的 `host-def`；序列项等无键场景为 null）。
++ */
++internal data class AnchorDefInfo(val name: String, val line1: Int, val isMap: Boolean, val ownerKey: String? = null)
 +
 +internal object AnchorInheritance {
 +
@@ -2489,13 +2492,13 @@ index 0000000..c518231
 +    /** 全文 `&定义` 清单（递归走节点树）：候选列表与「定义在引用行之前」硬规则用它。flow 映射也是映射，`<<:` 可指向它。 */
 +    fun anchorDefs(doc: YamlDoc): List<AnchorDefInfo> {
 +        val out = ArrayList<AnchorDefInfo>()
-+        fun walk(n: YamlNode?) {
++        fun walk(n: YamlNode?, owner: String?) {
 +            if (n == null) return
-+            n.anchor?.let { out.add(AnchorDefInfo(it, n.start + 1, n.kind == YamlNode.Kind.MAP)) }
-+            n.entries.forEach { walk(it.node) }
-+            n.items.forEach { walk(it) }
++            n.anchor?.let { out.add(AnchorDefInfo(it, n.start + 1, n.kind == YamlNode.Kind.MAP, owner)) }
++            n.entries.forEach { walk(it.node, if (it.isMerge) owner else it.key) }
++            n.items.forEach { walk(it, owner) }
 +        }
-+        walk(doc.root)
++        walk(doc.root, null)
 +        return out
 +    }
 +
@@ -2864,10 +2867,10 @@ index 0000000..c518231
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
 new file mode 100644
-index 0000000..c429a15
+index 0000000..42d1495
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
-@@ -0,0 +1,312 @@
+@@ -0,0 +1,321 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -2915,6 +2918,15 @@ index 0000000..c429a15
 +    "rule-providers" to listOf("type", "behavior", "url", "path", "interval", "proxy", "header", "format"),
 +)
 +
++/** 字段级锚点状态的「值」部分（定义 &x / 继承 <<: *y / 引用 *z），不含键名——键、值分行显示用。 */
++private fun fieldAnchorValueText(f: FieldAnchorState): String = buildString {
++    val parts = ArrayList<String>()
++    f.defAnchor?.let { parts.add("定义 &$it") }
++    if (f.merges.isNotEmpty()) parts.add(if (f.multi) "继承 <<: 多来源（锁定）" else "继承 <<: *${f.merges.first()}")
++    f.aliasRef?.let { parts.add("引用 *$it") }
++    append(parts.joinToString(" · "))
++}
++
 +@Composable
 +internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
 +    val doc = host.doc
@@ -2945,25 +2957,29 @@ index 0000000..c429a15
 +                onClick = { pickL1 = true },
 +            )
 +        }
-+        val chipText = buildString {
-+            val parts = ArrayList<String>()
-+            states.forEach { f ->
-+                f.defAnchor?.let { parts.add("${f.key} &${it}") }
-+                if (f.merges.isNotEmpty()) parts.add("${f.key} <<:${if (f.multi) "多来源" else "*" + f.merges.first()}")
-+                f.aliasRef?.let { parts.add("${f.key} *${it}") }
-+            }
-+            if (parts.isEmpty()) append("未设置字段级锚点 · 点「编辑」可给某个字段挂 <<: 继承或 * 引用")
-+            else append(parts.joinToString(" · "))
-+        }
++        // 字段级锚点：每个在用字段单独一行——标题只放键名，摘要放锚点状态（键与值分行，不再挤成一条 chips 串）
++        val activeFields = states.filter { it.defAnchor != null || it.aliasRef != null || it.merges.isNotEmpty() }
 +        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
-+            BasicComponent(
-+                title = "二级锚点（字段级）",
-+                summary = chipText,
-+                endActions = { TextButton(text = "编辑", onClick = { pickField = true }) },
-+                onClick = { pickField = true },
-+            )
++            Column(modifier = Modifier.fillMaxWidth()) {
++                BasicComponent(
++                    title = "二级锚点（字段级）",
++                    summary = if (activeFields.isEmpty()) {
++                        "未设置字段级锚点 · 点「编辑」可给某个字段挂 <<: 继承或 * 引用"
++                    } else {
++                        "${activeFields.size} 个字段挂了字段级锚点"
++                    },
++                    endActions = { TextButton(text = "编辑", onClick = { pickField = true }) },
++                    onClick = { pickField = true },
++                )
++                activeFields.forEach { f ->
++                    BasicComponent(
++                        title = f.key,
++                        summary = fieldAnchorValueText(f) + " · 第 ${f.line1} 行",
++                    )
++                }
++            }
 +        }
-+        // 锚点定义一览：名字 / 定义行号 / 形态 / 全文引用次数，本条目正在用的标出来
++        // 锚点定义一览：名字 / 宿主键 / 定义行号 / 形态 / 全文引用次数，本条目正在用的标出来
 +        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
 +            Column(modifier = Modifier.fillMaxWidth()) {
 +                BasicComponent(
@@ -2971,7 +2987,7 @@ index 0000000..c429a15
 +                    summary = if (defs.isEmpty()) {
 +                        "文档里还没有锚点：先在编辑器里给某个字段写 `&名字`，再回来挂继承 / 引用"
 +                    } else {
-+                        "编辑器里以 &名字 定义 · 行号即编辑器行号 · 映射才能被 <<: 继承，标量 / 序列只能整体 * 引用"
++                        "标题是锚点名，摘要里「定义于」是承载它的 YAML 键 · 映射才能被 <<: 继承，标量 / 序列只能整体 * 引用"
 +                    },
 +                )
 +                if (defs.isNotEmpty()) {
@@ -2994,9 +3010,11 @@ index 0000000..c429a15
 +                                        fieldUses.isNotEmpty() -> append("  ← 本条目字段 " + fieldUses.joinToString("/") + " 在用")
 +                                    }
 +                                },
-+                                summary = "定义在第 ${d.line1} 行 · " +
-+                                    (if (d.isMap) "映射（可 <<: 继承）" else "标量 / 序列（只能 * 引用）") +
-+                                    " · 全文引用 ${refCounts[d.name] ?: 0} 处",
++                                summary = buildString {
++                                    append("定义于「").append(d.ownerKey ?: "序列项").append("」· 第 ").append(d.line1).append(" 行 · ")
++                                    append(if (d.isMap) "映射（可 <<: 继承）" else "标量 / 序列（只能 * 引用）")
++                                    append(" · 全文引用 ").append(refCounts[d.name] ?: 0).append(" 处")
++                                },
 +                            )
 +                        }
 +                    }
@@ -3093,15 +3111,9 @@ index 0000000..c429a15
 +                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
 +            )
 +            active.forEach { f ->
-+                val label = buildString {
-+                    append(f.key)
-+                    f.defAnchor?.let { append(" · 定义 &$it") }
-+                    if (f.merges.isNotEmpty()) append(if (f.multi) " · 继承多来源（锁定）" else " · 继承 <<: *${f.merges.first()}")
-+                    f.aliasRef?.let { append(" · 引用 *$it") }
-+                    append(" · 第 ${f.line1} 行")
-+                }
 +                BasicComponent(
-+                    title = label,
++                    title = f.key,
++                    summary = fieldAnchorValueText(f) + " · 第 ${f.line1} 行",
 +                    endActions = {
 +                        if (!f.multi) TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
 +                            val out = when {
@@ -5209,13 +5221,14 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..0076d0c
+index 0000000..48bb1be
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2268 @@
+@@ -0,0 +1,2289 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.Column
 +import androidx.compose.foundation.layout.PaddingValues
 +import androidx.compose.foundation.layout.Row
@@ -5229,6 +5242,7 @@ index 0000000..0076d0c
 +import androidx.compose.foundation.rememberScrollState
 +import androidx.compose.foundation.verticalScroll
 +import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.getValue
 +import androidx.compose.runtime.mutableStateOf
 +import androidx.compose.runtime.remember
@@ -6180,24 +6194,28 @@ index 0000000..0076d0c
 + * （`<<: *锚点` 与其它键逐字保留）再写；块式 / 缺失则直接交引擎。清空且值是纯继承时没有本地行
 + * 可删，提示去「YAML 锚点」区解除继承。
 + */
-+private fun commitExprList(host: FormHost, doc: YamlDoc, base: YPath, list: List<String>) {
++private fun commitExprList(host: FormHost, doc: YamlDoc, base: YPath, list: List<String>): Boolean {
 +    val path = base + "override" + "override-expr"
 +    val ov = doc.get(base + "override")
 +    if (ov != null && ov.kind == YamlNode.Kind.MAP && ov.flow) {
 +        val text = AnchorInheritance.setFlowMapListField(doc, base + "override", "override-expr", list)
-+        if (text == null) showToast("override 是跨多行的 flow 映射，请在编辑器里直接改", long = true)
-+        else host.applyRawText(text, "override-expr", ov.start + 1)
-+        return
++        if (text == null) {
++            showToast("override 是跨多行的 flow 映射，请在编辑器里直接改", long = true)
++            return false
++        }
++        return host.applyRawText(text, "override-expr", ov.start + 1)
 +    }
 +    if (list.isEmpty()) {
-+        when {
++        return when {
 +            doc.get(path) != null -> host.clear(path, "override-expr")
-+            exprItems(doc, base).isNotEmpty() -> showToast("表达式来自锚点继承：要清除请在「YAML 锚点」区解除继承，或改锚点定义", long = true)
-+            else -> showToast("未设置表达式")
++            exprItems(doc, base).isNotEmpty() -> {
++                showToast("表达式来自锚点继承：要清除请在「YAML 锚点」区解除继承，或改锚点定义", long = true)
++                false
++            }
++            else -> { showToast("未设置表达式"); false }
 +        }
-+        return
 +    }
-+    host.set(path, list, "override-expr")
++    return host.set(path, list, "override-expr")
 +}
 +
 +@Composable
@@ -6383,8 +6401,13 @@ index 0000000..0076d0c
 +}
 +
 +@Composable
-+private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit: (List<String>) -> Unit) {
++private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit: (List<String>) -> Boolean) {
 +    var editing by remember { mutableStateOf<Int?>(null) }   // -1 = 新建
++    // 本地镜像：写回成功后立即同步显示——不依赖整篇替换后的重组时机，快捷填入立刻可见。
++    // onCommit 返回 false（写被拒）时镜像不动，显示始终等于草稿真实内容；
++    // 外层 items 变化（写回成功后文档换新版本）时以文档为准回填。
++    var local by remember { mutableStateOf(items) }
++    LaunchedEffect(items) { local = items }
 +    WindowDialog(
 +        show = true,
 +        title = "override-expr",
@@ -6408,11 +6431,16 @@ index 0000000..0076d0c
 +                        title = label,
 +                        summary = exprs.joinToString(" ; ").take(80),
 +                        onClick = {
-+                            val a = ArrayList(items)
++                            val a = ArrayList(local)
 +                            var added = 0
 +                            for (e in exprs) if (e !in a) { a.add(e); added++ }
-+                            // 先报「已填入」再提交：若提交失败（如 flow 形态不支持），失败提示不会被成功提示盖掉
-+                            if (added == 0) showToast("这些表达式已在列表中") else { showToast("已填入 $added 条表达式"); onCommit(a) }
++                            if (added == 0) {
++                                showToast("这些表达式已在列表中")
++                            } else if (onCommit(a)) {
++                                local = a
++                                showToast("已填入 $added 条表达式")
++                            }
++                            // 写被拒时 onCommit 已给出原因提示，镜像与列表保持原状
 +                        },
 +                    )
 +                }
@@ -6423,8 +6451,8 @@ index 0000000..0076d0c
 +                    .heightIn(max = 220.dp)
 +                    .verticalScroll(rememberScrollState()),
 +            ) {
-+                if (items.isEmpty()) DialogNote("未设置表达式（点「＋ 添加表达式」可视化新建，或点上方快捷按钮填入）")
-+                items.forEachIndexed { i, ex ->
++                if (local.isEmpty()) DialogNote("未设置表达式（点「＋ 添加表达式」可视化新建，或点上方快捷按钮填入）")
++                local.forEachIndexed { i, ex ->
 +                    Row(
 +                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
 +                        verticalAlignment = Alignment.CenterVertically,
@@ -6435,11 +6463,16 @@ index 0000000..0076d0c
 +                            fontFamily = FontFamily.Monospace,
 +                            modifier = Modifier.weight(1f),
 +                        )
-+                        TextButton(text = "✎", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = i })
-+                        Spacer(Modifier.width(6.dp))
-+                        TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-+                            onCommit(items.filterIndexed { j, _ -> j != i })
-+                        })
++                        // ✎ / × 装进等宽格子：两个按钮占位一致，不再随字形宽度参差
++                        Box(modifier = Modifier.width(38.dp), contentAlignment = Alignment.Center) {
++                            TextButton(text = "✎", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = i })
++                        }
++                        Box(modifier = Modifier.width(38.dp), contentAlignment = Alignment.Center) {
++                            TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
++                                val f = local.filterIndexed { j, _ -> j != i }
++                                if (onCommit(f)) local = f
++                            })
++                        }
 +                    }
 +                }
 +            }
@@ -6455,14 +6488,14 @@ index 0000000..0076d0c
 +    }
 +    editing?.let { idx ->
 +        ExprEditDialog(
-+            initial = if (idx >= 0) items.getOrNull(idx).orEmpty() else "",
++            initial = if (idx >= 0) local.getOrNull(idx).orEmpty() else "",
 +            title = if (idx >= 0) "编辑表达式 #${idx + 1}" else "新建表达式",
 +            onDismiss = { editing = null },
 +            onConfirm = { v ->
 +                editing = null
-+                val a = ArrayList(items)
++                val a = ArrayList(local)
 +                if (idx < 0) a.add(v) else a[idx] = v
-+                onCommit(a)
++                if (onCommit(a)) local = a
 +            },
 +        )
 +    }
@@ -15707,7 +15740,7 @@ index bdb96f7..c5f8970 100644
      @Serializable
      data object AppProxy : Route
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
-index b1b2479..e70d062 100644
+index b1b2479..7da18ac 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 @@ -31,6 +31,8 @@ import top.yukonga.mishka.platform.ProfileFileManager
@@ -15781,7 +15814,7 @@ index b1b2479..e70d062 100644
                          val canSave = controller.isModified && !isSaving && fileManager != null
                          IconButton(
                              enabled = canSave,
-@@ -192,6 +222,22 @@ fun FileManagerEditorScreen(
+@@ -192,6 +222,25 @@ fun FileManagerEditorScreen(
                          .weight(1f),
                  )
              }
@@ -15800,6 +15833,9 @@ index b1b2479..e70d062 100644
 +                controller = controller,
 +                fileName = relativePath,
 +                onClose = { showFormPanel = false },
++                // fileBaseDir = 本订阅 imported/ 目录：file 型合集的源文件上传 / 在线编辑靠它定位落盘；
++                // 不传的话表单里所有相对 path 都无法解析（上传 / 保存会报「缺少订阅目录」）。
++                fileBaseDir = remember(uuid, fileManager) { fileManager?.getImportedDir(uuid) },
 +            )
          }
      }

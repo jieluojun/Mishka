@@ -153,6 +153,9 @@ private fun testFlowAnchors() {
     val defs = AnchorInheritance.anchorDefs(doc)
     expect(defs.first { it.name == "providers" }.isMap, "flow map anchor must count as mergeable map")
     expect(defs.first { it.name == "host" }.isMap, "flow map anchor must count as mergeable map")
+    // 锚点名与承载它的 YAML 键分开记录（面板里「键跟值区分开」显示）
+    expect(defs.first { it.name == "providers" }.ownerKey == "providers-def", "owner key of providers, got ${defs.first { it.name == "providers" }.ownerKey}")
+    expect(defs.first { it.name == "host" }.ownerKey == "host-def", "owner key of host")
 
     val states = AnchorInheritance.fieldStates(doc, subA)
     val ov = states.first { it.key == "override" }

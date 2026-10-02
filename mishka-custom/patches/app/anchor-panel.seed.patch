@@ -11425,7 +11425,7 @@ index b1b2479..8466deb 100644
                          val canSave = controller.isModified && !isSaving && fileManager != null
                          IconButton(
                              enabled = canSave,
-@@ -192,6 +215,22 @@ fun FileManagerEditorScreen(
+@@ -192,6 +215,25 @@ fun FileManagerEditorScreen(
                          .weight(1f),
                  )
              }
@@ -11444,6 +11444,9 @@ index b1b2479..8466deb 100644
 +                controller = controller,
 +                fileName = relativePath,
 +                onClose = { showFormPanel = false },
++                // fileBaseDir = 本订阅 imported/ 目录：file 型合集的源文件上传 / 在线编辑靠它定位落盘；
++                // 不传的话表单里所有相对 path 都无法解析（上传 / 保存会报「缺少订阅目录」）。
++                fileBaseDir = remember(uuid, fileManager) { fileManager?.getImportedDir(uuid) },
 +            )
          }
      }

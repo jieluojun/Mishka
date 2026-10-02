@@ -45,6 +45,15 @@ private val ANCHOR_FIELD_CANDIDATES: Map<String, List<String>> = mapOf(
     "rule-providers" to listOf("type", "behavior", "url", "path", "interval", "proxy", "header", "format"),
 )
 
+/** 字段级锚点状态的「值」部分（定义 &x / 继承 <<: *y / 引用 *z），不含键名——键、值分行显示用。 */
+private fun fieldAnchorValueText(f: FieldAnchorState): String = buildString {
+    val parts = ArrayList<String>()
+    f.defAnchor?.let { parts.add("定义 &$it") }
+    if (f.merges.isNotEmpty()) parts.add(if (f.multi) "继承 <<: 多来源（锁定）" else "继承 <<: *${f.merges.first()}")
+    f.aliasRef?.let { parts.add("引用 *$it") }
+    append(parts.joinToString(" · "))
+}
+
 @Composable
 internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
     val doc = host.doc
@@ -75,25 +84,29 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
                 onClick = { pickL1 = true },
             )
         }
-        val chipText = buildString {
-            val parts = ArrayList<String>()
-            states.forEach { f ->
-                f.defAnchor?.let { parts.add("${f.key} &${it}") }
-                if (f.merges.isNotEmpty()) parts.add("${f.key} <<:${if (f.multi) "多来源" else "*" + f.merges.first()}")
-                f.aliasRef?.let { parts.add("${f.key} *${it}") }
-            }
-            if (parts.isEmpty()) append("未设置字段级锚点 · 点「编辑」可给某个字段挂 <<: 继承或 * 引用")
-            else append(parts.joinToString(" · "))
-        }
+        // 字段级锚点：每个在用字段单独一行——标题只放键名，摘要放锚点状态（键与值分行，不再挤成一条 chips 串）
+        val activeFields = states.filter { it.defAnchor != null || it.aliasRef != null || it.merges.isNotEmpty() }
         Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
-            BasicComponent(
-                title = "二级锚点（字段级）",
-                summary = chipText,
-                endActions = { TextButton(text = "编辑", onClick = { pickField = true }) },
-                onClick = { pickField = true },
-            )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                BasicComponent(
+                    title = "二级锚点（字段级）",
+                    summary = if (activeFields.isEmpty()) {
+                        "未设置字段级锚点 · 点「编辑」可给某个字段挂 <<: 继承或 * 引用"
+                    } else {
+                        "${activeFields.size} 个字段挂了字段级锚点"
+                    },
+                    endActions = { TextButton(text = "编辑", onClick = { pickField = true }) },
+                    onClick = { pickField = true },
+                )
+                activeFields.forEach { f ->
+                    BasicComponent(
+                        title = f.key,
+                        summary = fieldAnchorValueText(f) + " · 第 ${f.line1} 行",
+                    )
+                }
+            }
         }
-        // 锚点定义一览：名字 / 定义行号 / 形态 / 全文引用次数，本条目正在用的标出来
+        // 锚点定义一览：名字 / 宿主键 / 定义行号 / 形态 / 全文引用次数，本条目正在用的标出来
         Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 BasicComponent(
@@ -101,7 +114,7 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
                     summary = if (defs.isEmpty()) {
                         "文档里还没有锚点：先在编辑器里给某个字段写 `&名字`，再回来挂继承 / 引用"
                     } else {
-                        "编辑器里以 &名字 定义 · 行号即编辑器行号 · 映射才能被 <<: 继承，标量 / 序列只能整体 * 引用"
+                        "标题是锚点名，摘要里「定义于」是承载它的 YAML 键 · 映射才能被 <<: 继承，标量 / 序列只能整体 * 引用"
                     },
                 )
                 if (defs.isNotEmpty()) {
@@ -124,9 +137,11 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
                                         fieldUses.isNotEmpty() -> append("  ← 本条目字段 " + fieldUses.joinToString("/") + " 在用")
                                     }
                                 },
-                                summary = "定义在第 ${d.line1} 行 · " +
-                                    (if (d.isMap) "映射（可 <<: 继承）" else "标量 / 序列（只能 * 引用）") +
-                                    " · 全文引用 ${refCounts[d.name] ?: 0} 处",
+                                summary = buildString {
+                                    append("定义于「").append(d.ownerKey ?: "序列项").append("」· 第 ").append(d.line1).append(" 行 · ")
+                                    append(if (d.isMap) "映射（可 <<: 继承）" else "标量 / 序列（只能 * 引用）")
+                                    append(" · 全文引用 ").append(refCounts[d.name] ?: 0).append(" 处")
+                                },
                             )
                         }
                     }
@@ -223,15 +238,9 @@ private fun FieldAnchorDialog(
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
             active.forEach { f ->
-                val label = buildString {
-                    append(f.key)
-                    f.defAnchor?.let { append(" · 定义 &$it") }
-                    if (f.merges.isNotEmpty()) append(if (f.multi) " · 继承多来源（锁定）" else " · 继承 <<: *${f.merges.first()}")
-                    f.aliasRef?.let { append(" · 引用 *$it") }
-                    append(" · 第 ${f.line1} 行")
-                }
                 BasicComponent(
-                    title = label,
+                    title = f.key,
+                    summary = fieldAnchorValueText(f) + " · 第 ${f.line1} 行",
                     endActions = {
                         if (!f.multi) TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
                             val out = when {

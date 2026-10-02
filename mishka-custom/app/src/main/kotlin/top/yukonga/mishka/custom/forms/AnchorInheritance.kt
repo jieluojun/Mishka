@@ -30,8 +30,11 @@ internal data class FieldAnchorState(
     val absent: Boolean = false,
 )
 
-/** 全文锚点定义：名字 / 定义行（1 基）/ 是否为映射（`<<:` 只能指向映射）。 */
-internal data class AnchorDefInfo(val name: String, val line1: Int, val isMap: Boolean)
+/**
+ * 全文锚点定义：名字 / 定义行（1 基）/ 是否为映射（`<<:` 只能指向映射）/
+ * [ownerKey] = 定义它的 YAML 键名（如 `host-def: &host { … }` 的 `host-def`；序列项等无键场景为 null）。
+ */
+internal data class AnchorDefInfo(val name: String, val line1: Int, val isMap: Boolean, val ownerKey: String? = null)
 
 internal object AnchorInheritance {
 
@@ -88,13 +91,13 @@ internal object AnchorInheritance {
     /** 全文 `&定义` 清单（递归走节点树）：候选列表与「定义在引用行之前」硬规则用它。flow 映射也是映射，`<<:` 可指向它。 */
     fun anchorDefs(doc: YamlDoc): List<AnchorDefInfo> {
         val out = ArrayList<AnchorDefInfo>()
-        fun walk(n: YamlNode?) {
+        fun walk(n: YamlNode?, owner: String?) {
             if (n == null) return
-            n.anchor?.let { out.add(AnchorDefInfo(it, n.start + 1, n.kind == YamlNode.Kind.MAP)) }
-            n.entries.forEach { walk(it.node) }
-            n.items.forEach { walk(it) }
+            n.anchor?.let { out.add(AnchorDefInfo(it, n.start + 1, n.kind == YamlNode.Kind.MAP, owner)) }
+            n.entries.forEach { walk(it.node, if (it.isMerge) owner else it.key) }
+            n.items.forEach { walk(it, owner) }
         }
-        walk(doc.root)
+        walk(doc.root, null)
         return out
     }
 
