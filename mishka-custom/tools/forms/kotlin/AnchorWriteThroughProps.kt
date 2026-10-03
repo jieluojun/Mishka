@@ -329,6 +329,33 @@ private fun testEffectiveHelpers() {
     expect(!FormValues.hasEffective(doc, baidu + "filter"), "不存在的键 hasEffective 为假")
 }
 
+private fun testWriteThroughFlowMapExpandsForLongList() {
+    // 用户报告形态（r5）：锚点是单行 flow 映射，写穿值是「一行装不下」的字符串列表。
+    // 旧行为：flowSet 对装不下一行的集合返回原文 → 写穿/物化/直写三路全拒 →
+    // 「override-expr 未改动：这个位置不能这样写」。现在应展开 flow 映射成块式再写穿。
+    val doc = docOf(USER_SHAPE)
+    val path: YPath = listOf("proxy-providers", "CNS订阅", "override", "override-expr")
+    val long = listOf(
+        ".servername = \"填免流混淆\"",
+        ".sni = .servername",
+        "(select(.network == \"ws\") | .[\"ws-opts\"].headers.Host) = .servername",
+        "(select(.network == \"http\") | .[\"http-opts\"].headers.Host) = [.servername]",
+    )
+    val w = AnchorInheritance.applySetAware(doc, path, long)
+    expect(w.anchor == "host", "应写穿 &host，实际 ${w.anchor}")
+    val out = w.doc.dump()
+    expect(out != doc.dump(), "不得原样返回（旧 bug：拒写后退到「未改动」提示）")
+    expect(!lines(out)[1].contains("override-expr: ["), "flow 行应已展开成块式，实际 ${lines(out)[1]}")
+    for (e in long) expect(out.contains(e.take(12)), "表达式应落盘: $e")
+    val after = docOf(out)
+    val (items, inherited) = FormValues.exprItems(after, listOf("proxy-providers", "CNS订阅"))
+    expect(items == long && inherited, "回读应等于写入列表且仍标继承，实际 $items / $inherited")
+    val (items2, _) = FormValues.exprItems(after, listOf("proxy-providers", "百度直连"))
+    expect(items2.isEmpty(), "未继承 host 的条目不应获得表达式")
+    expect(after.get(listOf("proxy-providers", "CNS订阅", "override", "additional-prefix")) != null,
+        "本地兄弟键 additional-prefix 应保留")
+}
+
 fun main() {
     testProviderScalarWriteThrough()
     testProviderNestedFlowWriteThrough()
@@ -344,6 +371,7 @@ fun main() {
     testAnchorChainThroughMap()
     testSeqItemAnchorThroughMap()
     testWriteThroughTargetGating()
+    testWriteThroughFlowMapExpandsForLongList()
     testNoAnchorRegression()
     testEffectiveHelpers()
     println("AnchorWriteThroughProps: all test groups passed")

@@ -573,6 +573,23 @@ internal object AnchorInheritance {
                 val out = YamlPatch.setValue(doc, wt.path, value)
                 if (out !== doc) return AnchorAwareWrite(out, wt.path, wt.anchor)
             }
+            // 锚点侧是单行 flow 映射 + 写入值是字符串列表：引擎 flowSet 不肯把集合塞进
+            // 一行、会返回原文（旧行为一路退到「这个位置不能这样写」）——这里把 flow 映射
+            // 展开成块式（其余键与 `<<: *别名` 逐字保留）再写穿，绝不静默丢改动
+            if (value is List<*> && wt.path.isNotEmpty()) {
+                val items = value.filterIsInstance<String>()
+                if (items.size == value.size) {
+                    val parentPath = wt.path.dropLast(1)
+                    val parentNode = doc.get(parentPath)
+                    if (parentNode != null && parentNode.kind == YamlNode.Kind.MAP && parentNode.flow) {
+                        val text = setFlowMapListField(doc, parentPath, wt.path.last().toString(), items)
+                        if (text != null && text != doc.dump()) {
+                            val parsed = YamlDoc.parse(text)
+                            if (parsed != null) return AnchorAwareWrite(parsed, wt.path, wt.anchor)
+                        }
+                    }
+                }
+            }
             // 锚点侧不收（flow 一行装不下、路径不可编辑…）：落到物化兜底，绝不静默丢改动
         }
         val mat = materializeInheritedPrefix(doc, path)
