@@ -1,3 +1,16 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
+index 5c60eb7..7c76159 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
+@@ -224,7 +224,7 @@ class MainActivity : ComponentActivity() {
+             // ROOT 不可用时自动回退到 VPN 模式，防止卡在错误状态
+             if (!hasRoot) {
+                 val current = storage.getString(StorageKeys.TUN_MODE, "vpn")
+-                if (current == "root_tun" || current == "root_tproxy") {
++                if (current.startsWith("root_")) {
+                     storage.putString(StorageKeys.TUN_MODE, "vpn")
+                 }
+             }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 new file mode 100644
 index 0000000..c3e1f9e
@@ -15969,6 +15982,168 @@ index 0000000..82ef7c9
 +        return doc.dump()
 +    }
 +}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
+index b4ccbf3..73d5050 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
+@@ -25,7 +25,7 @@ enum class ProxyState {
+     Error,
+ }
+ 
+-enum class TunMode { Vpn, RootTun, RootTproxy }
++enum class TunMode { Vpn, RootTun, RootTproxy, RootEbpf }
+ 
+ data class ProxyServiceStatus(
+     val state: ProxyState = ProxyState.Stopped,
+@@ -140,7 +140,7 @@ class ProxyServiceController(private val context: Context) {
+      */
+     fun reattachRoot() {
+         val mode = getTunMode()
+-        if (mode != TunMode.RootTun && mode != TunMode.RootTproxy) return
++        if (mode == TunMode.Vpn) return
+         val id = storage.getString(StorageKeys.ACTIVE_PROFILE_UUID, "").ifEmpty { null } ?: run {
+             storage.putString(StorageKeys.SERVICE_WAS_RUNNING, "false")
+             return
+@@ -230,7 +230,7 @@ class ProxyServiceController(private val context: Context) {
+             }
+         )
+ 
+-        TunMode.RootTun, TunMode.RootTproxy -> Intent(context, MishkaRootService::class.java).apply {
++        TunMode.RootTun, TunMode.RootTproxy, TunMode.RootEbpf -> Intent(context, MishkaRootService::class.java).apply {
+             action = when (op) {
+                 Op.Start -> MishkaRootService.ACTION_START
+                 Op.Restart -> MishkaRootService.ACTION_RESTART
+@@ -267,6 +267,7 @@ class ProxyServiceController(private val context: Context) {
+         return when (storage.getString(StorageKeys.TUN_MODE, "vpn")) {
+             "root_tun" -> TunMode.RootTun
+             "root_tproxy" -> TunMode.RootTproxy
++            "root_ebpf" -> TunMode.RootEbpf
+             else -> TunMode.Vpn
+         }
+     }
+@@ -302,7 +303,7 @@ class ProxyServiceController(private val context: Context) {
+         // attach-only 重连（绝不全新启动）。但设备重启会杀死 root 进程，此时持久化的 PID 已
+         // 过期——仅凭"PID 字符串非空"会误判为"进程仍活"而自动全新启动（用户未开启开机自启
+         // 却看到代理自动跑起来的根源）。重启识别见 [BootSession]。
+-        if (wasRunning && (currentMode == TunMode.RootTun || currentMode == TunMode.RootTproxy)) {
++        if (wasRunning && currentMode != TunMode.Vpn) {
+             val hasPid = storage.getString(StorageKeys.ROOT_MIHOMO_PID, "").isNotEmpty()
+             val rebooted = BootSession.hasRebootedSince(context, storage)
+             if (hasPid && !rebooted) {
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt b/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
+index ecdcdb5..44da071 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
+@@ -57,7 +57,7 @@ class DynamicNotificationManager(
+     /**
+      * 根据设置启动动态通知或显示静态通知。
+      *
+-     * ROOT 模式（RootTun / RootTproxy）下强制走静态：app 进程无 VpnService 系统 binding 加持，
++     * ROOT 模式（RootTun / RootTproxy / RootEbpf）下强制走静态：app 进程无 VpnService 系统 binding 加持，
+      * 后台时 device idle 让 1 Hz `/traffic` WS 帧合并 + `notify()` 批处理，动态通知会冻结
+      */
+     fun startOrFallbackStatic(storage: PlatformStorage, tunMode: TunMode = TunMode.Vpn) {
+@@ -72,6 +72,7 @@ class DynamicNotificationManager(
+                 when (tunMode) {
+                     TunMode.RootTun -> R.string.settings_tun_mode_root_tun
+                     TunMode.RootTproxy -> R.string.settings_tun_mode_root_tproxy
++                    TunMode.RootEbpf -> R.string.settings_tun_mode_root_ebpf
+                     TunMode.Vpn -> R.string.settings_tun_mode_vpn
+                 }
+             )
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+index 6cf8283..9298c02 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+@@ -37,20 +37,23 @@ import java.io.File
+ import kotlin.time.Clock
+ 
+ /**
+- * ROOT 模式前台服务（承载 ROOT TUN 与 ROOT TPROXY 两个 submode）。
++ * ROOT 模式前台服务（承载 ROOT TUN / ROOT TPROXY / ROOT EBPF 三个 submode）。
+  * 不经过 VpnService，mihomo 以 root 权限运行：
+  * - RootTun：mihomo 自行创建 TUN 设备 + sing-tun auto-route 管路由表；
+- * - RootTproxy：mihomo 关闭 TUN，走 tproxy-port 监听，iptables/ip rule 透明劫持流量。
++ * - RootTproxy：mihomo 关闭 TUN，走 tproxy-port 监听，iptables/ip rule 透明劫持流量；
++ * - RootEbpf：mihomo 关闭 TUN，由配置里的 ebpf listener（TC 挂载）自行重定向流量，
++ *   App 侧不下发任何 netfilter 规则。
+  */
+ class MishkaRootService : Service() {
+ 
+     /**
+-     * ROOT 模式的子形态。Intent EXTRA_SUBMODE 取 "tun"/"tproxy"；
++     * ROOT 模式的子形态。Intent EXTRA_SUBMODE 取 "tun"/"tproxy"/"ebpf"；
+      * 缺省（为空或未知）兜底为 Tun。
+      */
+     private enum class Submode(val storageValue: String, val tunMode: TunMode) {
+         Tun("tun", TunMode.RootTun),
+-        Tproxy("tproxy", TunMode.RootTproxy);
++        Tproxy("tproxy", TunMode.RootTproxy),
++        Ebpf("ebpf", TunMode.RootEbpf);
+ 
+         companion object {
+             fun from(value: String?): Submode = entries.firstOrNull { it.storageValue == value } ?: Tun
+@@ -148,7 +151,7 @@ class MishkaRootService : Service() {
+     }
+ 
+     private fun isRootRunning(mode: TunMode): Boolean =
+-        mode == TunMode.RootTun || mode == TunMode.RootTproxy
++        mode == TunMode.RootTun || mode == TunMode.RootTproxy || mode == TunMode.RootEbpf
+ 
+     /**
+      * 启动代理。**幂等**：已有启动协程在跑时忽略本次请求。唯一例外是 fresh START 抢占
+@@ -251,6 +254,9 @@ class MishkaRootService : Service() {
+                                 applyTproxyRules(storage)
+                             }
+                         }
++
++                        // eBPF 重定向由 mihomo ebpf listener 自己挂 TC，App 侧无规则可补
++                        Submode.Ebpf -> {}
+                     }
+                     ProxyServiceBridge.updateState(
+                         ProxyServiceStatus(
+@@ -428,6 +434,8 @@ class MishkaRootService : Service() {
+             when (submode) {
+                 Submode.Tun -> applyTetherRules(storage, tproxyForTether)
+                 Submode.Tproxy -> applyTproxyRules(storage)
++                // eBPF submode 不用 netfilter：流量劫持完全由 mihomo ebpf listener 完成
++                Submode.Ebpf -> {}
+             }
+ 
+             // 7. 更新状态和通知
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
+index b57d687..e23f0f7 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
+@@ -54,6 +54,7 @@ object RuntimeOverrideBuilder {
+      * - [TunMode.Vpn]        VpnService + sing-tun fd，仅写 `tun.file-descriptor`
+      * - [TunMode.RootTun]    sing-tun auto_route + include/exclude-package；可选为 tether 加 tproxy-port
+      * - [TunMode.RootTproxy] 关闭 TUN，写 tproxy-port + dns.listen，AppProxy 交 iptables uid-owner
++     * - [TunMode.RootEbpf]   关闭 TUN，不注入任何入站端口；劫持由配置内 ebpf listener 自理
+      *
+      * mixed-port 决策（决定 mihomo 是否监听 HTTP 代理端口，[SubscriptionProxyResolver] 据此走代理）：
+      * 1. 用户 override 显式设置 → 用用户值（覆盖订阅 yaml）
+@@ -91,6 +92,8 @@ object RuntimeOverrideBuilder {
+                 TunMode.RootTun -> if (tproxyForTether) RootTetherHijacker.TPROXY_PORT else userOverride.tproxyPort
+                 // Vpn：透传用户 override
+                 TunMode.Vpn -> userOverride.tproxyPort
++                // RootEbpf：无固定入站，与 Vpn 一样透传
++                TunMode.RootEbpf -> userOverride.tproxyPort
+             },
+             // RootTproxy 下**不**注入 routing-mark：Android Netd 用 fwmark 低 16 位编码 netId，
+             // mihomo 若带 SO_MARK 会被解释为不存在的 netId，命中 legacy_system 表（无默认路由）
+@@ -133,8 +136,9 @@ object RuntimeOverrideBuilder {
+         tunFd: Int,
+         userTun: TunOverride?,
+     ): TunOverride {
+-        // RootTproxy：TUN 完全关闭，sing-tun 不初始化
+-        if (tunMode == TunMode.RootTproxy) {
++        // RootTproxy / RootEbpf：TUN 完全关闭，sing-tun 不初始化
++        // （RootEbpf 的流量劫持由配置里的 ebpf listener 挂 TC 完成，与 TUN 无关）
++        if (tunMode == TunMode.RootTproxy || tunMode == TunMode.RootEbpf) {
+             return TunOverride(enable = false)
+         }
+ 
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 index 2341aa9..334bcdc 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
@@ -16008,6 +16183,122 @@ index bdb96f7..c5f8970 100644
  
      @Serializable
      data object AppProxy : Route
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
+index 018c54d..c1a41cd 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
+@@ -179,25 +179,32 @@ private fun StatusContent(
+                 )
+             }
+             Spacer(Modifier.height(12.dp))
+-            // RootTproxy 下 tun.enable=false，stack 无意义：展示 Inbound=TPROXY:port 静态信息
++            // RootTproxy / RootEbpf 下 tun.enable=false，stack 无意义：
++            // TPROXY 展示 Inbound=TPROXY:port，EBPF 展示 Inbound=EBPF 静态信息
+             val isTproxy = state.tunMode == TunMode.RootTproxy
++            val isEbpf = state.tunMode == TunMode.RootEbpf
++            val noTunStack = isTproxy || isEbpf
+             val inboundTproxyLabel = stringResource(R.string.home_inbound_tproxy, TPROXY_INBOUND_PORT)
+             Card(
+                 modifier = Modifier
+                     .fillMaxWidth()
+                     .weight(1f),
+                 insideMargin = PaddingValues(16.dp),
+-                onClick = { if (isRunning && !isTproxy) showTunStackDialog = true },
+-                showIndication = isRunning && !isTproxy,
+-                pressFeedbackType = if (isRunning && !isTproxy) PressFeedbackType.Sink else PressFeedbackType.None,
++                onClick = { if (isRunning && !noTunStack) showTunStackDialog = true },
++                showIndication = isRunning && !noTunStack,
++                pressFeedbackType = if (isRunning && !noTunStack) PressFeedbackType.Sink else PressFeedbackType.None,
+             ) {
+                 Text(
+-                    text = if (isTproxy) stringResource(R.string.home_inbound) else stringResource(R.string.home_tun),
++                    text = if (noTunStack) stringResource(R.string.home_inbound) else stringResource(R.string.home_tun),
+                     fontSize = 13.sp,
+                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                 )
+                 Text(
+-                    text = if (isTproxy) inboundTproxyLabel else tunStackLabel(state.tunStack),
++                    text = when {
++                        isTproxy -> inboundTproxyLabel
++                        isEbpf -> "EBPF"
++                        else -> tunStackLabel(state.tunStack)
++                    },
+                     fontSize = 20.sp,
+                     fontWeight = FontWeight.Bold,
+                     color = MiuixTheme.colorScheme.onSurface,
+@@ -229,7 +236,7 @@ private fun StatusContent(
+ private const val TPROXY_INBOUND_PORT: Int = 7895
+ 
+ // value（mihomo 侧小写标识）to label（展示名），同时供卡片取值与选择弹窗列举
+-private val MODE_OPTIONS = listOf("rule" to "Rule", "global" to "Global", "direct" to "Direct")
++private val MODE_OPTIONS = listOf("rule" to "规则", "global" to "全局", "direct" to "直连")
+ 
+ private val TUN_STACK_OPTIONS = listOf("mixed" to "Mixed", "gvisor" to "gVisor", "system" to "System", "mips" to "MIPS")
+ 
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
+index d3f9631..198fd46 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
+@@ -5,10 +5,12 @@ import androidx.compose.animation.core.animateDpAsState
+ import androidx.compose.animation.core.animateFloatAsState
+ import androidx.compose.animation.core.spring
+ import androidx.compose.animation.core.tween
++import androidx.compose.foundation.ExperimentalFoundationApi
+ import androidx.compose.foundation.Image
+ import androidx.compose.foundation.LocalIndication
+ import androidx.compose.foundation.basicMarquee
+ import androidx.compose.foundation.clickable
++import androidx.compose.foundation.combinedClickable
+ import androidx.compose.foundation.interaction.MutableInteractionSource
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Box
+@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
+ import androidx.compose.foundation.layout.fillMaxSize
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.minimumInteractiveComponentSize
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.layout.size
+ import androidx.compose.foundation.layout.sizeIn
+@@ -769,6 +772,7 @@ private fun ProxyNodeRow(
+     }
+ }
+ 
++@OptIn(ExperimentalFoundationApi::class)
+ @Composable
+ private fun ProxyNodeCard(
+     name: String,
+@@ -803,9 +807,19 @@ private fun ProxyNodeCard(
+                 if (isSelectable) {
+                     Modifier
+                         .squircleSurface(color = backgroundColor, cornerRadius = 12.dp)
+-                        .clickable(onClick = onClick)
++                        // 短按选中节点，长按测速：整卡都是命中区，与 mihomo_box 交互一致；
++                        // 延迟角标太小点不中时长按卡片即可
++                        .combinedClickable(
++                            onClick = onClick,
++                            onLongClick = if (isTesting) null else onTestDelay,
++                        )
+                 } else {
+-                    Modifier.squircleBackground(color = backgroundColor, cornerRadius = 12.dp)
++                    Modifier
++                        .squircleBackground(color = backgroundColor, cornerRadius = 12.dp)
++                        .combinedClickable(
++                            onClick = {},
++                            onLongClick = if (isTesting) null else onTestDelay,
++                        )
+                 }
+             )
+             .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp),
+@@ -848,6 +862,8 @@ private fun ProxyNodeCard(
+                 Box(
+                     modifier = Modifier
+                         .sizeIn(minWidth = 28.dp)
++                        // 视觉尺寸不变，命中区扩到 48dp 最小触控标准——原先 ~28×16dp 基本点不中
++                        .minimumInteractiveComponentSize()
+                         .clickable(
+                             enabled = !isTesting,
+                             interactionSource = null,
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 index b1b2479..7da18ac 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
@@ -16109,6 +16400,90 @@ index b1b2479..7da18ac 100644
          }
      }
  }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
+index 4084ef6..2a0b774 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
+@@ -102,9 +102,11 @@ fun RootSettingsScreen(
+     }
+     var showTetherDialog by remember { mutableStateOf(false) }
+ 
+-    // 读一次 submode：TPROXY 下隐藏 tether mode 下拉，显示说明文案
++    // 读一次 submode：TPROXY / EBPF 下隐藏 tether mode 下拉，显示说明文案
+     // （用户改 TUN_MODE 必须先停代理，不需要热更新）
+-    val isTproxy = storage.getString(StorageKeys.TUN_MODE, "vpn") == "root_tproxy"
++    val tunModeValue = storage.getString(StorageKeys.TUN_MODE, "vpn")
++    val isTproxy = tunModeValue == "root_tproxy"
++    val isEbpf = tunModeValue == "root_ebpf"
+ 
+     // xt_TPROXY 内核能力探测结果，仅在 TPROXY submode 或 PROXY 热点模式下显示告警
+     val tproxyCapable = storage.getString(StorageKeys.ROOT_TPROXY_KERNEL_CAPABLE, "")
+@@ -217,10 +219,17 @@ fun RootSettingsScreen(
+                 outerBottomPadding = 12.dp,
+                 items = listOf(
+                     CardItem("mode") {
+-                        if (isTproxy) {
+-                            // TPROXY 模式：整条链路都由 iptables 透明代理，不需要 BYPASS/PROXY 切换
++                        if (isTproxy || isEbpf) {
++                            // TPROXY：整条链路由 iptables 透明代理；EBPF：热点劫持同样不归 App 管，
++                            // 两种模式都不需要 BYPASS/PROXY 切换
+                             Text(
+-                                text = stringResource(R.string.root_tproxy_tether_note),
++                                text = stringResource(
++                                    if (isTproxy) {
++                                        R.string.root_tproxy_tether_note
++                                    } else {
++                                        R.string.root_ebpf_tether_note
++                                    }
++                                ),
+                                 fontSize = 13.sp,
+                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt
+index 4a1bb29..f4fe9ce 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt
+@@ -84,6 +84,7 @@ fun SettingsScreen(
+             when (storage?.getString(StorageKeys.TUN_MODE, "vpn")) {
+                 "root_tun" -> 1
+                 "root_tproxy" -> 2
++                "root_ebpf" -> 3
+                 else -> 0
+             }
+         )
+@@ -93,6 +94,7 @@ fun SettingsScreen(
+         stringResource(R.string.settings_tun_mode_vpn),
+         stringResource(R.string.settings_tun_mode_root_tun),
+         stringResource(R.string.settings_tun_mode_root_tproxy),
++        stringResource(R.string.settings_tun_mode_root_ebpf),
+     )
+ 
+     val backdrop = rememberBlurBackdrop()
+@@ -139,6 +141,7 @@ fun SettingsScreen(
+                                     summary = when (tunModeIndex) {
+                                         1 -> stringResource(R.string.settings_tun_root_tun_summary)
+                                         2 -> stringResource(R.string.settings_tun_root_tproxy_summary)
++                                        3 -> stringResource(R.string.settings_tun_root_ebpf_summary)
+                                         else -> stringResource(R.string.settings_tun_vpn_summary)
+                                     },
+                                     items = tunModeItems,
+@@ -147,6 +150,7 @@ fun SettingsScreen(
+                                         val mode = when (index) {
+                                             1 -> "root_tun"
+                                             2 -> "root_tproxy"
++                                            3 -> "root_ebpf"
+                                             else -> "vpn"
+                                         }
+                                         storage?.putString(StorageKeys.TUN_MODE, mode)
+@@ -165,7 +169,7 @@ fun SettingsScreen(
+                                 )
+                             })
+                         }
+-                        if (tunModeIndex == 1 || tunModeIndex == 2) {
++                        if (tunModeIndex in 1..3) {
+                             add(CardItem("rootSettings") {
+                                 ArrowPreference(
+                                     title = stringResource(R.string.root_settings_title),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
 index cef7fbf..eeb582a 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
@@ -16164,11 +16539,99 @@ index cef7fbf..eeb582a 100644
              item {
                  TextButton(
                      text = stringResource(R.string.common_save),
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
+index b112741..51b3927 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
+@@ -181,6 +181,8 @@ class HomeViewModel(
+     private var memoryJob: Job? = null
+     private var systemInfoJob: Job? = null
+     private var runtimeConfigJob: Job? = null
++    // 上次拉取 /version 的时刻（epoch ms）：可见轮询里限流刷新内核版本号
++    private var lastVersionCheckAt = 0L
+     private var initialLoadJob: Job? = null
+     private var providerTrafficJob: Job? = null
+     private var providerTrafficRequestId = 0L
+@@ -621,7 +623,9 @@ class HomeViewModel(
+     }
+ 
+     private suspend fun refreshRuntimeConfig() {
+-        repository?.getConfig()?.onSuccess { config ->
++        val repo = repository ?: return
++        repo.getConfig().onSuccess { config ->
++            if (repository !== repo) return@onSuccess
+             val current = _uiState.value
+             if (!current.isRunning || current.config == config) return@onSuccess
+             _uiState.value = current.copy(
+@@ -631,6 +635,18 @@ class HomeViewModel(
+                 config = config,
+             )
+         }
++        // 内核升级后 restart 换了新进程，版本号只在启动时取一次会一直显示旧值。
++        // /version 响应不变就不动 state（避免无谓重组）；限流拉长到 10s，别把 2s 轮询翻成双倍请求
++        val now = Clock.System.now().toEpochMilliseconds()
++        if (now - lastVersionCheckAt >= VERSION_CHECK_INTERVAL_MS) {
++            lastVersionCheckAt = now
++            repo.getVersion().onSuccess { version ->
++                if (repository !== repo) return@onSuccess
++                if (version.version != _uiState.value.version) {
++                    _uiState.update { it.copy(version = version.version) }
++                }
++            }
++        }
+     }
+ 
+     private fun resetHotStates() {
+@@ -695,8 +711,12 @@ class HomeViewModel(
+     }
+ 
+     fun switchTunStack(stack: String) {
+-        // TPROXY 模式 tun.enable=false，切 stack 无意义（且不应触发 restart）
+-        if (_uiState.value.tunMode == TunMode.RootTproxy) return
++        // TPROXY / EBPF 模式 tun.enable=false，切 stack 无意义（且不应触发 restart）
++        if (_uiState.value.tunMode == TunMode.RootTproxy ||
++            _uiState.value.tunMode == TunMode.RootEbpf
++        ) {
++            return
++        }
+         val current = overrideStore.load()
+         val nextTun = (current.tun ?: TunOverride()).copy(stack = stack)
+         overrideStore.save(current.copy(tun = nextTun))
+@@ -784,6 +804,9 @@ class HomeViewModel(
+ 
+         private const val LATENCY_TIMEOUT_MILLIS = 5000L
+ 
++        /** /version 限流间隔：可见轮询 2s 一次，版本号 10s 拉一次足够跟上内核重启/升级 */
++        private const val VERSION_CHECK_INTERVAL_MS = 10_000L
++
+         /** 速度卡详情展示的连接条数 */
+         private const val TOP_CONNECTION_COUNT = 5
+     }
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..a34898d 100644
+index 78fcd87..f190467 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
-@@ -615,4 +615,6 @@
+@@ -289,9 +289,11 @@
+     <string name="settings_tun_vpn_summary">через VpnService</string>
+     <string name="settings_tun_root_tun_summary">собственное TUN-устройство</string>
+     <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
++    <string name="settings_tun_root_ebpf_summary">eBPF auto-redir</string>
+     <string name="settings_tun_mode_vpn">VPN</string>
+     <string name="settings_tun_mode_root_tun">ROOT TUN</string>
+     <string name="settings_tun_mode_root_tproxy">ROOT TPROXY</string>
++    <string name="settings_tun_mode_root_ebpf">ROOT EBPF</string>
+     <string name="settings_vpn_settings">Настройки VPN</string>
+     <string name="settings_vpn_summary">Обход локальной сети, перехват DNS, IPv6</string>
+     <string name="settings_tun_device">Имя устройства TUN</string>
+@@ -406,6 +408,7 @@
+     <string name="root_tether_scan_result_title">Обнаруженные интерфейсы</string>
+     <string name="root_tether_tproxy_unavailable_warning">В ядре отсутствует модуль xt_TPROXY. Используется резервный режим (меньшая скорость, но соединения работают). Для максимальной производительности TPROXY используйте ядро с поддержкой xt_TPROXY.</string>
+     <string name="root_tproxy_tether_note">В режиме TPROXY весь трафик точки доступа направляется через ядро автоматически; переключение «В обход / Через прокси» не требуется.</string>
++    <string name="root_ebpf_tether_note">В режиме EBPF трафик точки доступа перенаправляется eBPF-слушателями mihomo; переключение «В обход / Через прокси» не требуется.</string>
+     <string name="root_tun_jumbo_mtu_title">Jumbo MTU и GSO</string>
+     <string name="root_tun_jumbo_mtu_summary">Агрегация больших пакетов (mtu=9000, gso=on) уменьшает системные вызовы на пакет для максимальной пропускной способности. Отключите, если восходящий канал отбрасывает фрагментированные пакеты.</string>
+     <string name="root_attach_force_reapply_title">Принудительно применять правила при переподключении</string>
+@@ -615,4 +618,6 @@
          <item quantity="other">Выбрано %1$d переопределения</item>
      </plurals>
      <string name="subscription_overrides">Переопределения</string>
@@ -16176,10 +16639,30 @@ index 78fcd87..a34898d 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..883eb7a 100644
+index cba1bbb..f34bb9a 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
-@@ -610,4 +610,6 @@
+@@ -287,9 +287,11 @@
+     <string name="settings_tun_vpn_summary">通过 VpnService</string>
+     <string name="settings_tun_root_tun_summary">自建 TUN 设备</string>
+     <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
++    <string name="settings_tun_root_ebpf_summary">eBPF 自动重定向</string>
+     <string name="settings_tun_mode_vpn">VPN</string>
+     <string name="settings_tun_mode_root_tun">ROOT TUN</string>
+     <string name="settings_tun_mode_root_tproxy">ROOT TPROXY</string>
++    <string name="settings_tun_mode_root_ebpf">ROOT EBPF</string>
+     <string name="settings_vpn_settings">VPN 设置</string>
+     <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
+     <string name="settings_tun_device">TUN 设备名称</string>
+@@ -404,6 +406,7 @@
+     <string name="root_tether_scan_result_title">检测到以下接口</string>
+     <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
+     <string name="root_tproxy_tether_note">TPROXY 模式下所有热点流量由内核规则自动代理，无需切换「绕过 / 走代理」。</string>
++    <string name="root_ebpf_tether_note">EBPF 模式下热点流量由 mihomo 的 eBPF 监听器重定向，无需切换「绕过 / 走代理」。</string>
+     <string name="root_tun_jumbo_mtu_title">大 MTU 与 GSO</string>
+     <string name="root_tun_jumbo_mtu_summary">大包聚合（mtu=9000、开启 gso）减少每包 syscall，提升吞吐。上游链路丢弃分片时可关闭。</string>
+     <string name="root_attach_force_reapply_title">重连时强制重建规则</string>
+@@ -610,4 +613,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -16187,10 +16670,30 @@ index cba1bbb..883eb7a 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..5a3acf6 100644
+index f6895e0..9541fc3 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
-@@ -610,4 +610,6 @@
+@@ -287,9 +287,11 @@
+     <string name="settings_tun_vpn_summary">透過 VpnService</string>
+     <string name="settings_tun_root_tun_summary">自建 TUN 裝置</string>
+     <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
++    <string name="settings_tun_root_ebpf_summary">eBPF 自動重定向</string>
+     <string name="settings_tun_mode_vpn">VPN</string>
+     <string name="settings_tun_mode_root_tun">ROOT TUN</string>
+     <string name="settings_tun_mode_root_tproxy">ROOT TPROXY</string>
++    <string name="settings_tun_mode_root_ebpf">ROOT EBPF</string>
+     <string name="settings_vpn_settings">VPN 設定</string>
+     <string name="settings_vpn_summary">繞過私人網路、DNS 攔截、IPv6</string>
+     <string name="settings_tun_device">TUN 裝置名稱</string>
+@@ -404,6 +406,7 @@
+     <string name="root_tether_scan_result_title">偵測到以下介面</string>
+     <string name="root_tether_tproxy_unavailable_warning">目前核心缺少 xt_TPROXY 模組，已降級為相容路徑（吞吐量略低，連線仍可用）。如需原生 TPROXY 效能，請更換支援該模組的核心。</string>
+     <string name="root_tproxy_tether_note">TPROXY 模式下所有熱點流量由核心規則自動代理，無需切換「繞過／經過代理」。</string>
++    <string name="root_ebpf_tether_note">EBPF 模式下熱點流量由 mihomo 的 eBPF 監聽器重定向，無需切換「繞過／經過代理」。</string>
+     <string name="root_tun_jumbo_mtu_title">大 MTU 與 GSO</string>
+     <string name="root_tun_jumbo_mtu_summary">大封包聚合（mtu=9000、開啟 gso）可減少每個封包的 syscall，提升吞吐量。上游線路丟棄分段封包時可關閉。</string>
+     <string name="root_attach_force_reapply_title">重新連線時強制重建規則</string>
+@@ -610,4 +613,6 @@
          <item quantity="other">已選擇 %1$d 項覆寫</item>
      </plurals>
      <string name="subscription_overrides">覆寫</string>
@@ -16198,13 +16701,46 @@ index f6895e0..5a3acf6 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..b419b27 100644
+index d1acc59..837d5f6 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -613,4 +613,6 @@
+@@ -289,9 +289,11 @@
+     <string name="settings_tun_vpn_summary">via VpnService</string>
+     <string name="settings_tun_root_tun_summary">owns TUN device</string>
+     <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
++    <string name="settings_tun_root_ebpf_summary">eBPF auto-redir</string>
+     <string name="settings_tun_mode_vpn">VPN</string>
+     <string name="settings_tun_mode_root_tun">ROOT TUN</string>
+     <string name="settings_tun_mode_root_tproxy">ROOT TPROXY</string>
++    <string name="settings_tun_mode_root_ebpf">ROOT EBPF</string>
+     <string name="settings_vpn_settings">VPN Settings</string>
+     <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
+     <string name="settings_tun_device">TUN Device Name</string>
+@@ -406,6 +408,7 @@
+     <string name="root_tether_scan_result_title">Detected interfaces</string>
+     <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
+     <string name="root_tproxy_tether_note">TPROXY mode proxies all hotspot traffic via kernel rules; no Bypass/Through toggle needed.</string>
++    <string name="root_ebpf_tether_note">EBPF mode redirects hotspot traffic through mihomo eBPF listeners; no Bypass/Through toggle needed.</string>
+     <string name="root_tun_jumbo_mtu_title">Jumbo MTU &amp; GSO</string>
+     <string name="root_tun_jumbo_mtu_summary">Large-packet aggregation (mtu=9000, gso=on) reduces per-packet syscalls for throughput. Disable if the upstream link drops fragmented traffic.</string>
+     <string name="root_attach_force_reapply_title">Force re-apply on reconnect</string>
+@@ -613,4 +616,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>
 +    <string name="subscription_visual_config">Visual config</string>
 +    <string name="subscription_visual_config_summary">Edit this subscription’s YAML config with structured forms</string>
  </resources>
+diff --git a/docs/root-mode.md b/docs/root-mode.md
+index ddabd38..3ed92c9 100644
+--- a/docs/root-mode.md
++++ b/docs/root-mode.md
+@@ -8,6 +8,8 @@ ip rule 之前先读本文件**；三模式共有的启动链、override 注入
+ 
+ **ROOT TPROXY 的 IPv6 注入必须门控**：`RootTproxyApplier.apply(ipv6Enabled)` 由 `VPN_ALLOW_IPV6` 决定（与 VPN/ROOT TUN 同一开关），默认 false 时跳过所有 ip6tables / `ip -6` 注入，IPv6 走内核原生路由；teardown 永远尝试清 v4+v6 保证切换无残留。mihomo 默认 `ipv6: false` 时无法 dial IPv6，TPROXY 无差别拦截 → accept → 拨号 "ip version error" → App 重试，形成 600 conn/s 紧密循环（实测 95s 产生 56k 失败 + 25MB 日志）。VPN/ROOT TUN 由 `inet6-address` 控制 TUN 是否注册 v6 默认路由，本身就有这层过滤。
+ 
++**ROOT EBPF submode 零 netfilter**：`Submode.Ebpf`（`TUN_MODE="root_ebpf"`）复用 ROOT 启动链（su fork mihomo、runtime/ 沙箱、attach 三重校验全部生效），但 override 注入 `tun.enable=false`、不写 tproxy-port / dns.listen，启动与 attach 两处 `when(submode)` 的规则 apply 均为空分支——流量劫持完全由用户配置里的 ebpf listener（mihomo 自行挂 TC）完成。约束：① **不要**给 Ebpf 补 iptables/ip rule 动作：App 侧没有锚点注释可清，且与 ebpf TC 钩子叠加会互相干扰；② `teardownAllRootRules` 对 Ebpf 照跑两类 teardown（从 Tun/Tproxy 切过来时防残留），幂等无害；③ 配置内没有 ebpf listener 时该模式**不会代理任何流量**，属预期行为而非故障；④ RootSettingsScreen 对 Ebpf 隐藏热点 BYPASS/PROXY 下拉（无规则可切），主页 TUN 卡对 Ebpf 显示 Inbound=EBPF 并禁点 stack 切换（`switchTunStack` 同步拦截）。
++
+ **ROOT runtime/ 沙箱**：ROOT mihomo 工作目录是独立 `runtime/{uuid}/`（从 imported/ 复制），不碰 imported/。启停钩子：`startProxy` 新鲜启动前 `prepareRootRuntime`；stop/restart/进程监控三条死亡路径都在 `clearPersistedState` 之前 `cleanupRootRuntime`；attach 分支**不重建**。存量旧 root:root 遗孤由 `MishkaApplication` 后台线程一次性 `su chown -R $APP_UID imported/` 迁移。
+ 
+ **任何进入 `su -c` 的外部值必须 `escapeShellSingleQuoted`**：双引号挡不住 `$(...)`。`--secret` 来自远端 config.yaml 行扫描、`--age-secret-key` 用户手填、device name 只 trim，上游均无字符校验，转义是唯一防线。启动日志只打 flag 名，密钥不进 logcat。

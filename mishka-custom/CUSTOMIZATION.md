@@ -111,6 +111,22 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
 17. **表达式 ✎/× 按钮形状**：上一版用 38dp 等宽格子把两个按钮挤成了变形的大圆块；改回与弹层其它按钮
     （「＋ 添加表达式」/「完成」）同款的常规 TextButton + 8dp 间距，大小形状与模块一致。
 
+### 本轮 app 侧修复（主页 / 代理页 / 隧道模式，seed：`patches/app/home-proxy-root-fixes.seed.patch`）
+
+18. **主页内核版本号不更新**：版本号原先只在每次建立连接时取一次 `/version`，内核升级重启后
+    同一 app 会话里永远显示旧值。现在并入首页 2s 可见轮询（`refreshRuntimeConfig`），
+    限流 10s 拉一次 `/version`，值变化才更新状态；repository 换代后旧响应被丢弃。
+19. **代理页单节点测速点不动**：命中区只有延迟角标 ~28×16dp，基本点不中。角标加
+    `minimumInteractiveComponentSize()`（视觉不变、命中区扩到 48dp 最小触控标准）；
+    节点卡改 `combinedClickable`——短按选中、**长按测速**，与 mihomo_box 参考实现交互一致。
+20. **主页代理模式显示中文**：模式卡片与选择弹窗的取值 `Rule / Global / Direct` 改为
+    `规则 / 全局 / 直连`（`StatusSection.MODE_OPTIONS`；发给内核的值仍是小写协议标识）。
+21. **隧道模式新增 ROOT EBPF**：`TunMode.RootEbpf`（存储值 `root_ebpf`，submode `ebpf`）复用
+    ROOT 启动链，但 override 注入 `tun.enable=false`、不写 tproxy-port / dns.listen，启动与
+    attach 两处 netfilter apply 均为空分支——流量劫持完全由配置里的 ebpf listener 自理。
+    设置页第四项「ROOT EBPF（eBPF 自动重定向）」；ROOT 设置页对其隐藏热点 BYPASS/PROXY 下拉；
+    主页 TUN 卡显示 Inbound=EBPF 并禁点 stack 切换。约束已写进 `docs/root-mode.md`。
+
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
 ### 三条安全边界（这也是它敢写盘的依据）
@@ -229,6 +245,7 @@ Alpha 里没有；另外 `mishka_core/go.sum` 里也没有 Alpha 新增依赖的
 | --- | --- | --- |
 | 自定义源码 | `app/src/main/kotlin/.../custom/{anchor,forms}/*.kt`（17 个文件） | ✅ 新增（补丁） |
 | 配置入口与路由 | `AppNavigation.kt`、`Route.kt`、`SubscriptionEditScreen.kt`、`FileManagerEditorScreen.kt` 与 4 份 `strings.xml` | ⚠️ 8 个上游文件由 app 补丁可逆修改；锚点仍在工具栏，表单入口在「覆写」下方 |
+| 主页/代理页修复与 ROOT EBPF（条目 18–21） | `HomeViewModel.kt`、`StatusSection.kt`、`ProxyScreen.kt`、`SettingsScreen.kt`、`RootSettingsScreen.kt`、`ProxyServiceController.kt`、`MishkaRootService.kt`、`RuntimeOverrideBuilder.kt`、`DynamicNotificationManager.kt`、`MainActivity.kt`、4 份 `strings.xml` 与 `docs/root-mode.md` | ⚠️ 上游文件由 app 补丁可逆修改（seed：`home-proxy-root-fixes.seed.patch`） |
 | 内核替换 | `<仓库>/mihomo`（原子上游子模块目录） | 目录内容替换 + `submodule.mihomo.ignore=all`（可还原） |
 | 依赖哈希 | `<仓库>/go.work`、`go.work.sum` | ✅ 新增 |
 | 只出 release | `mishka-custom/init/no-debug.init.gradle` | ✅ 新增 |

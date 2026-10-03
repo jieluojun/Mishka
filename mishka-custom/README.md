@@ -25,7 +25,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
 | 路径 | 内容 |
 | --- | --- |
 | `scripts/` | `setup.sh`（装配）、`apply-patches.sh` / `revert-patches.sh`（重打/还原）、`build-release.sh`（只出 release）、`gen-keystore.sh`（签名） |
-| `patches/app/` | app 侧完整补丁 `0001-anchor-panel.patch`（锚点/表单编辑器、订阅页入口迁移与路由）+ 基线 `BASELINE.txt`；`anchor-panel.seed.patch` + `visual-config-entry.seed.patch` 供可重复导出 |
+| `patches/app/` | app 侧完整补丁 `0001-anchor-panel.patch`（锚点/表单编辑器、订阅页入口迁移与路由）+ 基线 `BASELINE.txt`；`anchor-panel.seed.patch` + `visual-config-entry.seed.patch` + `home-proxy-root-fixes.seed.patch` 供可重复导出 |
 | `patches/mihomo/` | 内核 4 个补丁（`0001`…`0004`）+ 基线 `BASELINE.txt`（含基线 commit 与逐文件 blob） |
 | `kernel/` | `go.work` + `go.work.sum`：让「换了分支的内核」不依赖改仓库 `go.mod`/`go.sum` 就能编译 |
 | `init/` | `no-debug.init.gradle`：构建 debug 变体时直接失败（默认只出 release） |
@@ -60,7 +60,7 @@ bash mishka-custom/scripts/build-release.sh --repo .
 | --- | --- |
 | `.github/workflows/release.yml` | 由 `mishka-custom/ci/build-release.yml` 复制而来。**唯一需要放到 `mishka-custom/` 之外的文件**；GitHub 只运行仓库里已提交的工作流，所以要出现在 Actions 页面并手动触发，它必须在默认分支上 |
 | `mishka-custom/scripts/setup.sh`、`scripts/lib.sh` | 工作流第 3 步就是执行 `setup.sh --ci`（换内核、打补丁、生成 go.work） |
-| `mishka-custom/patches/app/0001-anchor-panel.patch` + `patches/app/BASELINE.txt` | app 完整补丁与逐文件校验基线；`anchor-panel.seed.patch` / `visual-config-entry.seed.patch` 是导出过程的稳定种子补丁 |
+| `mishka-custom/patches/app/0001-anchor-panel.patch` + `patches/app/BASELINE.txt` | app 完整补丁与逐文件校验基线；`anchor-panel.seed.patch` / `visual-config-entry.seed.patch` / `home-proxy-root-fixes.seed.patch` 是导出过程的稳定种子补丁 |
 | `mishka-custom/patches/mihomo/*.patch`（4 个）+ `patches/mihomo/BASELINE.txt` | 内核补丁与基线（`setup.sh` 预检会读基线里的 `base_commit`/`patched_tree`） |
 | `mishka-custom/kernel/go.work.sum` | 少了它，换内核后依赖哈希不全，Gradle 里的 Go 编译会直接失败（这是整套方案的关键文件） |
 | `mishka-custom/init/no-debug.init.gradle` | CI 的构建命令 `-I mishka-custom/init/no-debug.init.gradle` 指向它，负责挡掉 debug 变体 |
