@@ -233,6 +233,26 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     不受影响、本地兄弟键保留）；引擎对拍 802/802、引用对拍 153/0、三方锚点对拍与 forms
     性质测试全绿保持。
 
+### r6：外部面板空白真根因——WebView 的 dvh 解析为 0（2026-10-03）
+
+30. **探针回传定位真根因**：r5 诊断抽屉回传显示该设备 WebView 引擎为 **Chrome 154**（最新）、
+    `localStorage ok`、`innerHeight=776` 正常、`CSS.supports(…100dvh)` 为 true，但根容器
+    `.h-dvh` 的**计算高度为 0px**、`body` 高 0——即 dvh 单位「支持但解析值为 0」
+    （Chromium WebView visual-viewport 缺陷）。后果与截图逐条对上：高度链
+    （`.h-dvh`→`size-full`→`flex-1`→`h-full` 滚动容器）整体塌成 0，代理卡片**存在于 DOM**
+    （探针 `cards:12`、首卡 160×75）但被 0 高 `overflow-y-auto` 容器裁掉；底栏
+    `nav.tab-bar absolute; bottom:28px` 相对 0 高定位祖先 → `top:-90` 顶出视口；只有
+    `fixed top-0` 的顶栏（tab + 筛选行）幸存 → 「顶栏在、下面全空白」。系统浏览器同址正常
+    是因为独立 Chrome 的 dvh 解析正常。**修复**：面板页在页面加载后 400ms/1.5s/4s 按需注入
+    dvh→vh 等效替代样式表（覆盖 bundle 全部 dvh 规则：根容器 `.h-dvh`、`70dvh`/`calc(100dvh-3rem)`
+    高度档、`max-h-[50/65/70dvh]`、`max-md:`/`md:` 各档、`.custom-background .table-glass:before`
+    的 `100dvh/-100dvh` 对、select picker；类名转义逐字对应、`!important` 压过同特异性规则）。
+    **仅当 `.h-dvh` 实测 0 高且 `innerHeight>0` 才注入**（dvh 正常的引擎返回 `not-needed`
+    完全不干预），样式表留在 head、对 SPA 全部路由生效，幂等（`#mishka-dvh-fix`）。
+    沙箱四维对照验证（chrome-for-testing 154 headless，dvh→0px 模拟坏引擎）：
+    正常 root=915 / 模拟坏 root=0 / 模拟坏+注入 root=915(`injected`) / 正常+注入 root=915(`not-needed`)。
+    诊断探针与缓释保留：`[dvhfix]` 行回传注入结果。
+
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
 ### 三条安全边界（这也是它敢写盘的依据）

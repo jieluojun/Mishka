@@ -16682,10 +16682,10 @@ index 018c54d..c1a41cd 100644
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
 new file mode 100644
-index 0000000..1a1a452
+index 0000000..9878042
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
-@@ -0,0 +1,397 @@
+@@ -0,0 +1,452 @@
 +package top.yukonga.mishka.ui.screen.panel
 +
 +import android.annotation.SuppressLint
@@ -16763,6 +16763,8 @@ index 0000000..1a1a452
 + * 本地面板禁 WebView HTTP 缓存（[WebSettings.LOAD_NO_CACHE]，避免坏缓存副本持续复现）；
 + * 等到第一次非零布局再 [WebView.loadUrl]（Compose interop 首帧前 innerHeight 可能为 0，
 + * 虚拟列表按 0 量行且不再重算）；首帧后与高度变化时补发 resize/scroll（[nudgeResize]）。
++ * r6 探针回传定位真根因：该 WebView（Chrome 154）dvh 解析值为 0（visual-viewport 缺陷），
++ * 高度链整体塌陷——按需注入 dvh→vh 等效替代样式（[DVH_FIX_CSS] / [fixDvh]，幂等、仅坏引擎生效）。
 + */
 +@SuppressLint("SetJavaScriptEnabled")
 +@Composable
@@ -16875,6 +16877,10 @@ index 0000000..1a1a452
 +
 +                            override fun onPageFinished(view: WebView?, url: String?) {
 +                                diag.add("[page] finished $url")
++                                // dvh 解析为 0 的 WebView：按需注入 dvh→vh 替代样式（幂等）
++                                view?.postDelayed({ fixDvh(view, diag) }, 400)
++                                view?.postDelayed({ fixDvh(view, diag) }, 1500)
++                                view?.postDelayed({ fixDvh(view, diag) }, 4000)
 +                                // 首帧后补一次 resize/scroll：虚拟列表/底栏若按 0 高度挂载可借此重算
 +                                view?.postDelayed({ nudgeResize(view, diag) }, 600)
 +                                // 面板是异步渲染：首帧后虚拟列表/底栏才挂载，延迟两次取样
@@ -16996,6 +17002,55 @@ index 0000000..1a1a452
 +        view?.evaluateJavascript(
 +            "window.dispatchEvent(new Event('resize'));window.dispatchEvent(new Event('scroll'));'nudged'",
 +        ) { diag.add("[nudge] $it") }
++    }
++}
++
++/**
++ * dvh→vh 等效替代样式表：覆盖 bundle 里全部 dvh 规则（根容器 `.h-dvh`、各档 max/min-h、
++ * `.custom-background .table-glass:before` 的 100dvh/-100dvh 对、select picker）。
++ * 类名里的 `[` `]` `:` 按 CSS 转义保留，`!important` 压过 bundle 同特异性规则。
++ */
++private val DVH_FIX_CSS = """
++.h-dvh{height:100vh!important}
++.h-\[70dvh\]{height:70vh!important}
++.h-\[calc\(100dvh-3rem\)\]{height:calc(100vh - 3rem)!important}
++.max-h-\[50dvh\]{max-height:50vh!important}
++.max-h-\[65dvh\]{max-height:65vh!important}
++.max-h-\[70dvh\]{max-height:70vh!important}
++.max-md\:max-h-\[50dvh\]{max-height:50vh!important}
++.max-md\:max-h-\[85dvh\]{max-height:85vh!important}
++.max-md\:min-h-\[40dvh\]{min-height:40vh!important}
++.md\:max-h-\[90dvh\]{max-height:90vh!important}
++.custom-background .table-glass:before{height:100vh!important;margin-bottom:-100vh!important}
++:is(.select,.select select)::picker(select){max-height:min(24rem,70vh)!important}
++""".trimIndent()
++
++/**
++ * 设备实测（r6 探针回传）：Chrome 154 WebView 上 `CSS.supports('height','100dvh')` 为 true、
++ * `innerHeight` 正常，但 dvh **解析值为 0**（visual-viewport 缺陷）→ 根容器 0 高、滚动容器 0 高
++ * 裁掉全部卡片、底栏被 0 高定位祖先顶出视口，只剩 fixed 顶栏——即「顶栏在、下面全空白」。
++ * 这里按需注入 [DVH_FIX_CSS]：仅当 `.h-dvh` 实测 0 高且 innerHeight>0 时才注入（dvh 正常的
++ * 引擎不受影响），注入一次即对全站路由生效（样式表留在 head 里）。
++ */
++private val DVH_FIX_JS: String = run {
++    val css = DVH_FIX_CSS.replace("\\", "\\\\").replace("\n", "")
++    """
++    (function(){
++      if(document.getElementById('mishka-dvh-fix')) return 'already';
++      var r=document.querySelector('.h-dvh');
++      if(!r) return 'no-root';
++      if(!(r.getBoundingClientRect().height===0 && window.innerHeight>0)) return 'not-needed';
++      var s=document.createElement('style'); s.id='mishka-dvh-fix';
++      s.textContent='$css';
++      (document.head||document.documentElement).appendChild(s);
++      return 'injected';
++    })()
++    """.trimIndent()
++}
++
++private fun fixDvh(view: WebView?, diag: PanelDiagLog) {
++    runCatching {
++        view?.evaluateJavascript(DVH_FIX_JS) { diag.add("[dvhfix] $it") }
 +    }
 +}
 +

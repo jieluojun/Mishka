@@ -38,7 +38,7 @@ PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 `docs/root-mode.md`）。订阅页入口在「覆写」下方；YAML 编辑器工具栏也有表单快捷按钮，位于锚点面板按钮左侧。
 
 基线（`patches/app/BASELINE.txt`）：`upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74`，
-`patch_sha256=e6b48a65653b9aa56d3dda08f1a670fe780bf26ffa5229abf8a04a1e7ca8867b`（r5：条目 29 写穿展开导回后）。导出脚本
+`patch_sha256=580cde50619bf8f59e5341f5352fe89db65c54668f22f2ccdfa8aecd5ec4bbd2`（r6：条目 30 dvh 替代样式导回后）。导出脚本
 （`tools/export_app_patch.sh`）依次应用 4 个稳定 seed（`anchor-panel` + `visual-config-entry` +
 `home-proxy-root-fixes` + `external-panel`），再用交付目录里的最新 `custom/` 源码覆盖后导出；
 2026-10-03 这轮把测速反馈（条目 25）与外部面板 URL / HTTP 错误态（条目 27）的改动重新导回
@@ -46,7 +46,7 @@ PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 r3 轮又把面板诊断抽屉 + 布局探针 + 浏览器兜底（条目 28）导回 `external-panel.seed.patch`，
 r4 轮把三条 WebView 缓释（禁缓存 / 非零布局后加载 / resize 补发）导回同一 seed，
 r5 轮把条目 29（写穿拒写时 flow 映射展开块式）的 `custom/forms/AnchorInheritance.kt` 改动
-经 `custom/` 覆盖路径并入 0001，
+经 `custom/` 覆盖路径并入 0001，r6 轮把条目 30（dvh→vh 按需注入）导回 `external-panel.seed.patch`，
 并在已打补丁的源码树上验证 `git apply -R` / `git apply` 均通过。`scripts/apply-patches.sh` 与
 `scripts/revert-patches.sh` 此前已在干净克隆上往返验证，撤销后 `git status` 为空。
 
@@ -111,6 +111,11 @@ $ curl -s -i ':19090/ui/?hostname=127.0.0.1&port=19090&secret=' → 200, <title>
 #     设备截图 oklch 主题 tab 渲染正常 → 引擎低于下限的单一理论排除；
 #   DOM 结构：卡片区 = .proxy-group-card 绝对定位行（虚拟列表），底栏 = nav.tab-bar absolute
 #     → 差异收敛到 WebView 视口度量/虚拟列表挂载环节，面板页内嵌 PROBE_JS 探针回传这些量。
+#   r6 探针回传（设备）：chrome=154.0.0.0、ls=ok、iw/ih=411/776 正常、dvh/oklch/:has=true，
+#     但 root(.h-dvh) 计算高 0px、bodyH=0、cards=12 在 DOM 里被 0 高滚动容器裁掉、
+#     nav.tab-bar top=-90 被 0 高定位祖先顶出视口 → dvh「支持但解析为 0」= 真根因；
+#   修复验证（headless 154，CSS 里 dvh→0px 模拟坏引擎，注入与应用同一段 JS）：
+#     正常 root=915 / 坏 root=0 / 坏+注入 root=915 fix=injected / 正常+注入 root=915 fix=not-needed。
 ```
 
 历史端点同步验证：`/proxies/{name}` 的 `history` 里记录了真实 delay 值，测速成功后代理页原地刷新即可见。
