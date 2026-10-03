@@ -280,6 +280,18 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     沙箱复验：坏引擎 root 0→915 `injected-px:915`、好引擎 `not-needed`（中间环需连接态 SPA，
     以设备探针为准）。
 
+### r9：几何全对仍空白 → 纯绘制问题，切软件渲染层（2026-10-03）
+
+33. **r8 回传 + 截图：几何 100% 正确仍空白**（root/hp/rf/scroller 全 776、nav t=686 在视口内、
+    12 张卡片已排布 t=107）——布局已无任何问题，缺的是**像素**：唯独 fixed 顶栏（独立合成层）
+    渲染、普通文档层不渲染 = 该设备 WebView 的 GPU 光栅/合成缺陷。r9 三管齐下（仍仅坏引擎生效）：
+    ① 探针确认 `injected-px` 生效后把 WebView 切到 `LAYER_TYPE_SOFTWARE` 强制全量重绘
+    （此类缺陷的标准缓解；每会话一次，`[paint]` 行回传）；② 注入样式追加
+    `*{transition/animation-duration:0s!important}`（任何停在起始帧的过渡/动画直接跳终态）；
+    ③ 卡片内容/卡片/底栏/页面过渡类强制 `opacity:1!important;visibility:visible!important`
+    （覆盖「停在起始不透明度」变体）。探针新增 `ccOp/cardOp/navOp/pageOp` 四个 computed opacity：
+    若软件层仍未解决，回传能区分「不透明度卡住」与「光栅失败」。
+
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
 ### 三条安全边界（这也是它敢写盘的依据）

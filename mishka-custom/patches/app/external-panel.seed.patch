@@ -117,10 +117,10 @@ index ce37f91..83ca919 100644
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
 new file mode 100644
-index 0000000..9beacde
+index 0000000..4df739e
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
-@@ -0,0 +1,460 @@
+@@ -0,0 +1,483 @@
 +package top.yukonga.mishka.ui.screen.panel
 +
 +import android.annotation.SuppressLint
@@ -199,7 +199,11 @@ index 0000000..9beacde
 + * 等到第一次非零布局再 [WebView.loadUrl]（Compose interop 首帧前 innerHeight 可能为 0，
 + * 虚拟列表按 0 量行且不再重算）；首帧后与高度变化时补发 resize/scroll（[nudgeResize]）。
 + * r6 探针回传定位真根因：该 WebView（Chrome 154）dvh 解析值为 0（visual-viewport 缺陷），
-+ * 高度链整体塌陷——按需注入 dvh→vh 等效替代样式（[DVH_FIX_JS] / [fixDvh]，像素值 v2，幂等、仅坏引擎生效）。
++ * 高度链整体塌陷——按需注入像素值等效替代样式（[DVH_FIX_JS] / [fixDvh]，幂等、仅坏引擎生效）。
++ * r8 回传：几何全链修好（root/hp/rf/scroller=776、nav 在视口内、cards 已排布）但**仍空白** →
++ * 纯绘制问题（fixed 顶栏属独立合成层、唯独它渲染）。r9：坏引擎确认后切 [View.LAYER_TYPE_SOFTWARE]
++ * 强制全量重绘（GPU 光栅/合成缺陷的标准缓解）；注入样式同时清零 transition/animation 时长并强制
++ * 卡片/底栏 opacity:1（覆盖「停在起始不透明度」变体）；探针加 ccOp/cardOp/navOp/pageOp 兜底判别。
 + */
 +@SuppressLint("SetJavaScriptEnabled")
 +@Composable
@@ -468,7 +472,9 @@ index 0000000..9beacde
 +    +'.max-md\\:max-h-\\[85dvh\\]{max-height:'+Math.round(h*0.85)+'px!important}'
 +    +'.max-md\\:min-h-\\[40dvh\\]{min-height:'+Math.round(h*0.4)+'px!important}'
 +    +'.md\\:max-h-\\[90dvh\\]{max-height:'+Math.round(h*0.9)+'px!important}'
-+    +'.custom-background .table-glass:before{height:'+q+'!important;margin-bottom:-'+q+'!important}';}
++    +'.custom-background .table-glass:before{height:'+q+'!important;margin-bottom:-'+q+'!important}'
++    +' *{transition-duration:0s!important;transition-delay:0s!important;animation-duration:0s!important;animation-delay:0s!important}'
++    +'.proxy-group-card-content,.proxy-group-card,.tab-bar,.tab-bar-item,.tab-bar-label,.tab-bar-icon,.page-enter-from,.page-enter-active,.page-leave-to{opacity:1!important;visibility:visible!important}';}
 +  var SEL=['.h-dvh','.h-dvh>.flex.w-screen','.home-page','.home-page>.relative.flex-1','.h-dvh .flex-col.h-full.overflow-y-auto'];
 +  function apply(h){
 +    var s=document.getElementById('mishka-dvh-fix');
@@ -487,7 +493,19 @@ index 0000000..9beacde
 +
 +private fun fixDvh(view: WebView?, diag: PanelDiagLog) {
 +    runCatching {
-+        view?.evaluateJavascript(DVH_FIX_JS) { diag.add("[dvhfix] $it") }
++        view?.evaluateJavascript(DVH_FIX_JS) { res ->
++            diag.add("[dvhfix] $res")
++            // r9：设备实证「几何全对但普通文档层不绘制」（fixed 顶栏属独立合成层、唯独它渲染）——
++            // 该类 GPU 光栅/合成缺陷的标准缓解是换渲染管线。确认坏视口引擎且几何修复生效后，
++            // 把 WebView 切到软件渲染层强制全量重绘（每会话一次，[paint] 行回传）。
++            if (res.contains("injected-px") && !diag.swLayerApplied) {
++                diag.swLayerApplied = true
++                view.post {
++                    view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
++                    diag.add("[paint] LAYER_TYPE_SOFTWARE (broken-viewport engine)")
++                }
++            }
++        }
 +    }
 +}
 +
@@ -516,6 +534,7 @@ index 0000000..9beacde
 +  var m=(navigator.userAgent.match(/Chrome\/([0-9.]+)/)||[])[1]||'?';
 +  var t=document.createElement('div');t.style.cssText='position:absolute;visibility:hidden;height:100vh';
 +  document.body.appendChild(t);var vhPx=t.offsetHeight;t.style.height='100dvh';var dvhPx=t.offsetHeight;t.remove();
++  function op(e){return e?getComputedStyle(e).opacity:null}
 +  var fs=r('#mishka-dvh-fix');
 +  var w1=r('.h-dvh>.flex.w-screen'), hp=r('.home-page'), rf=r('.home-page>.relative.flex-1');
 +  return JSON.stringify({
@@ -526,6 +545,8 @@ index 0000000..9beacde
 +    scroller:rect(scroller), scrollerCssH:scroller?getComputedStyle(scroller).height:null,
 +    cards:cards.length, card0:rect(cards[0]), card0Top:cards[0]?cards[0].style.top:null,
 +    nav:rect(nav), navPos:nav?getComputedStyle(nav).position:null, navBottom:nav?getComputedStyle(nav).bottom:null,
++    ccOp:op(r('.proxy-group-card-content')), cardOp:op(r('.proxy-group-card')), navOp:op(r('.tab-bar')),
++    pageOp:op(r('.page-enter-from,.page-enter-active')),
 +    dvh:CSS.supports('height','100dvh'), oklch:CSS.supports('color','oklch(0.5 0.1 100)'),
 +    has:CSS.supports('selector(:has(*))'), bodyH:document.body.clientHeight
 +  })
@@ -536,6 +557,8 @@ index 0000000..9beacde
 +class PanelDiagLog {
 +    private val buf = ArrayDeque<String>(CAP)
 +    private val lock = Any()
++    /** 本会话是否已切软件渲染层（只切一次）。 */
++    var swLayerApplied = false
 +
 +    fun add(line: String) {
 +        synchronized(lock) {
