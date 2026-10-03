@@ -332,6 +332,12 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     但面板 URL 的真实控制器地址在 **query**（`?host=…&port=…&secret=…`，
     zashboard.pages.dev 只是 SPA 载体）。改为 `Uri.getQueryParameter("host"/"port")`
     还原，顶栏恢复 BoxProxy 式 `127.0.0.1:9090 | 代理`（端口 fallback 后同样如实显示）。
+37. **r11 的 CI 构建错误修复**（`compileReleaseKotlin` ARGUMENT_TYPE_MISMATCH，
+    `ExternalPanelActivity.kt:204`）：`onDestroy` 里 `runCatching { … }` lambda 内直接使用
+    可空成员属性 `backInvokedCallback`——Kotlin 的可空 smart cast **不跨 lambda 边界**，
+    实参类型仍是 `OnBackInvokedCallback?`。改为局部 `val cb = backInvokedCallback` 承接后
+    判空传入（注册点同写法加固）。沙箱用 kotlinc 2.1.21 + android.window 桩复现了旧写法的
+    同款报错、并验证新写法编译通过且运行正常。
 
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 

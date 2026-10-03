@@ -165,10 +165,10 @@ index ce37f91..83ca919 100644
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt
 new file mode 100644
-index 0000000..6eb29ae
+index 0000000..f3a6176
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt
-@@ -0,0 +1,366 @@
+@@ -0,0 +1,369 @@
 +package top.yukonga.mishka.ui.screen.panel
 +
 +import android.app.Activity
@@ -233,10 +233,11 @@ index 0000000..6eb29ae
 +        super.onCreate(savedInstanceState)
 +        setContentView(R.layout.activity_external_panel)
 +        web = findViewById(R.id.panel_web)
-+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
++        val cb = backInvokedCallback
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && cb != null) {
 +            onBackInvokedDispatcher.registerOnBackInvokedCallback(
 +                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
-+                backInvokedCallback,
++                cb,
 +            )
 +        }
 +        titleView = findViewById(R.id.panel_title)
@@ -371,8 +372,10 @@ index 0000000..6eb29ae
 +    }
 +
 +    override fun onDestroy() {
-+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
-+            runCatching { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backInvokedCallback) }
++        // 局部 val 承接：成员属性的可空 smart cast 不跨 lambda 边界（CI 编译错误 204:83）
++        val cb = backInvokedCallback
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && cb != null) {
++            runCatching { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(cb) }
 +        }
 +        super.onDestroy()
 +    }

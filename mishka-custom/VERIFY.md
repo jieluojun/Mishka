@@ -39,7 +39,7 @@ ExternalPanelActivity.kt`；5 个 XML：`activity_external_panel.xml` 布局与 
 4 份 `strings.xml` 与 `docs/root-mode.md`）。订阅页入口在「覆写」下方；YAML 编辑器工具栏也有表单快捷按钮，位于锚点面板按钮左侧。
 
 基线（`patches/app/BASELINE.txt`）：`upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74`，
-`patch_sha256=2af823a455713da8d36cbb30d687bd602dec5ba95d537ef904e74267c7275a91`（r10 二轮：条目 35 端口冲突自愈 + 条目 36 顶栏标题 query 解析导回后）。导出脚本
+`patch_sha256=ba92935cedf0ceafdc506e2c013e27b2fe25a3eddaea51a03416fdd2c44a97f0`（r11 构建修复：条目 37 可空 smart cast 编译错误导回后）。导出脚本
 （`tools/export_app_patch.sh`）依次应用 4 个稳定 seed（`anchor-panel` + `visual-config-entry` +
 `home-proxy-root-fixes` + `external-panel`），再用交付目录里的最新 `custom/` 源码覆盖后导出；
 2026-10-03 这轮把测速反馈（条目 25）与外部面板 URL / HTTP 错误态（条目 27）的改动重新导回
