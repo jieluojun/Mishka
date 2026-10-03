@@ -252,11 +252,97 @@ proxy-providers:
     expect(items("none") == (emptyList<String>() to true), "absent override-expr is empty")
 }
 
+/**
+ * 序列项 / 映射条目头上带 `&锚点` 的解析与写入（用户报告的「改锚点参数 → 全量覆盖且锚点没变」回归）：
+ * `- &tpl { … }` 必须按 flow 映射原地改，`- &tpl`（块式）必须解析成映射并可编辑，锚点前缀逐字保留。
+ */
+private fun testSeqItemAnchors() {
+    // C：锚点 + 单行 flow 映射的序列项
+    run {
+        val src = """
+proxy-groups:
+  - &tpl { name: 模板, type: select, proxies: [A, B] }
+  - { <<: *tpl, name: 分组1 }
+"""
+        val doc = YamlDoc.parse(src)
+        expect(doc.get(listOf("proxy-groups", 0, "type"))?.let { FormValues.scalarText(doc, it) } == "select",
+            "anchored flow seq item parsed as flow map")
+        expect(doc.canSet(listOf("proxy-groups", 0, "type")), "anchored flow seq item editable")
+        val out = YamlPatch.setValue(doc, listOf("proxy-groups", 0, "type"), "url-test").lines.joinToString("\n")
+        expect(out.contains("- &tpl { name: 模板, type: url-test, proxies: [A, B] }"),
+            "anchored flow seq item edited in place, anchor & flow kept: $out")
+        expect(!out.contains("    type: url-test"), "no block line appended below flow seq item")
+        expect(out.contains("- { <<: *tpl, name: 分组1 }"), "sibling item untouched")
+        // 新增键：追加进 flow 而不是追加块行
+        val added = YamlPatch.setValue(doc, listOf("proxy-groups", 0, "interval"), 300).lines.joinToString("\n")
+        expect(added.contains("interval: 300 }") || added.contains("interval: 300}"),
+            "new key appended inside flow braces: $added")
+        // 删键：走 flowRemove，行仍然合法
+        val removed = YamlPatch.removeKey(doc, listOf("proxy-groups", 0, "type")).lines.joinToString("\n")
+        expect(removed.contains("- &tpl { name: 模板, proxies: [A, B] }"), "flow key removed in place: $removed")
+        // 继承读取不受影响
+        val after = YamlDoc.parse(out)
+        expect(FormValues.effectiveText(after, listOf("proxy-groups", 1, "type")) == "url-test",
+            "<<: *tpl inheritance reads edited anchor value")
+    }
+    // D：锚点独占 dash 行、内容在缩进块里的序列项
+    run {
+        val src = """
+proxy-groups:
+  - &tpl
+    name: 模板
+    type: select
+  - <<: *tpl
+    name: 分组1
+"""
+        val doc = YamlDoc.parse(src)
+        expect(doc.get(listOf("proxy-groups", 0))?.kind == YamlNode.Kind.MAP,
+            "anchored block seq item parsed as map")
+        expect(FormValues.readRaw(doc, listOf("proxy-groups", 0, "type")) == "select",
+            "anchored block seq item fields readable")
+        expect(doc.canSet(listOf("proxy-groups", 0, "type")), "anchored block seq item editable")
+        val out = YamlPatch.setValue(doc, listOf("proxy-groups", 0, "type"), "url-test").lines.joinToString("\n")
+        expect(out.contains("- &tpl\n    name: 模板\n    type: url-test"), "block edit keeps dash-line anchor: $out")
+        expect(out.contains("<<: *tpl"), "merge sibling untouched")
+        expect(FormValues.effectiveText(YamlDoc.parse(out), listOf("proxy-groups", 1, "type")) == "url-test",
+            "<<: *tpl reads edited block anchor value")
+    }
+    // A：锚点在映射条目头上的 flow 值（原地改，行前缀保留）
+    run {
+        val src = """
+proxy-providers:
+  模板: &providers { interval: 3600, proxy: 订阅更新 }
+  订阅A: { <<: *providers, url: "https://a" }
+"""
+        val doc = YamlDoc.parse(src)
+        val out = YamlPatch.setValue(doc, listOf("proxy-providers", "模板", "interval"), 1800).lines.joinToString("\n")
+        expect(out.contains("模板: &providers { interval: 1800, proxy: 订阅更新 }"),
+            "map-entry flow anchor edited in place: $out")
+        expect(out.contains("订阅A: { <<: *providers, url: \"https://a\" }"), "sibling entry untouched")
+    }
+    // 带标签 / 别名的序列项不被误判
+    run {
+        val doc = YamlDoc.parse("list:\n  - !!str x\n  - *ref\n  - &a scalar\n")
+        expect(doc.get(listOf("list"))?.items?.size == 3, "tag/alias/scalar seq items still parse")
+    }
+    // dash 行锚点 + 内联映射首键：`- &tpl name: x`（后续键与首键同列）
+    run {
+        val doc = YamlDoc.parse("g:\n  - &tpl name: 模板\n         type: select\n  - <<: *tpl\n    name: B\n")
+        expect(doc.get(listOf("g", 0))?.kind == YamlNode.Kind.MAP, "dash-anchor inline map parsed")
+        expect(FormValues.readRaw(doc, listOf("g", 0, "name")) == "模板", "dash-anchor inline first key readable")
+        expect(FormValues.readRaw(doc, listOf("g", 0, "type")) == "select", "dash-anchor continuation key readable")
+        val out = YamlPatch.setValue(doc, listOf("g", 0, "type"), "url-test").lines.joinToString("\n")
+        expect(out.contains("- &tpl name: 模板"), "dash line with anchor kept: $out")
+        expect(out.contains("type: url-test"), "inline anchored entry edited")
+    }
+}
+
 fun main() {
     testEbpfRoleStateAndWrites()
     testFakeIpIcmpPrerequisites()
     testFormValueReaders()
     testExprItemsInheritance()
+    testSeqItemAnchors()
     testMapListRenameAndSwap()
-    println("eBPF role, FormValues reader, expr inheritance, and MAPLIST rename/swap tests passed")
+    println("eBPF role, FormValues reader, expr inheritance, seq-item anchors, and MAPLIST rename/swap tests passed")
 }

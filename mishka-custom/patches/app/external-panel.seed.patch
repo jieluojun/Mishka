@@ -1,0 +1,333 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+index 2341aa9..b915f33 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+@@ -67,6 +67,7 @@ import kotlinx.serialization.json.Json
+ import top.yukonga.mishka.DeepLinkImportRequest
+ import top.yukonga.mishka.R
+ import top.yukonga.mishka.platform.BootStartManager
++import top.yukonga.mishka.platform.ProxyServiceBridge
+ import top.yukonga.mishka.platform.FilePicker
+ import top.yukonga.mishka.platform.PlatformStorage
+ import top.yukonga.mishka.platform.StorageKeys
+@@ -84,6 +85,8 @@ import top.yukonga.mishka.ui.screen.settings.AboutScreen
+ import top.yukonga.mishka.ui.screen.settings.AppProxyScreen
+ import top.yukonga.mishka.ui.screen.settings.BackupRestoreScreen
+ import top.yukonga.mishka.ui.screen.settings.ExternalControlScreen
++import top.yukonga.mishka.ui.screen.panel.ExternalPanelScreen
++import top.yukonga.mishka.ui.screen.panel.externalPanelUrl
+ import top.yukonga.mishka.ui.screen.settings.FileManagerEditorScreen
+ import top.yukonga.mishka.ui.screen.settings.FileManagerScreen
+ import top.yukonga.mishka.ui.screen.settings.MetaSettingsScreen
+@@ -484,6 +487,12 @@ fun AppNavigation(
+                     )
+                 }
+             }
++            entry<Route.ExternalPanel>(swipeDismiss = swipeDismiss) { route ->
++                ExternalPanelScreen(
++                    url = route.url,
++                    onBack = { navigator.pop() },
++                )
++            }
+             entry<Route.BackupRestore>(swipeDismiss = swipeDismiss) {
+                 if (backupViewModel != null && storage != null) {
+                     BackupRestoreScreen(
+@@ -582,6 +591,13 @@ private fun MainPage(
+                     onNavigateProvider = { navigator.push(Route.Provider) },
+                     onNavigateConnection = { navigator.push(Route.Connection) },
+                     onNavigateDnsQuery = { navigator.push(Route.DnsQuery) },
++                    onOpenPanel = {
++                        navigator.push(
++                            Route.ExternalPanel(
++                                externalPanelUrl(ProxyServiceBridge.state.value.externalController)
++                            )
++                        )
++                    },
+                     onStartProxy = { homeViewModel?.startProxy() },
+                     onSwitchMode = { homeViewModel?.switchMode(it) },
+                     onSwitchTunStack = { homeViewModel?.switchTunStack(it) },
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
+index bdb96f7..95b65b1 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
+@@ -49,6 +49,9 @@ sealed interface Route : NavKey {
+     @Serializable
+     data object ExternalControl : Route
+ 
++    @Serializable
++    data class ExternalPanel(val url: String) : Route
++
+     @Serializable
+     data object FileManager : Route
+ 
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
+index f3a7a58..92fdd02 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
+@@ -50,6 +50,7 @@ fun HomeScreen(
+     onNavigateProvider: () -> Unit = {},
+     onNavigateConnection: () -> Unit = {},
+     onNavigateDnsQuery: () -> Unit = {},
++    onOpenPanel: () -> Unit = {},
+     onStartProxy: () -> Unit = {},
+     onSwitchMode: (String) -> Unit = {},
+     onSwitchTunStack: (String) -> Unit = {},
+@@ -148,6 +149,7 @@ fun HomeScreen(
+                     onNavigateProvider = onNavigateProvider,
+                     onNavigateConnection = onNavigateConnection,
+                     onNavigateDnsQuery = onNavigateDnsQuery,
++                    onOpenPanel = onOpenPanel,
+                 )
+             }
+         }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
+index ce37f91..83ca919 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
+@@ -26,6 +26,7 @@ fun LazyListScope.quickEntriesSection(
+     onNavigateProvider: () -> Unit = {},
+     onNavigateConnection: () -> Unit = {},
+     onNavigateDnsQuery: () -> Unit = {},
++    onOpenPanel: () -> Unit = {},
+ ) {
+     item(key = "quick_entries_title") {
+         SmallTitle(text = stringResource(R.string.home_tools))
+@@ -75,6 +76,19 @@ fun LazyListScope.quickEntriesSection(
+                     onClick = onNavigateDnsQuery,
+                 )
+             }
++            // 外部面板：整行一张卡，打开内核 external-ui 的网页控制台
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                horizontalArrangement = Arrangement.spacedBy(12.dp),
++            ) {
++                QuickEntryCard(
++                    modifier = Modifier.weight(1f),
++                    title = stringResource(R.string.home_external_panel),
++                    subtitle = stringResource(R.string.home_external_panel_subtitle),
++                    isRunning = isRunning,
++                    onClick = onOpenPanel,
++                )
++            }
+         }
+     }
+ }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
+new file mode 100644
+index 0000000..d81eee0
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
+@@ -0,0 +1,157 @@
++package top.yukonga.mishka.ui.screen.panel
++
++import android.annotation.SuppressLint
++import android.webkit.WebResourceError
++import android.webkit.WebResourceRequest
++import android.webkit.WebView
++import android.webkit.WebViewClient
++import androidx.activity.compose.BackHandler
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.padding
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.graphicsLayer
++import androidx.compose.ui.platform.LocalLayoutDirection
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.unit.LayoutDirection
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.compose.ui.viewinterop.AndroidView
++import top.yukonga.mishka.R
++import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
++import top.yukonga.mishka.ui.component.blur.BlurredBar
++import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
++import top.yukonga.miuix.kmp.basic.Icon
++import top.yukonga.miuix.kmp.basic.IconButton
++import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
++import top.yukonga.miuix.kmp.basic.Scaffold
++import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Back
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++
++/**
++ * 外部面板：应用内 WebView 打开内核 `external-ui` 提供的网页控制台（zashboard 等）。
++ *
++ * 地址由 [externalPanelUrl] 从运行态的 external-controller 推导（`/ui` 是 mihomo
++ * `external-ui-name` 的缺省挂载路径）。内核没在跑、或配置里没有 external-ui 时加载会失败，
++ * 页面中央给一句可操作的提示而不是白屏。
++ */
++@SuppressLint("SetJavaScriptEnabled")
++@Composable
++fun ExternalPanelScreen(
++    url: String,
++    onBack: () -> Unit = {},
++) {
++    val scrollBehavior = MiuixScrollBehavior()
++    val backdrop = rememberBlurBackdrop()
++    val blurActive = backdrop != null
++    val barColor = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
++
++    var webView by remember { mutableStateOf<WebView?>(null) }
++    // 系统返回优先在面板里回退历史，退无可退才离开页面
++    BackHandler {
++        val current = webView
++        if (current?.canGoBack() == true) current.goBack() else onBack()
++    }
++
++    var failed by remember(url) { mutableStateOf(false) }
++
++    Scaffold(
++        topBar = {
++            BlurredBar(backdrop = backdrop, blurActive = blurActive) {
++                AdaptiveTopAppBar(
++                    title = stringResource(R.string.home_external_panel),
++                    color = barColor,
++                    scrollBehavior = scrollBehavior,
++                    navigationIcon = {
++                        IconButton(onClick = onBack) {
++                            val layoutDirection = LocalLayoutDirection.current
++                            Icon(
++                                imageVector = MiuixIcons.Back,
++                                contentDescription = stringResource(R.string.common_back),
++                                tint = MiuixTheme.colorScheme.onSurface,
++                                modifier = Modifier.graphicsLayer {
++                                    scaleX = if (layoutDirection == LayoutDirection.Rtl) -1f else 1f
++                                },
++                            )
++                        }
++                    },
++                )
++            }
++        },
++    ) { innerPadding ->
++        Box(
++            modifier = Modifier
++                .fillMaxSize()
++                .padding(top = innerPadding.calculateTopPadding()),
++        ) {
++            AndroidView(
++                factory = { context ->
++                    WebView(context).apply {
++                        // 面板是 SPA：JS 与 localStorage 都是硬需求
++                        settings.javaScriptEnabled = true
++                        settings.domStorageEnabled = true
++                        webViewClient = object : WebViewClient() {
++                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
++                                failed = false
++                            }
++
++                            override fun onReceivedError(
++                                view: WebView?,
++                                request: WebResourceRequest?,
++                                error: WebResourceError?,
++                            ) {
++                                // 只关心主文档：SPA 里个别子资源 404 不该把整页标成失败
++                                if (request?.isForMainFrame == true) failed = true
++                            }
++                        }
++                        loadUrl(url)
++                        webView = this
++                    }
++                },
++                onRelease = { view ->
++                    webView = null
++                    view.destroy()
++                },
++                modifier = Modifier.fillMaxSize(),
++            )
++            if (failed) {
++                Text(
++                    text = stringResource(R.string.external_panel_load_failed),
++                    fontSize = 13.sp,
++                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                    modifier = Modifier
++                        .align(Alignment.Center)
++                        .padding(horizontal = 32.dp),
++                )
++            }
++        }
++    }
++}
++
++/**
++ * 运行中的 external-controller → 面板地址。`0.0.0.0` / `*` / `::` 是监听通配地址、不可连接，
++ * 换成本机回环；缺省端口按 mihomo 惯例不补（配置里 host:port 一体）。
++ */
++fun externalPanelUrl(externalController: String): String {
++    val raw = externalController.trim()
++        .removePrefix("http://")
++        .removePrefix("https://")
++        .substringBefore('/')
++    val host = raw.substringBeforeLast(':').ifEmpty { "127.0.0.1" }
++    val port = raw.substringAfterLast(':', "")
++    val reachableHost = if (host == "0.0.0.0" || host == "*" || host == "::" || host == "[::]") {
++        "127.0.0.1"
++    } else {
++        host
++    }
++    return if (port.isEmpty()) "http://$reachableHost/ui" else "http://$reachableHost:$port/ui"
++}
+diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
+index 78fcd87..82cec12 100644
+--- a/app/src/main/res/values-ru/strings.xml
++++ b/app/src/main/res/values-ru/strings.xml
+@@ -128,6 +128,9 @@
+     <string name="home_logs_subtitle">Просмотр</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">Запрос</string>
++    <string name="home_external_panel">Внешняя панель</string>
++    <string name="home_external_panel_subtitle">Веб-панель</string>
++    <string name="external_panel_load_failed">Не удалось загрузить панель. Убедитесь, что прокси запущен и в профиле включён external-ui.</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">Задержка</string>
+diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
+index cba1bbb..f1dd89d 100644
+--- a/app/src/main/res/values-zh-rCN/strings.xml
++++ b/app/src/main/res/values-zh-rCN/strings.xml
+@@ -126,6 +126,9 @@
+     <string name="home_logs_subtitle">查看</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">查询</string>
++    <string name="home_external_panel">外部面板</string>
++    <string name="home_external_panel_subtitle">网页控制台</string>
++    <string name="external_panel_load_failed">面板加载失败：请确认代理已启动，且配置里启用了 external-ui。</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">延迟</string>
+diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
+index f6895e0..1afdbc4 100644
+--- a/app/src/main/res/values-zh-rTW/strings.xml
++++ b/app/src/main/res/values-zh-rTW/strings.xml
+@@ -126,6 +126,9 @@
+     <string name="home_logs_subtitle">檢視</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">查詢</string>
++    <string name="home_external_panel">外部面板</string>
++    <string name="home_external_panel_subtitle">網頁控制台</string>
++    <string name="external_panel_load_failed">面板載入失敗：請確認代理已啟動，且設定中啟用了 external-ui。</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">延遲</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index d1acc59..197b9ac 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -128,6 +128,9 @@
+     <string name="home_logs_subtitle">View</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">Query</string>
++    <string name="home_external_panel">External Panel</string>
++    <string name="home_external_panel_subtitle">Web dashboard</string>
++    <string name="external_panel_load_failed">Couldn\'t load the panel. Make sure the proxy is running and external-ui is configured in your profile.</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">Latency</string>

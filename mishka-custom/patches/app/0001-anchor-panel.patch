@@ -14854,10 +14854,10 @@ index 0000000..1796296
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 new file mode 100644
-index 0000000..82ef7c9
+index 0000000..8e92a0f
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
-@@ -0,0 +1,1124 @@
+@@ -0,0 +1,1164 @@
 +package top.yukonga.mishka.custom.forms
 +
 +// 配置表单用的 YAML 引擎（Kotlin 侧实现）。
@@ -15348,13 +15348,53 @@ index 0000000..82ef7c9
 +            return empty to (at + 1)
 +        }
 +        val body = rest.trim()
-+        // 内联映射：- key: value（flow 集合 `- {…}` / `- […]` 与多行标量不算）
-+        val mKey = if (body.isNotEmpty() && "{[|>".indexOf(body[0]) >= 0) null else KEY_RE.find(body)
++        // `&锚点` / `!!标签` 前缀属于项节点，不是首键的一部分：先跳过前缀再判断形态。
++        // 不跳过的话 `- &tpl { … }` 会被 KEY_RE 匹出垃圾键（`&tpl { name`），写键时落到 flow 行
++        // 下面追加块行、把 YAML 写坏（锚点里的参数「没有变」，追加的重复键反而全量覆盖原值）；
++        // `- &tpl`（块式项）则会被当成空标量，下面缩进的整块内容全部丢失。
++        var probe = body
++        var probeCol = contentCol
++        var itemAnchor: String? = null
++        while (probe.isNotEmpty()) {
++            val am = ANCHOR_RE.find(probe)
++            val tm = TAG_RE.find(probe)
++            when {
++                am != null -> {
++                    if (itemAnchor == null) itemAnchor = am.groupValues[1]
++                    probeCol += am.groupValues[0].length - am.groupValues[2].length
++                    probe = am.groupValues[2].trimStart()
++                }
++
++                tm != null -> {
++                    probeCol += tm.groupValues[0].length - tm.groupValues[1].length
++                    probe = tm.groupValues[1].trimStart()
++                }
++
++                else -> break
++            }
++        }
++        if (probe.isEmpty()) {
++            // 只剩前缀（`- &tpl`）：项内容在后续更深缩进的行上；没有就是只带锚点的空项
++            var nxt = at + 1
++            while (nxt < lines.size && isBlankOrComment(lines[nxt])) nxt++
++            if (nxt < lines.size && indentOf(lines[nxt]) > indent) {
++                val (inner, after) = parseBlock(nxt, indentOf(lines[nxt]))
++                inner.dash = at
++                inner.anchor = inner.anchor ?: itemAnchor
++                return inner to after
++            }
++            val empty = YamlNode(YamlNode.Kind.SCALAR, at, at + 1, indent = indent,
++                valueStart = line.length, valueEnd = line.length, anchor = itemAnchor)
++            empty.dash = at
++            return empty to (at + 1)
++        }
++        // 内联映射：- key: value（flow 集合 `- {…}` / `- […]` 与多行标量不算；按跳过前缀后的形态判断）
++        val mKey = if ("{[|>".indexOf(probe[0]) >= 0) null else KEY_RE.find(probe)
 +        if (mKey != null) {
-+            val subIndent = contentCol
-+            val node = YamlNode(YamlNode.Kind.MAP, at, at + 1, indent = subIndent)
++            val subIndent = probeCol
++            val node = YamlNode(YamlNode.Kind.MAP, at, at + 1, indent = subIndent, anchor = itemAnchor)
 +            node.dash = at
-+            val (entry, after) = parseMapEntry(at, subIndent, contentCol)
++            val (entry, after) = parseMapEntry(at, subIndent, probeCol)
 +            node.entries.add(entry)
 +            node.end = after          // 首键的值可能是多行块，项的结束行必须跟着走
 +            var j = after
@@ -16145,10 +16185,27 @@ index b57d687..e23f0f7 100644
          }
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 2341aa9..334bcdc 100644
+index 2341aa9..3eb8d62 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-@@ -335,6 +335,9 @@ fun AppNavigation(
+@@ -67,6 +67,7 @@ import kotlinx.serialization.json.Json
+ import top.yukonga.mishka.DeepLinkImportRequest
+ import top.yukonga.mishka.R
+ import top.yukonga.mishka.platform.BootStartManager
++import top.yukonga.mishka.platform.ProxyServiceBridge
+ import top.yukonga.mishka.platform.FilePicker
+ import top.yukonga.mishka.platform.PlatformStorage
+ import top.yukonga.mishka.platform.StorageKeys
+@@ -84,6 +85,8 @@ import top.yukonga.mishka.ui.screen.settings.AboutScreen
+ import top.yukonga.mishka.ui.screen.settings.AppProxyScreen
+ import top.yukonga.mishka.ui.screen.settings.BackupRestoreScreen
+ import top.yukonga.mishka.ui.screen.settings.ExternalControlScreen
++import top.yukonga.mishka.ui.screen.panel.ExternalPanelScreen
++import top.yukonga.mishka.ui.screen.panel.externalPanelUrl
+ import top.yukonga.mishka.ui.screen.settings.FileManagerEditorScreen
+ import top.yukonga.mishka.ui.screen.settings.FileManagerScreen
+ import top.yukonga.mishka.ui.screen.settings.MetaSettingsScreen
+@@ -335,6 +338,9 @@ fun AppNavigation(
                          onBack = { navigator.pop() },
                          onSaved = { navigator.pop() },
                          onNavigateOverrides = { navigator.push(Route.SubscriptionOverrides(route.uuid)) },
@@ -16158,7 +16215,20 @@ index 2341aa9..334bcdc 100644
                      )
                  }
              }
-@@ -509,6 +512,7 @@ fun AppNavigation(
+@@ -484,6 +490,12 @@ fun AppNavigation(
+                     )
+                 }
+             }
++            entry<Route.ExternalPanel>(swipeDismiss = swipeDismiss) { route ->
++                ExternalPanelScreen(
++                    url = route.url,
++                    onBack = { navigator.pop() },
++                )
++            }
+             entry<Route.BackupRestore>(swipeDismiss = swipeDismiss) {
+                 if (backupViewModel != null && storage != null) {
+                     BackupRestoreScreen(
+@@ -509,6 +521,7 @@ fun AppNavigation(
                      uuid = route.uuid,
                      relativePath = route.relativePath,
                      subscriptionViewModel = subscriptionViewModel,
@@ -16166,11 +16236,35 @@ index 2341aa9..334bcdc 100644
                      onBack = { navigator.pop() },
                  )
              }
+@@ -582,6 +595,13 @@ private fun MainPage(
+                     onNavigateProvider = { navigator.push(Route.Provider) },
+                     onNavigateConnection = { navigator.push(Route.Connection) },
+                     onNavigateDnsQuery = { navigator.push(Route.DnsQuery) },
++                    onOpenPanel = {
++                        navigator.push(
++                            Route.ExternalPanel(
++                                externalPanelUrl(ProxyServiceBridge.state.value.externalController)
++                            )
++                        )
++                    },
+                     onStartProxy = { homeViewModel?.startProxy() },
+                     onSwitchMode = { homeViewModel?.switchMode(it) },
+                     onSwitchTunStack = { homeViewModel?.switchTunStack(it) },
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
-index bdb96f7..c5f8970 100644
+index bdb96f7..1d8ee7f 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
-@@ -56,7 +56,11 @@ sealed interface Route : NavKey {
+@@ -49,6 +49,9 @@ sealed interface Route : NavKey {
+     @Serializable
+     data object ExternalControl : Route
+ 
++    @Serializable
++    data class ExternalPanel(val url: String) : Route
++
+     @Serializable
+     data object FileManager : Route
+ 
+@@ -56,7 +59,11 @@ sealed interface Route : NavKey {
      data object BackupRestore : Route
  
      @Serializable
@@ -16183,6 +16277,58 @@ index bdb96f7..c5f8970 100644
  
      @Serializable
      data object AppProxy : Route
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
+index f3a7a58..92fdd02 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
+@@ -50,6 +50,7 @@ fun HomeScreen(
+     onNavigateProvider: () -> Unit = {},
+     onNavigateConnection: () -> Unit = {},
+     onNavigateDnsQuery: () -> Unit = {},
++    onOpenPanel: () -> Unit = {},
+     onStartProxy: () -> Unit = {},
+     onSwitchMode: (String) -> Unit = {},
+     onSwitchTunStack: (String) -> Unit = {},
+@@ -148,6 +149,7 @@ fun HomeScreen(
+                     onNavigateProvider = onNavigateProvider,
+                     onNavigateConnection = onNavigateConnection,
+                     onNavigateDnsQuery = onNavigateDnsQuery,
++                    onOpenPanel = onOpenPanel,
+                 )
+             }
+         }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
+index ce37f91..83ca919 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
+@@ -26,6 +26,7 @@ fun LazyListScope.quickEntriesSection(
+     onNavigateProvider: () -> Unit = {},
+     onNavigateConnection: () -> Unit = {},
+     onNavigateDnsQuery: () -> Unit = {},
++    onOpenPanel: () -> Unit = {},
+ ) {
+     item(key = "quick_entries_title") {
+         SmallTitle(text = stringResource(R.string.home_tools))
+@@ -75,6 +76,19 @@ fun LazyListScope.quickEntriesSection(
+                     onClick = onNavigateDnsQuery,
+                 )
+             }
++            // 外部面板：整行一张卡，打开内核 external-ui 的网页控制台
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                horizontalArrangement = Arrangement.spacedBy(12.dp),
++            ) {
++                QuickEntryCard(
++                    modifier = Modifier.weight(1f),
++                    title = stringResource(R.string.home_external_panel),
++                    subtitle = stringResource(R.string.home_external_panel_subtitle),
++                    isRunning = isRunning,
++                    onClick = onOpenPanel,
++                )
++            }
+         }
+     }
+ }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
 index 018c54d..c1a41cd 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
@@ -16235,6 +16381,169 @@ index 018c54d..c1a41cd 100644
  
  private val TUN_STACK_OPTIONS = listOf("mixed" to "Mixed", "gvisor" to "gVisor", "system" to "System", "mips" to "MIPS")
  
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
+new file mode 100644
+index 0000000..d81eee0
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
+@@ -0,0 +1,157 @@
++package top.yukonga.mishka.ui.screen.panel
++
++import android.annotation.SuppressLint
++import android.webkit.WebResourceError
++import android.webkit.WebResourceRequest
++import android.webkit.WebView
++import android.webkit.WebViewClient
++import androidx.activity.compose.BackHandler
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.padding
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.graphicsLayer
++import androidx.compose.ui.platform.LocalLayoutDirection
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.unit.LayoutDirection
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import androidx.compose.ui.viewinterop.AndroidView
++import top.yukonga.mishka.R
++import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
++import top.yukonga.mishka.ui.component.blur.BlurredBar
++import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
++import top.yukonga.miuix.kmp.basic.Icon
++import top.yukonga.miuix.kmp.basic.IconButton
++import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
++import top.yukonga.miuix.kmp.basic.Scaffold
++import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Back
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++
++/**
++ * 外部面板：应用内 WebView 打开内核 `external-ui` 提供的网页控制台（zashboard 等）。
++ *
++ * 地址由 [externalPanelUrl] 从运行态的 external-controller 推导（`/ui` 是 mihomo
++ * `external-ui-name` 的缺省挂载路径）。内核没在跑、或配置里没有 external-ui 时加载会失败，
++ * 页面中央给一句可操作的提示而不是白屏。
++ */
++@SuppressLint("SetJavaScriptEnabled")
++@Composable
++fun ExternalPanelScreen(
++    url: String,
++    onBack: () -> Unit = {},
++) {
++    val scrollBehavior = MiuixScrollBehavior()
++    val backdrop = rememberBlurBackdrop()
++    val blurActive = backdrop != null
++    val barColor = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
++
++    var webView by remember { mutableStateOf<WebView?>(null) }
++    // 系统返回优先在面板里回退历史，退无可退才离开页面
++    BackHandler {
++        val current = webView
++        if (current?.canGoBack() == true) current.goBack() else onBack()
++    }
++
++    var failed by remember(url) { mutableStateOf(false) }
++
++    Scaffold(
++        topBar = {
++            BlurredBar(backdrop = backdrop, blurActive = blurActive) {
++                AdaptiveTopAppBar(
++                    title = stringResource(R.string.home_external_panel),
++                    color = barColor,
++                    scrollBehavior = scrollBehavior,
++                    navigationIcon = {
++                        IconButton(onClick = onBack) {
++                            val layoutDirection = LocalLayoutDirection.current
++                            Icon(
++                                imageVector = MiuixIcons.Back,
++                                contentDescription = stringResource(R.string.common_back),
++                                tint = MiuixTheme.colorScheme.onSurface,
++                                modifier = Modifier.graphicsLayer {
++                                    scaleX = if (layoutDirection == LayoutDirection.Rtl) -1f else 1f
++                                },
++                            )
++                        }
++                    },
++                )
++            }
++        },
++    ) { innerPadding ->
++        Box(
++            modifier = Modifier
++                .fillMaxSize()
++                .padding(top = innerPadding.calculateTopPadding()),
++        ) {
++            AndroidView(
++                factory = { context ->
++                    WebView(context).apply {
++                        // 面板是 SPA：JS 与 localStorage 都是硬需求
++                        settings.javaScriptEnabled = true
++                        settings.domStorageEnabled = true
++                        webViewClient = object : WebViewClient() {
++                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
++                                failed = false
++                            }
++
++                            override fun onReceivedError(
++                                view: WebView?,
++                                request: WebResourceRequest?,
++                                error: WebResourceError?,
++                            ) {
++                                // 只关心主文档：SPA 里个别子资源 404 不该把整页标成失败
++                                if (request?.isForMainFrame == true) failed = true
++                            }
++                        }
++                        loadUrl(url)
++                        webView = this
++                    }
++                },
++                onRelease = { view ->
++                    webView = null
++                    view.destroy()
++                },
++                modifier = Modifier.fillMaxSize(),
++            )
++            if (failed) {
++                Text(
++                    text = stringResource(R.string.external_panel_load_failed),
++                    fontSize = 13.sp,
++                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                    modifier = Modifier
++                        .align(Alignment.Center)
++                        .padding(horizontal = 32.dp),
++                )
++            }
++        }
++    }
++}
++
++/**
++ * 运行中的 external-controller → 面板地址。`0.0.0.0` / `*` / `::` 是监听通配地址、不可连接，
++ * 换成本机回环；缺省端口按 mihomo 惯例不补（配置里 host:port 一体）。
++ */
++fun externalPanelUrl(externalController: String): String {
++    val raw = externalController.trim()
++        .removePrefix("http://")
++        .removePrefix("https://")
++        .substringBefore('/')
++    val host = raw.substringBeforeLast(':').ifEmpty { "127.0.0.1" }
++    val port = raw.substringAfterLast(':', "")
++    val reachableHost = if (host == "0.0.0.0" || host == "*" || host == "::" || host == "[::]") {
++        "127.0.0.1"
++    } else {
++        host
++    }
++    return if (port.isEmpty()) "http://$reachableHost/ui" else "http://$reachableHost:$port/ui"
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 index d3f9631..198fd46 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
@@ -16608,10 +16917,20 @@ index b112741..51b3927 100644
          private const val TOP_CONNECTION_COUNT = 5
      }
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..f190467 100644
+index 78fcd87..6862db7 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
-@@ -289,9 +289,11 @@
+@@ -128,6 +128,9 @@
+     <string name="home_logs_subtitle">Просмотр</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">Запрос</string>
++    <string name="home_external_panel">Внешняя панель</string>
++    <string name="home_external_panel_subtitle">Веб-панель</string>
++    <string name="external_panel_load_failed">Не удалось загрузить панель. Убедитесь, что прокси запущен и в профиле включён external-ui.</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">Задержка</string>
+@@ -289,9 +292,11 @@
      <string name="settings_tun_vpn_summary">через VpnService</string>
      <string name="settings_tun_root_tun_summary">собственное TUN-устройство</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -16623,7 +16942,7 @@ index 78fcd87..f190467 100644
      <string name="settings_vpn_settings">Настройки VPN</string>
      <string name="settings_vpn_summary">Обход локальной сети, перехват DNS, IPv6</string>
      <string name="settings_tun_device">Имя устройства TUN</string>
-@@ -406,6 +408,7 @@
+@@ -406,6 +411,7 @@
      <string name="root_tether_scan_result_title">Обнаруженные интерфейсы</string>
      <string name="root_tether_tproxy_unavailable_warning">В ядре отсутствует модуль xt_TPROXY. Используется резервный режим (меньшая скорость, но соединения работают). Для максимальной производительности TPROXY используйте ядро с поддержкой xt_TPROXY.</string>
      <string name="root_tproxy_tether_note">В режиме TPROXY весь трафик точки доступа направляется через ядро автоматически; переключение «В обход / Через прокси» не требуется.</string>
@@ -16631,7 +16950,7 @@ index 78fcd87..f190467 100644
      <string name="root_tun_jumbo_mtu_title">Jumbo MTU и GSO</string>
      <string name="root_tun_jumbo_mtu_summary">Агрегация больших пакетов (mtu=9000, gso=on) уменьшает системные вызовы на пакет для максимальной пропускной способности. Отключите, если восходящий канал отбрасывает фрагментированные пакеты.</string>
      <string name="root_attach_force_reapply_title">Принудительно применять правила при переподключении</string>
-@@ -615,4 +618,6 @@
+@@ -615,4 +621,6 @@
          <item quantity="other">Выбрано %1$d переопределения</item>
      </plurals>
      <string name="subscription_overrides">Переопределения</string>
@@ -16639,10 +16958,20 @@ index 78fcd87..f190467 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..f34bb9a 100644
+index cba1bbb..8f94b9a 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
-@@ -287,9 +287,11 @@
+@@ -126,6 +126,9 @@
+     <string name="home_logs_subtitle">查看</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">查询</string>
++    <string name="home_external_panel">外部面板</string>
++    <string name="home_external_panel_subtitle">网页控制台</string>
++    <string name="external_panel_load_failed">面板加载失败：请确认代理已启动，且配置里启用了 external-ui。</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">延迟</string>
+@@ -287,9 +290,11 @@
      <string name="settings_tun_vpn_summary">通过 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 设备</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -16654,7 +16983,7 @@ index cba1bbb..f34bb9a 100644
      <string name="settings_vpn_settings">VPN 设置</string>
      <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
      <string name="settings_tun_device">TUN 设备名称</string>
-@@ -404,6 +406,7 @@
+@@ -404,6 +409,7 @@
      <string name="root_tether_scan_result_title">检测到以下接口</string>
      <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有热点流量由内核规则自动代理，无需切换「绕过 / 走代理」。</string>
@@ -16662,7 +16991,7 @@ index cba1bbb..f34bb9a 100644
      <string name="root_tun_jumbo_mtu_title">大 MTU 与 GSO</string>
      <string name="root_tun_jumbo_mtu_summary">大包聚合（mtu=9000、开启 gso）减少每包 syscall，提升吞吐。上游链路丢弃分片时可关闭。</string>
      <string name="root_attach_force_reapply_title">重连时强制重建规则</string>
-@@ -610,4 +613,6 @@
+@@ -610,4 +616,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -16670,10 +16999,20 @@ index cba1bbb..f34bb9a 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..9541fc3 100644
+index f6895e0..e630b3d 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
-@@ -287,9 +287,11 @@
+@@ -126,6 +126,9 @@
+     <string name="home_logs_subtitle">檢視</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">查詢</string>
++    <string name="home_external_panel">外部面板</string>
++    <string name="home_external_panel_subtitle">網頁控制台</string>
++    <string name="external_panel_load_failed">面板載入失敗：請確認代理已啟動，且設定中啟用了 external-ui。</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">延遲</string>
+@@ -287,9 +290,11 @@
      <string name="settings_tun_vpn_summary">透過 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 裝置</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -16685,7 +17024,7 @@ index f6895e0..9541fc3 100644
      <string name="settings_vpn_settings">VPN 設定</string>
      <string name="settings_vpn_summary">繞過私人網路、DNS 攔截、IPv6</string>
      <string name="settings_tun_device">TUN 裝置名稱</string>
-@@ -404,6 +406,7 @@
+@@ -404,6 +409,7 @@
      <string name="root_tether_scan_result_title">偵測到以下介面</string>
      <string name="root_tether_tproxy_unavailable_warning">目前核心缺少 xt_TPROXY 模組，已降級為相容路徑（吞吐量略低，連線仍可用）。如需原生 TPROXY 效能，請更換支援該模組的核心。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有熱點流量由核心規則自動代理，無需切換「繞過／經過代理」。</string>
@@ -16693,7 +17032,7 @@ index f6895e0..9541fc3 100644
      <string name="root_tun_jumbo_mtu_title">大 MTU 與 GSO</string>
      <string name="root_tun_jumbo_mtu_summary">大封包聚合（mtu=9000、開啟 gso）可減少每個封包的 syscall，提升吞吐量。上游線路丟棄分段封包時可關閉。</string>
      <string name="root_attach_force_reapply_title">重新連線時強制重建規則</string>
-@@ -610,4 +613,6 @@
+@@ -610,4 +616,6 @@
          <item quantity="other">已選擇 %1$d 項覆寫</item>
      </plurals>
      <string name="subscription_overrides">覆寫</string>
@@ -16701,10 +17040,20 @@ index f6895e0..9541fc3 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..837d5f6 100644
+index d1acc59..63fceb5 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -289,9 +289,11 @@
+@@ -128,6 +128,9 @@
+     <string name="home_logs_subtitle">View</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">Query</string>
++    <string name="home_external_panel">External Panel</string>
++    <string name="home_external_panel_subtitle">Web dashboard</string>
++    <string name="external_panel_load_failed">Couldn\'t load the panel. Make sure the proxy is running and external-ui is configured in your profile.</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">Latency</string>
+@@ -289,9 +292,11 @@
      <string name="settings_tun_vpn_summary">via VpnService</string>
      <string name="settings_tun_root_tun_summary">owns TUN device</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -16716,7 +17065,7 @@ index d1acc59..837d5f6 100644
      <string name="settings_vpn_settings">VPN Settings</string>
      <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
      <string name="settings_tun_device">TUN Device Name</string>
-@@ -406,6 +408,7 @@
+@@ -406,6 +411,7 @@
      <string name="root_tether_scan_result_title">Detected interfaces</string>
      <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
      <string name="root_tproxy_tether_note">TPROXY mode proxies all hotspot traffic via kernel rules; no Bypass/Through toggle needed.</string>
@@ -16724,7 +17073,7 @@ index d1acc59..837d5f6 100644
      <string name="root_tun_jumbo_mtu_title">Jumbo MTU &amp; GSO</string>
      <string name="root_tun_jumbo_mtu_summary">Large-packet aggregation (mtu=9000, gso=on) reduces per-packet syscalls for throughput. Disable if the upstream link drops fragmented traffic.</string>
      <string name="root_attach_force_reapply_title">Force re-apply on reconnect</string>
-@@ -613,4 +616,6 @@
+@@ -613,4 +619,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>

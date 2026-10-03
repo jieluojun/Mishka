@@ -488,13 +488,53 @@ private class YamlParser(private val lines: List<String>) {
             return empty to (at + 1)
         }
         val body = rest.trim()
-        // 内联映射：- key: value（flow 集合 `- {…}` / `- […]` 与多行标量不算）
-        val mKey = if (body.isNotEmpty() && "{[|>".indexOf(body[0]) >= 0) null else KEY_RE.find(body)
+        // `&锚点` / `!!标签` 前缀属于项节点，不是首键的一部分：先跳过前缀再判断形态。
+        // 不跳过的话 `- &tpl { … }` 会被 KEY_RE 匹出垃圾键（`&tpl { name`），写键时落到 flow 行
+        // 下面追加块行、把 YAML 写坏（锚点里的参数「没有变」，追加的重复键反而全量覆盖原值）；
+        // `- &tpl`（块式项）则会被当成空标量，下面缩进的整块内容全部丢失。
+        var probe = body
+        var probeCol = contentCol
+        var itemAnchor: String? = null
+        while (probe.isNotEmpty()) {
+            val am = ANCHOR_RE.find(probe)
+            val tm = TAG_RE.find(probe)
+            when {
+                am != null -> {
+                    if (itemAnchor == null) itemAnchor = am.groupValues[1]
+                    probeCol += am.groupValues[0].length - am.groupValues[2].length
+                    probe = am.groupValues[2].trimStart()
+                }
+
+                tm != null -> {
+                    probeCol += tm.groupValues[0].length - tm.groupValues[1].length
+                    probe = tm.groupValues[1].trimStart()
+                }
+
+                else -> break
+            }
+        }
+        if (probe.isEmpty()) {
+            // 只剩前缀（`- &tpl`）：项内容在后续更深缩进的行上；没有就是只带锚点的空项
+            var nxt = at + 1
+            while (nxt < lines.size && isBlankOrComment(lines[nxt])) nxt++
+            if (nxt < lines.size && indentOf(lines[nxt]) > indent) {
+                val (inner, after) = parseBlock(nxt, indentOf(lines[nxt]))
+                inner.dash = at
+                inner.anchor = inner.anchor ?: itemAnchor
+                return inner to after
+            }
+            val empty = YamlNode(YamlNode.Kind.SCALAR, at, at + 1, indent = indent,
+                valueStart = line.length, valueEnd = line.length, anchor = itemAnchor)
+            empty.dash = at
+            return empty to (at + 1)
+        }
+        // 内联映射：- key: value（flow 集合 `- {…}` / `- […]` 与多行标量不算；按跳过前缀后的形态判断）
+        val mKey = if ("{[|>".indexOf(probe[0]) >= 0) null else KEY_RE.find(probe)
         if (mKey != null) {
-            val subIndent = contentCol
-            val node = YamlNode(YamlNode.Kind.MAP, at, at + 1, indent = subIndent)
+            val subIndent = probeCol
+            val node = YamlNode(YamlNode.Kind.MAP, at, at + 1, indent = subIndent, anchor = itemAnchor)
             node.dash = at
-            val (entry, after) = parseMapEntry(at, subIndent, contentCol)
+            val (entry, after) = parseMapEntry(at, subIndent, probeCol)
             node.entries.add(entry)
             node.end = after          // 首键的值可能是多行块，项的结束行必须跟着走
             var j = after

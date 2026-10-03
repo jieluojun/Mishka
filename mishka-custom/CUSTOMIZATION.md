@@ -127,6 +127,21 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     设置页第四项「ROOT EBPF（eBPF 自动重定向）」；ROOT 设置页对其隐藏热点 BYPASS/PROXY 下拉；
     主页 TUN 卡显示 Inbound=EBPF 并禁点 stack 切换。约束已写进 `docs/root-mode.md`。
 
+### 本轮新增与修复（主页外部面板 + 锚点序列项编辑）
+
+22. **主页「外部面板」入口（app 侧，seed：`patches/app/external-panel.seed.patch`）**：主页「工具」
+    网格下方新增整行卡片，点击在**应用内 WebView** 打开内核 `external-ui` 提供的网页控制台
+    （zashboard 等）。地址由 `externalPanelUrl()` 从运行态 external-controller 推导
+    （`http://host:port/ui`，`0.0.0.0`/`*` 自动换 127.0.0.1，kotlinc 用例覆盖）；新增
+    `Route.ExternalPanel(url)` 二级页 `ExternalPanelScreen`（JS + localStorage 开启、返回键先在
+    面板内回退历史、主文档加载失败时显示排查提示：确认代理已启动且配置了 external-ui）。
+23. **锚点序列项参数编辑修复（custom 侧 `YamlEngine.parseSeqItem`）**：`- &锚点 { … }` /
+    `- &锚点`（块式）此前不被识别——dash 行的 `&锚点`/`!!标签` 前缀没被跳过，flow 映射被
+    KEY_RE 匹出垃圾键，写参数时在 flow 行下面**追加块行**（重复键全量覆盖原值、锚点本身没变、
+    整个文件变成非法 YAML），块式项则被解析成空标量、整块缩进内容丢失且不可编辑。现在先剥
+    前缀再判形态：flow 原地改、块式正常解析编辑，锚点逐字保留；`EditorLogicProps.testSeqItemAnchors`
+    覆盖 5 种形态（flow/块式/内联首键/标签别名/映射条目头）回归。
+
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
 ### 三条安全边界（这也是它敢写盘的依据）
@@ -246,6 +261,7 @@ Alpha 里没有；另外 `mishka_core/go.sum` 里也没有 Alpha 新增依赖的
 | 自定义源码 | `app/src/main/kotlin/.../custom/{anchor,forms}/*.kt`（17 个文件） | ✅ 新增（补丁） |
 | 配置入口与路由 | `AppNavigation.kt`、`Route.kt`、`SubscriptionEditScreen.kt`、`FileManagerEditorScreen.kt` 与 4 份 `strings.xml` | ⚠️ 8 个上游文件由 app 补丁可逆修改；锚点仍在工具栏，表单入口在「覆写」下方 |
 | 主页/代理页修复与 ROOT EBPF（条目 18–21） | `HomeViewModel.kt`、`StatusSection.kt`、`ProxyScreen.kt`、`SettingsScreen.kt`、`RootSettingsScreen.kt`、`ProxyServiceController.kt`、`MishkaRootService.kt`、`RuntimeOverrideBuilder.kt`、`DynamicNotificationManager.kt`、`MainActivity.kt`、4 份 `strings.xml` 与 `docs/root-mode.md` | ⚠️ 上游文件由 app 补丁可逆修改（seed：`home-proxy-root-fixes.seed.patch`） |
+| 主页外部面板（条目 22） | `ui/screen/panel/ExternalPanelScreen.kt`（新增）、`Route.kt`、`AppNavigation.kt`、`HomeScreen.kt`、`QuickEntriesSection.kt` 与 4 份 `strings.xml` | ⚠️ 上游文件由 app 补丁可逆修改（seed：`external-panel.seed.patch`） |
 | 内核替换 | `<仓库>/mihomo`（原子上游子模块目录） | 目录内容替换 + `submodule.mihomo.ignore=all`（可还原） |
 | 依赖哈希 | `<仓库>/go.work`、`go.work.sum` | ✅ 新增 |
 | 只出 release | `mishka-custom/init/no-debug.init.gradle` | ✅ 新增 |
