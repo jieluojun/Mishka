@@ -267,6 +267,19 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     可直接确认设备单位病理与修复落点。沙箱四维复验（dvh→0px 模拟坏引擎）：
     坏 root=0 / 坏+v2 root=915 `injected-px:915` / 好+v2 root=915 `not-needed`。
 
+### r8：dvh 修复 v3——高度链逐环显式像素（2026-10-03）
+
+32. **r7 回传证明像素高度只修好了根容器**（`root h=776 / inlineH=776px / bodyH=776`），但
+    **中间链仍断**：滚动容器 `scroller h=0`、底栏仍 `top:-90`（`vhPx:0 dvhPx:0` 坐实全部视口
+    单位为 0；该 WebView 上 %/flex 的高度传递也不可靠）。v3 不再赌级联语义：给高度链每一环
+    **显式像素高度**——根容器 `.h-dvh`、wrapper（`.h-dvh>.flex.w-screen`）、`.home-page`、
+    `.home-page>.relative.flex-1`（底栏的定位祖先）、滚动容器（`.h-dvh .flex-col.h-full.
+    overflow-y-auto`）——样式表与内联 `!important` 双保险，`resize` 重算；dvh 档位映射
+    （弹窗/背景玻璃）保留。选择器已对照真实 DOM 转储逐环核对。生效条件不变（好引擎
+    `not-needed` 零干预）。探针新增 `w1/hp/rf` 三环高度：若仍有残留，回传能直接指出断点环。
+    沙箱复验：坏引擎 root 0→915 `injected-px:915`、好引擎 `not-needed`（中间环需连接态 SPA，
+    以设备探针为准）。
+
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
 ### 三条安全边界（这也是它敢写盘的依据）
