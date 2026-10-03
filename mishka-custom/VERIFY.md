@@ -38,12 +38,13 @@ PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 `docs/root-mode.md`）。订阅页入口在「覆写」下方；YAML 编辑器工具栏也有表单快捷按钮，位于锚点面板按钮左侧。
 
 基线（`patches/app/BASELINE.txt`）：`upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74`，
-`patch_sha256=8b6a8e1fa88d83290286d38d47821480c5d79c9d5e8834134ad58103b26da636`（r3：条目 28 导回后）。导出脚本
+`patch_sha256=0c9e18c8290c24a6c9799882970c413790df9871162f171db7565894fbb9a07f`（r4：条目 28 缓释三条导回后）。导出脚本
 （`tools/export_app_patch.sh`）依次应用 4 个稳定 seed（`anchor-panel` + `visual-config-entry` +
 `home-proxy-root-fixes` + `external-panel`），再用交付目录里的最新 `custom/` 源码覆盖后导出；
 2026-10-03 这轮把测速反馈（条目 25）与外部面板 URL / HTTP 错误态（条目 27）的改动重新导回
 `home-proxy-root-fixes.seed.patch` 与 `external-panel.seed.patch`，聚合补丁与基线同步重生成；
 r3 轮又把面板诊断抽屉 + 布局探针 + 浏览器兜底（条目 28）导回 `external-panel.seed.patch`，
+r4 轮把三条 WebView 缓释（禁缓存 / 非零布局后加载 / resize 补发）导回同一 seed，
 并在已打补丁的源码树上验证 `git apply -R` / `git apply` 均通过。`scripts/apply-patches.sh` 与
 `scripts/revert-patches.sh` 此前已在干净克隆上往返验证，撤销后 `git status` 为空。
 

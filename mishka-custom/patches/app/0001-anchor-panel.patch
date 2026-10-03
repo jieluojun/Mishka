@@ -16665,20 +16665,22 @@ index 018c54d..c1a41cd 100644
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
 new file mode 100644
-index 0000000..65d484e
+index 0000000..1a1a452
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
-@@ -0,0 +1,350 @@
+@@ -0,0 +1,397 @@
 +package top.yukonga.mishka.ui.screen.panel
 +
 +import android.annotation.SuppressLint
 +import android.content.Intent
 +import android.net.Uri
++import android.view.View
 +import android.webkit.ConsoleMessage
 +import android.webkit.WebChromeClient
 +import android.webkit.WebResourceError
 +import android.webkit.WebResourceRequest
 +import android.webkit.WebResourceResponse
++import android.webkit.WebSettings
 +import android.webkit.WebView
 +import android.webkit.WebViewClient
 +import androidx.activity.compose.BackHandler
@@ -16739,6 +16741,11 @@ index 0000000..65d484e
 + * 顶栏 Info 按钮打开诊断抽屉：环形缓冲记录 console / 网络错误 / 页面事件，并在页面加载后
 + * 注入 [PROBE_JS] 量取面板关键布局量（根容器高度、虚拟列表可视高度、代理卡片数、底栏几何），
 + * 用于定位"顶栏渲染但列表区空白"这类 WebView 渲染差异；同抽屉提供"浏览器打开"兜底入口。
++ *
++ * 针对「系统浏览器同址完整、app 内 WebView 空白」的残留差异（条目 28，r4）另加三条缓释：
++ * 本地面板禁 WebView HTTP 缓存（[WebSettings.LOAD_NO_CACHE]，避免坏缓存副本持续复现）；
++ * 等到第一次非零布局再 [WebView.loadUrl]（Compose interop 首帧前 innerHeight 可能为 0，
++ * 虚拟列表按 0 量行且不再重算）；首帧后与高度变化时补发 resize/scroll（[nudgeResize]）。
 + */
 +@SuppressLint("SetJavaScriptEnabled")
 +@Composable
@@ -16804,10 +16811,15 @@ index 0000000..65d484e
 +        ) {
 +            AndroidView(
 +                factory = { ctx ->
++                    var loadedOnce = false
 +                    WebView(ctx).apply {
 +                        // 面板是 SPA：JS 与 localStorage 都是硬需求
 +                        settings.javaScriptEnabled = true
 +                        settings.domStorageEnabled = true
++                        // 面板伺服在本机内核上、带宽不是约束；WebView 的 HTTP 缓存一旦存过
++                        // 坏副本（早期 404/半截 chunk）就会持续复现「顶栏在、列表空」，
++                        // 系统浏览器因缓存独立而表现正常——对本地 UI 直接禁缓存最稳
++                        settings.cacheMode = WebSettings.LOAD_NO_CACHE
 +                        webChromeClient = object : WebChromeClient() {
 +                            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
 +                                message?.let {
@@ -16846,12 +16858,38 @@ index 0000000..65d484e
 +
 +                            override fun onPageFinished(view: WebView?, url: String?) {
 +                                diag.add("[page] finished $url")
++                                // 首帧后补一次 resize/scroll：虚拟列表/底栏若按 0 高度挂载可借此重算
++                                view?.postDelayed({ nudgeResize(view, diag) }, 600)
 +                                // 面板是异步渲染：首帧后虚拟列表/底栏才挂载，延迟两次取样
 +                                view?.postDelayed({ runProbe(view, diag, 1) }, 2500)
 +                                view?.postDelayed({ runProbe(view, diag, 2) }, 8000)
 +                            }
 +                        }
-+                        loadUrl(url)
++                        // Compose interop：factory 时刻 view 还没参与布局，innerHeight 可能为 0；
++                        // 面板的虚拟列表若在此刻量可视行数会得到 0 且不再重算（系统浏览器首帧
++                        // 布局即正确，故同址表现正常）。等到第一次非零布局再加载，并在高度
++                        // 变化后补发 resize/scroll 事件触发虚拟列表与底栏重算
++                        addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
++                            private var lastH = -1
++                            override fun onLayoutChange(
++                                v: View,
++                                left: Int, top: Int, right: Int, bottom: Int,
++                                oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int,
++                            ) {
++                                if (v.width == 0 || v.height == 0) return
++                                if (!loadedOnce) {
++                                    loadedOnce = true
++                                    lastH = v.height
++                                    diag.add("[layout] first non-zero ${v.width}x${v.height}, loading")
++                                    v.post { loadUrl(url) }
++                                    return
++                                }
++                                if (v.height != lastH) {
++                                    lastH = v.height
++                                    v.post { nudgeResize(this@apply, diag) }
++                                }
++                            }
++                        })
 +                        webView = this
 +                    }
 +                },
@@ -16932,6 +16970,15 @@ index 0000000..65d484e
 +                }
 +            }
 +        }
++    }
++}
++
++/** 补发 resize/scroll：WebView 视口尺寸变化不一定触发 window 事件，虚拟列表可能停在 0 行。 */
++private fun nudgeResize(view: WebView?, diag: PanelDiagLog) {
++    runCatching {
++        view?.evaluateJavascript(
++            "window.dispatchEvent(new Event('resize'));window.dispatchEvent(new Event('scroll'));'nudged'",
++        ) { diag.add("[nudge] $it") }
 +    }
 +}
 +
