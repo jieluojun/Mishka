@@ -96,9 +96,12 @@ step "Gradle：:app:downloadGeoFiles"
 ( cd "$REPO" && ./gradlew --console=plain :app:downloadGeoFiles ) 2>&1 | tee "$log.download" | tail -5
 
 step "Gradle：:app:assembleRelease（release only）"
+# 内核版本串注入：主页「内核版本」显示的就是它（不注入会沿用上游 gradle.properties 的 v1.19.31+）
+MIHOMO_VERSION="${MIHOMO_VERSION:-$(kernel_version_string "$REPO")}"
+ok "内核版本串 $MIHOMO_VERSION"
 gradle_args=(--console=plain)
 [[ $CLEAN -eq 1 ]] && gradle_args+=(clean)
-gradle_args+=(-I "$init_script" :app:assembleRelease)
+gradle_args+=(-I "$init_script" "-Pmihomo.version=$MIHOMO_VERSION" :app:assembleRelease)
 set +e
 ( cd "$REPO" && ./gradlew "${gradle_args[@]}" ) 2>&1 | tee "$log" | tail -40
 status=${PIPESTATUS[0]}

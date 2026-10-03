@@ -34,6 +34,18 @@ bash mishka-custom/scripts/build-release.sh --repo .
 | `--unsigned` | 不配签名（APK 装不上，仅作对比体积用） |
 | `--no-keystore` | 没有 keystore 时不自动生成，直接报错 |
 
+**主页内核版本号的来源（重要）**：app 主页显示的是内核 `/version` 的返回，它由构建期
+ldflags 注入的 `constant.Version` 决定。上游 `gradle.properties` pin 的
+`mihomo.version=v1.19.31+` 是 metacubex/mihomo 的版本号，与本定制内核无关——不覆盖它，
+主页就永远显示 `1.19.31+`。`build-release.sh`（与 CI 工作流）现在会自动做这件事：
+`lib.sh` 的 `kernel_version_string()` 取 `<仓库>/mihomo` 当前提交的 8 位短哈希（无 git 信息时
+回落 `patches/mihomo/BASELINE.txt` 的 `base_commit` 前 8 位），按 jieluojun/mihomo 官方 CI 的
+命名规则拼出 `alpha-smart-<hash>-with-at`，以 `-Pmihomo.version=…` 传给 Gradle。想手动指定：
+
+```bash
+MIHOMO_VERSION=alpha-smart-deadbeef-with-at bash mishka-custom/scripts/build-release.sh --repo .
+```
+
 > 内存小的机器：`org.gradle.jvmargs=-Xmx4g` 写在仓库的 `gradle.properties` 里（本定制不动它），
 > 临时调小可以加 `-Dorg.gradle.jvmargs=-Xmx3g`。
 

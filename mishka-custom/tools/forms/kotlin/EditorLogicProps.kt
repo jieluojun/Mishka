@@ -10,7 +10,8 @@ private fun applyBatch(text: String, ops: List<BatchOp>): YamlDoc? {
         val next = when (op) {
             is BatchOp.Set -> {
                 if (!current.canSet(op.path)) return null
-                YamlPatch.setValue(current, op.path, op.value)
+                // 与 FormHost.batch 同一套继承感知落地（写穿锚点 / 物化继承块 / 普通写）
+                AnchorInheritance.applySetAware(current, op.path, op.value).doc
             }
             is BatchOp.Remove -> {
                 if (current.get(op.path) == null) continue

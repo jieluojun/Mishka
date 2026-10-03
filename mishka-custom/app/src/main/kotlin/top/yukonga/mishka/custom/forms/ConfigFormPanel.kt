@@ -221,12 +221,17 @@ internal class FormHost(
             showToast("$label 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
             return false
         }
-        return commit(YamlPatch.setValue(doc, path, value), label, "已写入", path)
+        // 继承感知：值来自 `<<:` 继承时按参考实现写穿锚点 / 物化整块，绝不建半块本地映射顶掉继承内容
+        val w = AnchorInheritance.applySetAware(doc, path, value)
+        val named = if (w.anchor != null) "$label（已同步到锚点 &${w.anchor}，继承它的所有条目一起生效）" else label
+        return commit(w.doc, named, "已写入", w.path)
     }
 
     fun clear(path: YPath, label: String): Boolean {
         if (doc.get(path) == null) {
-            showToast("$label 本来就没有设置")
+            if (FormValues.hasEffective(doc, path)) {
+                showToast("$label 来自锚点继承，本地没有可删的行：直接填入新值即可覆盖，或在「锚点与继承」里解除继承", long = true)
+            } else showToast("$label 本来就没有设置")
             return false
         }
         return commit(YamlPatch.removeKey(doc, path), label, "已清空", null)
@@ -261,6 +266,7 @@ internal class FormHost(
     fun batch(ops: List<BatchOp>, label: String, verb: String = "已写入", reveal: YPath? = null): Boolean {
         var cur = doc
         var touched = false
+        val syncedAnchors = LinkedHashSet<String>()
         for (op in ops) {
             val next = when (op) {
                 is BatchOp.Set -> {
@@ -268,7 +274,10 @@ internal class FormHost(
                         showToast("$label 未改动：${pathText(op.path)} 不在可编辑位置（下面是纯值 / 别名）", long = true)
                         return false
                     }
-                    YamlPatch.setValue(cur, op.path, op.value)
+                    // 与 set() 同一套继承感知落地：写穿锚点 / 物化继承块 / 普通写
+                    val w = AnchorInheritance.applySetAware(cur, op.path, op.value)
+                    w.anchor?.let(syncedAnchors::add)
+                    w.doc
                 }
                 is BatchOp.Remove -> if (cur.get(op.path) == null) continue else YamlPatch.removeKey(cur, op.path)
                 is BatchOp.SetItem -> YamlPatch.setItem(cur, op.seqPath, op.index, op.value)
@@ -293,7 +302,11 @@ internal class FormHost(
             showToast("$label 没有变化")
             return false
         }
-        return commit(cur, label, verb, reveal)
+        val named = if (syncedAnchors.isEmpty()) label else {
+            val names = syncedAnchors.joinToString("、") { "&$it" }
+            "$label（已同步到锚点 $names，继承它的所有条目一起生效）"
+        }
+        return commit(cur, named, verb, reveal)
     }
 
     // ---- 动态候选（下拉 / 多选里的节点名、代理组名、集合名）
@@ -800,8 +813,8 @@ private fun EbpfCustomRow(row: FormCustomRow, base: YPath, host: FormHost) {
         }
         "fakeip-icmp" -> {
             val current = FormValues.readRaw(doc, path).orEmpty()
-            val dnsV4 = FormValues.hasValue(doc, listOf("dns", "fake-ip-range"))
-            val dnsV6 = FormValues.hasValue(doc, listOf("dns", "fake-ip-range6"))
+            val dnsV4 = FormValues.hasEffective(doc, listOf("dns", "fake-ip-range"))
+            val dnsV6 = FormValues.hasEffective(doc, listOf("dns", "fake-ip-range6"))
             val icmpHook = ebpfHasFakeIpIcmpHook(doc, base, localOn, sharedOn)
             Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
                 BasicComponent(
@@ -849,7 +862,7 @@ private fun EbpfCustomRow(row: FormCustomRow, base: YPath, host: FormHost) {
     }
     if (dialog && row.kind == "fakeip-icmp") {
         val warnings = buildList {
-            if (!FormValues.hasValue(doc, listOf("dns", "fake-ip-range")) && !FormValues.hasValue(doc, listOf("dns", "fake-ip-range6"))) {
+            if (!FormValues.hasEffective(doc, listOf("dns", "fake-ip-range")) && !FormValues.hasEffective(doc, listOf("dns", "fake-ip-range6"))) {
                 add("reply 需要配置 dns.fake-ip-range 或 dns.fake-ip-range6。")
             }
             if (!ebpfHasFakeIpIcmpHook(doc, base, localOn, sharedOn)) {

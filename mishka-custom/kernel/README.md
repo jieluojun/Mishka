@@ -48,13 +48,14 @@ bash mishka-custom/scripts/setup.sh --repo <仓库> --refresh-sum
 ## 内核补丁（4 个）
 
 补丁文件在 `../patches/mihomo/`，基线 commit 与逐文件 blob 哈希记在 `../patches/mihomo/BASELINE.txt`。
-它们全部来自 YuKongA/mihomo 的 `Mishka` 分支（Mishka 应用依赖的行为），rebase 到 Alpha 之上：
+前四个补丁的主体来自 YuKongA/mihomo 的 `Mishka` 分支（Mishka 应用依赖的行为），rebase 到 Alpha 之上；
+`0003` 里的 `external-ui` 默认注入一段为本定制自加（非移植，见下表与 `CUSTOMIZATION.md` 条目 27）：
 
 | 补丁 | 内容 | 来源 |
 | --- | --- | --- |
 | `0001-config-override-json` | `config.OverrideJSONPath` + `Parse()` 里合并该 JSON。`mishka_core/runtime.go` 的 `--override-json` 依赖它。 | `ceafd04` |
 | `0002-sing-tun-mishka-build-tag` | `mishka` build tag：Android 上启用 `server_android.go`（uid→包名解析 + 按包名建规则），并让 fd（VpnService）模式跳过重复建路由。 | `2b7de8f` |
-| `0003-config-mishka-tun-dns-patch` | `mishkaPatch` 钩子 + `config/patch_mishka.go`：DNS 关闭时注入 fake-ip 默认值；VPN 模式追加 `system://` 兜底；VPN 模式把 `tun` 段按白名单重建，丢掉 Linux-only 字段。 | `addd66b` + `4c724df` |
+| `0003-config-mishka-tun-dns-patch` | `mishkaPatch` 钩子 + `config/patch_mishka.go`：DNS 关闭时注入 fake-ip 默认值；VPN 模式追加 `system://` 兜底；VPN 模式把 `tun` 段按白名单重建，丢掉 Linux-only 字段；`external-ui`/`external-ui-name` 均未配置时注入 `external-ui: ui` + gh-proxy 镜像下载地址（应用内外部面板伺服 `/ui` 的前提，实测见 `VERIFY.md` §2.1）。 | `addd66b` + `4c724df`（external-ui 段为定制自加） |
 | `0004-sing-tun-forwarder-bind-interface` | fd 模式下恢复 `forwarderBindInterface = true`（上游 `e38aa82a` 删掉后，Android VPN 下延迟测试通、真实流量不通）。 | `523fc3e` |
 
 Mishka 分支一共 6 个提交，其中：

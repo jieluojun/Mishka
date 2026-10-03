@@ -186,6 +186,18 @@ Mishka 里**没有任何 YAML 库**（`grep` 过 `app/build.gradle.kts`、`libs.
 * 定向测试脚本：`bash tools/forms/run_editor_logic_tests.sh`（eBPF role state / FakeIP ICMP 的 TC hook 前置条件 / listener 路径 / FormValues readers / MAPLIST rename、swap、删除目标键）
   通过；引擎对拍 802/802、引用对拍 153 例 0 差异。Android Gradle 编译仍需本机 Android SDK。
 
+## 5.5 锚点继承写穿（2026-10-03，「编辑覆盖继承段」修复）
+
+带 `<<: *anchor` 的小节此前一改就整节物化：写回把继承键展开成字面键值，merge key 引用消失、
+锚点定义再变化也传导不过来。现在提交链路先过 `AnchorInheritance.applySetAware`：被改键的生效值
+来自继承时，补丁**写穿**到锚点定义块（provider），原小节逐字保留 `<<: *anchor`；找不到 provider
+（或写穿被显式禁用）才回落物化。定义块自己再继承别的锚点时递归写穿（FormHost 传 chaining 参数
+跳过 provider 门）。配套改动：健康检查等编辑器的占位值读**继承生效值**（`hasEffective` /
+`effectiveText` / `effectiveBool`，本地值与继承值分开展示）；`commitExprList` 写穿优先；DNS 小节
+补告警。性质测试 `tools/forms/kotlin/AnchorWriteThroughProps.kt` 16 组全过（跑法见
+`run_editor_logic_tests.sh`，输出行 `AnchorWriteThroughProps: all test groups passed`）。
+细节与用户可见行为描述见 `CUSTOMIZATION.md` 条目 26。
+
 ## 6. 对拍（怎么证明“和参考实现一样”）
 
 * 字段级：`fields.json` 是唯一事实来源，Kotlin 侧的字段表由它校对（脚本逐条比对路径/标签/类型/选项条数）。

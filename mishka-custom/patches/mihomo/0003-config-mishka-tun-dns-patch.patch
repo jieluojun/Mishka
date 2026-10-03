@@ -1,4 +1,4 @@
-From dbbfba8d4adb3ea591e28b6f878704f290ec0ac9 Mon Sep 17 00:00:00 2001
+From 38490bb64f4e5bb264053446f02d6bf57585f792 Mon Sep 17 00:00:00 2001
 From: Mishka Custom Build <custom@localhost>
 Date: Thu, 1 Oct 2026 09:40:03 +0000
 Subject: [PATCH] config: add mishka Android patch behind the mishka build tag
@@ -15,6 +15,12 @@ subscription's RawConfig for Android usage.
 * VPN mode -> rebuild cfg.Tun from a whitelist of fields that the fd code
   path supports, dropping Linux-only keys (auto-redirect, iproute2-*,
   include-uid, route-address, ...) that would otherwise crash sing-tun.
+* Neither external-ui nor external-ui-name set -> inject external-ui "ui"
+  so the kernel mounts and serves /ui for the in-app external panel
+  WebView (a bare 404 -> blank page otherwise), and swap the stock
+  github.com download URL for a gh-proxy mirrored zashboard build when
+  the user has not explicitly picked one (AutoDownloadUI fetches it
+  once into the config dir; failures are logged only).
 
 The hook variable itself lives outside the build tag so upstream files
 stay compilable without mishka.
@@ -22,13 +28,13 @@ stay compilable without mishka.
 https://github.com/YuKongA/mihomo/commit/addd66b
 https://github.com/YuKongA/mihomo/commit/4c724df
 ---
- config/config.go       |  8 ++++
- config/patch_mishka.go | 96 ++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 104 insertions(+)
+ config/config.go       |   8 +++
+ config/patch_mishka.go | 118 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 126 insertions(+)
  create mode 100644 config/patch_mishka.go
 
 diff --git a/config/config.go b/config/config.go
-index 3a14bc59..ba86b9e1 100644
+index 3a14bc5..ba86b9e 100644
 --- a/config/config.go
 +++ b/config/config.go
 @@ -487,6 +487,10 @@ type RawConfig struct {
@@ -55,10 +61,10 @@ index 3a14bc59..ba86b9e1 100644
  
 diff --git a/config/patch_mishka.go b/config/patch_mishka.go
 new file mode 100644
-index 00000000..6d203deb
+index 0000000..7a42efd
 --- /dev/null
 +++ b/config/patch_mishka.go
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,118 @@
 +//go:build mishka
 +
 +package config
@@ -98,6 +104,11 @@ index 00000000..6d203deb
 +		"WORKGROUP",
 +	}
 +	mishkaDefaultFakeIPRange = "28.0.0.0/8"
++	// DefaultRawConfig 内置的 external-ui-url 默认值；用于判断「用户没有显式指定下载地址」。
++	mishkaStockExternalUIURL = "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip"
++	// 替换用的下载源：zashboard 经 gh-proxy 镜像（与作者 mihomo_box 自带配置同源）。
++	// 内置默认直连 github.com，国内网络基本不可达，会导致 UI 下载失败、面板空白。
++	mishkaDefaultExternalUIURL = "https://v6.gh-proxy.org/https://github.com/Zephyruso/zashboard/archive/refs/heads/gh-pages-no-fonts.zip"
 +)
 +
 +func init() {
@@ -121,6 +132,10 @@ index 00000000..6d203deb
 +//     subscription-supplied Linux-only fields that would otherwise crash
 +//     sing-tun on Android (auto-redirect, iproute2-*, include-uid,
 +//     include-interface, route-address, etc.).
++//   - When neither external-ui nor external-ui-name is configured, inject
++//     external-ui: "ui" (plus a gh-proxy mirrored download URL if the stock
++//     default is still in place) so the in-app external panel WebView has
++//     something to serve at /ui instead of a bare 404.
 +func patchMishka(cfg *RawConfig) {
 +	if !cfg.DNS.Enable {
 +		cfg.DNS = DefaultRawConfig().DNS
@@ -154,4 +169,20 @@ index 00000000..6d203deb
 +			ExcludePackage:      cfg.Tun.ExcludePackage,
 +		}
 +	}
++
++	// 外置面板兜底：应用内 WebView 打开 /ui 路由，而 mihomo 只有在 external-ui 非空时才
++	// 挂载该路由（否则 404 → 面板空白）。大量订阅配置不带这个字段，这里注入默认 "ui"
++	// （配置目录下的相对路径，能过 IsSafePath 检查）：ui/ 目录已有内容则直接伺服；
++	// 为空则 AutoDownloadUI 启动时自动下载一次，失败仅记日志、不影响内核运行。
++	// 用户显式配置过 external-ui 或 external-ui-name 时完全尊重原配置，不做任何改动。
++	if cfg.ExternalUI == "" && cfg.ExternalUIName == "" {
++		cfg.ExternalUI = "ui"
++		// 下载地址仅替换「还是内置默认值」的情况；订阅自带 external-ui-url 则保留。
++		if cfg.ExternalUIURL == "" || cfg.ExternalUIURL == mishkaStockExternalUIURL {
++			cfg.ExternalUIURL = mishkaDefaultExternalUIURL
++		}
++	}
 +}
+-- 
+2.47.3
+

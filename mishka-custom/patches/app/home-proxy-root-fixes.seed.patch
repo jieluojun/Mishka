@@ -11,6 +11,111 @@ index 5c60eb7..7c76159 100644
                      storage.putString(StorageKeys.TUN_MODE, "vpn")
                  }
              }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+index 33aa9cc..558ad9e 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+@@ -90,13 +90,16 @@ class MihomoApiClient(
+         ensureSuccess(response, "proxy group '$group'")
+     }
+ 
+-    suspend fun getProxyDelay(name: String, testUrl: String = "http://www.gstatic.com/generate_204", timeout: Int = 5000): DelayResult =
+-        client.get("$baseUrl/proxies/$name/delay") {
+-            url {
+-                parameters.append("url", testUrl)
+-                parameters.append("timeout", timeout.toString())
+-            }
+-        }.body()
++    suspend fun getProxyDelay(name: String, testUrl: String = DEFAULT_DELAY_TEST_URL, timeout: Int = 5000): DelayResult =
++        delayBodyOrThrow(
++            client.get("$baseUrl/proxies/$name/delay") {
++                url {
++                    parameters.append("url", testUrl)
++                    parameters.append("timeout", timeout.toString())
++                }
++            },
++            name,
++        )
+ 
+     /**
+      * 测试 proxy-provider 内单节点延迟。provider 节点不在 /proxies 命名空间，
+@@ -105,15 +108,38 @@ class MihomoApiClient(
+     suspend fun getProviderProxyDelay(
+         provider: String,
+         name: String,
+-        testUrl: String = "http://www.gstatic.com/generate_204",
++        testUrl: String = DEFAULT_DELAY_TEST_URL,
+         timeout: Int = 5000,
+     ): DelayResult =
+-        client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
+-            url {
+-                parameters.append("url", testUrl)
+-                parameters.append("timeout", timeout.toString())
+-            }
+-        }.body()
++        delayBodyOrThrow(
++            client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
++                url {
++                    parameters.append("url", testUrl)
++                    parameters.append("timeout", timeout.toString())
++                }
++            },
++            name,
++        )
++
++    /**
++     * 延迟测试端点的响应处理：测速失败时 mihomo 返回 503 + `{"message":…}`，而 [DelayResult]
++     * 的 delay 有默认值 0，直接 `.body()` 会把错误体反序列化成「delay=0 的成功」——上层于是
++     * 完全看不出失败（单节点测速点了没反应的根因之一）。必须先验状态码，失败抛出带内核
++     * message 的 [DelayTestFailedException]，让 ViewModel 能把原因提示给用户。
++     */
++    private suspend fun delayBodyOrThrow(response: HttpResponse, name: String): DelayResult {
++        if (!response.status.isSuccess()) {
++            val detail = runCatching { response.bodyAsText() }.getOrNull().orEmpty()
++            val summary = extractErrorMessage(detail) ?: response.status.description
++            throw DelayTestFailedException(name, response.status.value, summary)
++        }
++        return response.body()
++    }
++
++    companion object {
++        /** 测速地址与 mihomo_box 参考实现对齐（https：免流/直连节点上 http 明文探测更易被重置）。 */
++        const val DEFAULT_DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
++    }
+ 
+     suspend fun getRules(): RulesResponse =
+         client.get("$baseUrl/rules").body()
+@@ -219,4 +245,8 @@ class MihomoApiClient(
+     }
+ }
+ 
+-class MihomoApiException(message: String) : Exception(message)
++open class MihomoApiException(message: String) : Exception(message)
++
++/** 延迟测试失败（内核返回非 2xx，通常 503 = 节点连不通测速地址）。[status] 供上层分类提示。 */
++class DelayTestFailedException(val node: String, val status: Int, val reason: String) :
++    MihomoApiException("delay test for '$node' failed: HTTP $status $reason")
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
+index 1eaec7e..4219bd9 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
+@@ -36,14 +36,14 @@ interface MihomoRepository {
+     suspend fun unfixProxy(group: String): Result<Unit>
+     suspend fun getProxyDelay(
+         name: String,
+-        testUrl: String = "http://www.gstatic.com/generate_204",
++        testUrl: String = "https://www.gstatic.com/generate_204",
+         timeout: Int = 5000,
+     ): Result<DelayResult>
+ 
+     suspend fun getProviderProxyDelay(
+         provider: String,
+         name: String,
+-        testUrl: String = "http://www.gstatic.com/generate_204",
++        testUrl: String = "https://www.gstatic.com/generate_204",
+         timeout: Int = 5000,
+     ): Result<DelayResult>
+ 
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
 index b4ccbf3..73d5050 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
@@ -226,7 +331,7 @@ index 018c54d..c1a41cd 100644
  private val TUN_STACK_OPTIONS = listOf("mixed" to "Mixed", "gvisor" to "gVisor", "system" to "System", "mips" to "MIPS")
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
-index d3f9631..198fd46 100644
+index d3f9631..8469359 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 @@ -5,10 +5,12 @@ import androidx.compose.animation.core.animateDpAsState
@@ -242,7 +347,58 @@ index d3f9631..198fd46 100644
  import androidx.compose.foundation.interaction.MutableInteractionSource
  import androidx.compose.foundation.layout.Arrangement
  import androidx.compose.foundation.layout.Box
-@@ -769,6 +771,7 @@ private fun ProxyNodeRow(
+@@ -50,6 +52,7 @@ import androidx.compose.ui.graphics.ImageBitmap
+ import androidx.compose.ui.graphics.graphicsLayer
+ import androidx.compose.ui.input.nestedscroll.nestedScroll
+ import androidx.compose.ui.layout.Layout
++import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.platform.LocalLayoutDirection
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.text.font.FontFamily
+@@ -68,6 +71,7 @@ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.platform.showToast
+ import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
+ import top.yukonga.mishka.ui.component.CardSegment
+ import top.yukonga.mishka.ui.component.ListPopupDefaults.MenuPositionProvider
+@@ -76,6 +80,8 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
+ import top.yukonga.mishka.ui.platform.IconLoader
+ import top.yukonga.mishka.ui.theme.StatusColors
+ import top.yukonga.mishka.ui.util.WideContentBox
++import top.yukonga.mishka.viewmodel.DelayFailKind
++import top.yukonga.mishka.viewmodel.DelayTestEvent
+ import top.yukonga.mishka.viewmodel.ProxyGroupUi
+ import top.yukonga.mishka.viewmodel.ProxyUiState
+ import top.yukonga.mishka.viewmodel.ProxyViewModel
+@@ -131,6 +137,25 @@ fun ProxyScreen(
+         singleColumnAnimating = false
+     }
+     val showGlobalGroup = viewModel?.showGlobalGroup?.collectAsStateWithLifecycle()?.value != false
++    // 测速失败提示：此前失败完全静默（Result 被丢弃，用户点了延迟区域只会看到转圈停下），
++    // 现在单节点失败 / 整组有失败都会 toast 出原因
++    val delayToastContext = LocalContext.current
++    LaunchedEffect(viewModel) {
++        viewModel?.delayTestEvents?.collect { event ->
++            val text = when (event) {
++                is DelayTestEvent.NodeFailed -> when (event.kind) {
++                    DelayFailKind.Node -> delayToastContext.getString(R.string.proxy_delay_failed_node, event.node)
++                    DelayFailKind.Timeout -> delayToastContext.getString(R.string.proxy_delay_failed_timeout, event.node)
++                    DelayFailKind.Network -> delayToastContext.getString(R.string.proxy_delay_failed_network)
++                    DelayFailKind.Unknown ->
++                        delayToastContext.getString(R.string.proxy_delay_failed_unknown, event.node, event.detail.orEmpty())
++                }
++                is DelayTestEvent.GroupSummary ->
++                    delayToastContext.getString(R.string.proxy_delay_group_summary, event.group, event.failed, event.total)
++            }
++            showToast(text, long = true)
++        }
++    }
+     val scrollBehavior = MiuixScrollBehavior()
+     // 全局模式下 GLOBAL 是唯一出口，无视开关必须可选
+     val globalModeActive = uiState.mode == ProxyViewModel.MODE_GLOBAL
+@@ -769,6 +794,7 @@ private fun ProxyNodeRow(
      }
  }
  
@@ -250,7 +406,7 @@ index d3f9631..198fd46 100644
  @Composable
  private fun ProxyNodeCard(
      name: String,
-@@ -803,9 +806,19 @@ private fun ProxyNodeCard(
+@@ -803,9 +829,19 @@ private fun ProxyNodeCard(
                  if (isSelectable) {
                      Modifier
                          .squircleSurface(color = backgroundColor, cornerRadius = 12.dp)
@@ -272,7 +428,8 @@ index d3f9631..198fd46 100644
                  }
              )
              .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp),
-@@ -848,6 +861,7 @@ private fun ProxyNodeCard(
+@@ -847,7 +883,8 @@ private fun ProxyNodeCard(
+                 Spacer(Modifier.width(6.dp))
                  Box(
                      modifier = Modifier
 -                        .sizeIn(minWidth = 28.dp)
@@ -433,11 +590,166 @@ index b112741..51b3927 100644
          /** 速度卡详情展示的连接条数 */
          private const val TOP_CONNECTION_COUNT = 5
      }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
+index f684c37..b1aca92 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
+@@ -4,6 +4,11 @@ import android.util.Log
+ import androidx.compose.runtime.Immutable
+ import androidx.lifecycle.ViewModel
+ import androidx.lifecycle.viewModelScope
++import java.io.IOException
++import java.net.ConnectException
++import java.net.SocketTimeoutException
++import java.net.UnknownHostException
++import kotlin.coroutines.cancellation.CancellationException
+ import kotlinx.collections.immutable.ImmutableList
+ import kotlinx.collections.immutable.ImmutableMap
+ import kotlinx.collections.immutable.ImmutableSet
+@@ -14,15 +19,20 @@ import kotlinx.collections.immutable.toPersistentList
+ import kotlinx.collections.immutable.toPersistentMap
+ import kotlinx.collections.immutable.toPersistentSet
+ import kotlinx.coroutines.Job
++import kotlinx.coroutines.TimeoutCancellationException
+ import kotlinx.coroutines.async
+ import kotlinx.coroutines.awaitAll
+ import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.flow.MutableSharedFlow
+ import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.SharedFlow
+ import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asSharedFlow
+ import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.sync.Semaphore
+ import kotlinx.coroutines.sync.withPermit
++import top.yukonga.mishka.data.api.DelayTestFailedException
+ import top.yukonga.mishka.data.database.SelectionDao
+ import top.yukonga.mishka.data.database.SelectionEntity
+ import top.yukonga.mishka.domain.repository.MihomoRepository
+@@ -64,6 +74,32 @@ data class ProxyUiState(
+     val mode: String = "",
+ )
+ 
++/**
++ * 延迟测试结果事件。失败此前完全静默：Result 被丢弃、503 错误体还被反序列化成 delay=0 的
++ * 「成功」，用户点延迟区域后除了转圈停下什么也看不到（「单节点无法测速」的根因）。
++ * 现在单节点失败必提示；整组测完只汇总失败数（成功时延迟数字本身就是反馈）。
++ */
++sealed interface DelayTestEvent {
++    /** 单节点测速失败。[kind] 供 UI 选提示文案，[detail] 是内核原始错误（可空）。 */
++    data class NodeFailed(val node: String, val kind: DelayFailKind, val detail: String?) : DelayTestEvent
++
++    /** 整组测速汇总：仅在存在失败节点时发出。 */
++    data class GroupSummary(val group: String, val total: Int, val failed: Int) : DelayTestEvent
++}
++
++enum class DelayFailKind {
++    /** 内核完成了测速，但节点连不通测速地址（HTTP 503）：直连节点在墙内、免流节点出不了免流范围等 */
++    Node,
++
++    /** 请求内核超时（内核忙或卡死） */
++    Timeout,
++
++    /** 连不上内核 API：代理没在运行 / 控制器地址变了 */
++    Network,
++
++    Unknown,
++}
++
+ class ProxyViewModel(
+     private val selectionDao: SelectionDao? = null,
+     private val getActiveUuid: () -> String? = { null },
+@@ -73,6 +109,10 @@ class ProxyViewModel(
+     private val _uiState = MutableStateFlow(ProxyUiState())
+     val uiState: StateFlow<ProxyUiState> = _uiState.asStateFlow()
+ 
++    // 测速失败提示事件：ProxyScreen 收集后 toast（tryEmit + 缓冲，发射永不挂起/丢事件）
++    private val _delayTestEvents = MutableSharedFlow<DelayTestEvent>(extraBufferCapacity = 16)
++    val delayTestEvents: SharedFlow<DelayTestEvent> = _delayTestEvents.asSharedFlow()
++
+     // 节点排序状态：sortKeyIndex * 2 + (if reverse 1 else 0)
+     // 0/1=默认 升/降，2/3=名称 升/降，4/5=延迟 升/降
+     private val _sortOption = MutableStateFlow(loadInitialSortOption())
+@@ -302,7 +342,7 @@ class ProxyViewModel(
+             try {
+                 // 限并发：上百节点齐发会互抢带宽，测出的延迟失真
+                 val semaphore = Semaphore(GROUP_DELAY_CONCURRENCY)
+-                coroutineScope {
++                val results = coroutineScope {
+                     nodes.map { nodeName ->
+                         async {
+                             semaphore.withPermit {
+@@ -318,6 +358,11 @@ class ProxyViewModel(
+                     }.awaitAll()
+                 }
+                 if (repository !== repo) return@launch
++                // 汇总失败数：整组测速逐节点弹提示会刷屏，只在有失败时给一条汇总
++                val failed = results.count { it.isFailure }
++                if (failed > 0) {
++                    _delayTestEvents.tryEmit(DelayTestEvent.GroupSummary(group, results.size, failed))
++                }
+                 loadProxies()
+             } finally {
+                 // 正常结束、repo 切换、被取消都要摘标记，漏掉哪条路径该组就永久转圈
+@@ -340,11 +385,13 @@ class ProxyViewModel(
+                 // 延迟结果写入节点全局 history.delay，loadProxies 再从 history 读回并分发到
+                 // 所有引用该节点的组，保证跨组延迟一致；provider 节点走 provider healthcheck 端点
+                 val provider = nodeProviderMap[nodeName]
+-                if (provider != null) {
++                val result = if (provider != null) {
+                     repo.getProviderProxyDelay(provider, nodeName)
+                 } else {
+                     repo.getProxyDelay(nodeName)
+                 }
++                // 失败必须有反馈：此前 Result 直接被丢，测速失败时 UI 只是转圈停下、毫无提示
++                result.onFailure { e -> notifyDelayFailure(nodeName, e) }
+                 if (repository !== repo) return@launch
+                 loadProxies()
+             } finally {
+@@ -355,6 +402,25 @@ class ProxyViewModel(
+         }
+     }
+ 
++    /** 把测速异常分类后发给 UI；主动取消（离开页面等）不提示。 */
++    private fun notifyDelayFailure(nodeName: String, e: Throwable) {
++        if (e is CancellationException && e !is TimeoutCancellationException) return
++        var kind = DelayFailKind.Unknown
++        var detail: String? = e.message ?: e.javaClass.simpleName
++        var cur: Throwable? = e
++        while (cur != null) {
++            when (cur) {
++                // 内核完成测速但节点失败（503）：最典型——直连节点在墙内连不上 gstatic
++                is DelayTestFailedException -> { kind = DelayFailKind.Node; detail = cur.reason; break }
++                // SocketTimeoutException 是 IOException 子类，必须排在前
++                is SocketTimeoutException, is TimeoutCancellationException -> { kind = DelayFailKind.Timeout; break }
++                is ConnectException, is UnknownHostException, is IOException -> { kind = DelayFailKind.Network; break }
++            }
++            cur = cur.cause
++        }
++        _delayTestEvents.tryEmit(DelayTestEvent.NodeFailed(nodeName, kind, detail))
++    }
++
+     private suspend fun saveSelection(group: String, proxy: String) {
+         val uuid = getActiveUuid() ?: return
+         val dao = selectionDao ?: return
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..560a429 100644
+index a34898d..b4cf75a 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
-@@ -289,9 +289,11 @@
+@@ -179,6 +179,11 @@
+     <string name="proxy_sort_reverse">В обратном порядке</string>
+     <string name="proxy_test_group_delay">Проверить задержку</string>
+     <string name="proxy_test_node_delay">Проверить задержку узла</string>
++    <string name="proxy_delay_failed_node">Проверка задержки %1$s не удалась: узел не смог открыть тестовый URL</string>
++    <string name="proxy_delay_failed_timeout">Проверка задержки %1$s: ядро не ответило вовремя</string>
++    <string name="proxy_delay_failed_network">Проверка задержки не удалась: API ядра недоступно (прокси запущен?)</string>
++    <string name="proxy_delay_failed_unknown">Проверка задержки %1$s не удалась: %2$s</string>
++    <string name="proxy_delay_group_summary">Группа %1$s: %2$d из %3$d узлов не прошли проверку</string>
+     <string name="proxy_fixed">Зафиксировано на этом узле</string>
+     <string name="proxy_unfix">Открепить, вернуть автовыбор</string>
+ 
+@@ -289,9 +294,11 @@
      <string name="settings_tun_vpn_summary">через VpnService</string>
      <string name="settings_tun_root_tun_summary">собственное TUN-устройство</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -449,7 +761,7 @@ index 78fcd87..560a429 100644
      <string name="settings_vpn_settings">Настройки VPN</string>
      <string name="settings_vpn_summary">Обход локальной сети, перехват DNS, IPv6</string>
      <string name="settings_tun_device">Имя устройства TUN</string>
-@@ -406,6 +408,7 @@
+@@ -406,6 +413,7 @@
      <string name="root_tether_scan_result_title">Обнаруженные интерфейсы</string>
      <string name="root_tether_tproxy_unavailable_warning">В ядре отсутствует модуль xt_TPROXY. Используется резервный режим (меньшая скорость, но соединения работают). Для максимальной производительности TPROXY используйте ядро с поддержкой xt_TPROXY.</string>
      <string name="root_tproxy_tether_note">В режиме TPROXY весь трафик точки доступа направляется через ядро автоматически; переключение «В обход / Через прокси» не требуется.</string>
@@ -458,10 +770,22 @@ index 78fcd87..560a429 100644
      <string name="root_tun_jumbo_mtu_summary">Агрегация больших пакетов (mtu=9000, gso=on) уменьшает системные вызовы на пакет для максимальной пропускной способности. Отключите, если восходящий канал отбрасывает фрагментированные пакеты.</string>
      <string name="root_attach_force_reapply_title">Принудительно применять правила при переподключении</string>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..e676a47 100644
+index 883eb7a..ac013ce 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
-@@ -287,9 +287,11 @@
+@@ -177,6 +177,11 @@
+     <string name="proxy_sort_reverse">倒序</string>
+     <string name="proxy_test_group_delay">测试延迟</string>
+     <string name="proxy_test_node_delay">测试节点延迟</string>
++    <string name="proxy_delay_failed_node">「%1$s」测速失败：节点连不通测速地址（超时或被拒绝）</string>
++    <string name="proxy_delay_failed_timeout">「%1$s」测速超时：内核长时间没有返回结果</string>
++    <string name="proxy_delay_failed_network">测速失败：连不上内核 API（代理没有运行？）</string>
++    <string name="proxy_delay_failed_unknown">「%1$s」测速失败：%2$s</string>
++    <string name="proxy_delay_group_summary">「%1$s」组测速完成：%3$d 个节点中 %2$d 个失败</string>
+     <string name="proxy_fixed">已固定到此节点</string>
+     <string name="proxy_unfix">解除固定，恢复自动选择</string>
+ 
+@@ -287,9 +292,11 @@
      <string name="settings_tun_vpn_summary">通过 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 设备</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -473,7 +797,7 @@ index cba1bbb..e676a47 100644
      <string name="settings_vpn_settings">VPN 设置</string>
      <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
      <string name="settings_tun_device">TUN 设备名称</string>
-@@ -404,6 +406,7 @@
+@@ -404,6 +411,7 @@
      <string name="root_tether_scan_result_title">检测到以下接口</string>
      <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有热点流量由内核规则自动代理，无需切换「绕过 / 走代理」。</string>
@@ -482,10 +806,22 @@ index cba1bbb..e676a47 100644
      <string name="root_tun_jumbo_mtu_summary">大包聚合（mtu=9000、开启 gso）减少每包 syscall，提升吞吐。上游链路丢弃分片时可关闭。</string>
      <string name="root_attach_force_reapply_title">重连时强制重建规则</string>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..60f94cc 100644
+index 5a3acf6..546ad6f 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
-@@ -287,9 +287,11 @@
+@@ -177,6 +177,11 @@
+     <string name="proxy_sort_reverse">反向</string>
+     <string name="proxy_test_group_delay">測試延遲</string>
+     <string name="proxy_test_node_delay">測試節點延遲</string>
++    <string name="proxy_delay_failed_node">「%1$s」測速失敗：節點連不通測速位址（逾時或被拒絕）</string>
++    <string name="proxy_delay_failed_timeout">「%1$s」測速逾時：核心長時間沒有返回結果</string>
++    <string name="proxy_delay_failed_network">測速失敗：連不上核心 API（代理沒有執行？）</string>
++    <string name="proxy_delay_failed_unknown">「%1$s」測速失敗：%2$s</string>
++    <string name="proxy_delay_group_summary">「%1$s」群組測速完成：%3$d 個節點中 %2$d 個失敗</string>
+     <string name="proxy_fixed">已固定至此節點</string>
+     <string name="proxy_unfix">解除固定，恢復自動選擇</string>
+ 
+@@ -287,9 +292,11 @@
      <string name="settings_tun_vpn_summary">透過 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 裝置</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -497,7 +833,7 @@ index f6895e0..60f94cc 100644
      <string name="settings_vpn_settings">VPN 設定</string>
      <string name="settings_vpn_summary">繞過私人網路、DNS 攔截、IPv6</string>
      <string name="settings_tun_device">TUN 裝置名稱</string>
-@@ -404,6 +406,7 @@
+@@ -404,6 +411,7 @@
      <string name="root_tether_scan_result_title">偵測到以下介面</string>
      <string name="root_tether_tproxy_unavailable_warning">目前核心缺少 xt_TPROXY 模組，已降級為相容路徑（吞吐量略低，連線仍可用）。如需原生 TPROXY 效能，請更換支援該模組的核心。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有熱點流量由核心規則自動代理，無需切換「繞過／經過代理」。</string>
@@ -506,10 +842,22 @@ index f6895e0..60f94cc 100644
      <string name="root_tun_jumbo_mtu_summary">大封包聚合（mtu=9000、開啟 gso）可減少每個封包的 syscall，提升吞吐量。上游線路丟棄分段封包時可關閉。</string>
      <string name="root_attach_force_reapply_title">重新連線時強制重建規則</string>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..88b6b9c 100644
+index b419b27..46c1baf 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -289,9 +289,11 @@
+@@ -179,6 +179,11 @@
+     <string name="proxy_sort_reverse">Reverse</string>
+     <string name="proxy_test_group_delay">Test latency</string>
+     <string name="proxy_test_node_delay">Test node delay</string>
++    <string name="proxy_delay_failed_node">Delay test failed for %1$s: node could not reach the test URL</string>
++    <string name="proxy_delay_failed_timeout">Delay test for %1$s timed out: no response from the core</string>
++    <string name="proxy_delay_failed_network">Delay test failed: cannot reach the core API (is the proxy running?)</string>
++    <string name="proxy_delay_failed_unknown">Delay test failed for %1$s: %2$s</string>
++    <string name="proxy_delay_group_summary">Group %1$s: %2$d of %3$d nodes failed the delay test</string>
+     <string name="proxy_fixed">Fixed to this node</string>
+     <string name="proxy_unfix">Unfix, restore automatic selection</string>
+ 
+@@ -289,9 +294,11 @@
      <string name="settings_tun_vpn_summary">via VpnService</string>
      <string name="settings_tun_root_tun_summary">owns TUN device</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -521,7 +869,7 @@ index d1acc59..88b6b9c 100644
      <string name="settings_vpn_settings">VPN Settings</string>
      <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
      <string name="settings_tun_device">TUN Device Name</string>
-@@ -406,6 +408,7 @@
+@@ -406,6 +413,7 @@
      <string name="root_tether_scan_result_title">Detected interfaces</string>
      <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
      <string name="root_tproxy_tether_note">TPROXY mode proxies all hotspot traffic via kernel rules; no Bypass/Through toggle needed.</string>

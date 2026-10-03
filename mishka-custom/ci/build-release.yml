@@ -183,7 +183,18 @@ jobs:
         run: ./gradlew :app:downloadGeoFiles
 
       - name: Build Release APK（release only）
-        run: ./gradlew -I mishka-custom/init/no-debug.init.gradle :app:assembleRelease
+        run: |
+          set -euo pipefail
+          # 内核版本串：对齐 jieluojun/mihomo CI 的 alpha-smart-<short>-with-at。
+          # 不注入 -Pmihomo.version 会沿用上游 gradle.properties 的 v1.19.31+（metacubex 的版本号），
+          # 主页「内核版本」就会显示错。sha 优先取内核目录实际 HEAD，无 .git 时退回补丁基线。
+          sha="$(git -C mihomo rev-parse --short=8 HEAD 2>/dev/null || true)"
+          if [ -z "$sha" ]; then
+            sha="$(sed -n 's/^base_commit=//p' mishka-custom/patches/mihomo/BASELINE.txt | head -1 | cut -c1-8)"
+          fi
+          ver="${MIHOMO_VERSION:-alpha-smart-${sha}-with-at}"
+          echo "注入内核版本串：$ver"
+          ./gradlew -I mishka-custom/init/no-debug.init.gradle "-Pmihomo.version=$ver" :app:assembleRelease
 
       - name: 收集产物
         id: apk

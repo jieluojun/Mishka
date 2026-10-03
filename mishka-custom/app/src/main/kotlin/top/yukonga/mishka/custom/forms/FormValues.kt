@@ -193,6 +193,24 @@ internal object FormValues {
         else -> v.toString()
     }
 
+    /**
+     * 展开视图（别名解开、`<<:` 合并后）里有没有值。「自动补默认值」的判断必须用它而不是
+     * [hasValue]：值经锚点继承进来时本地没有对应行，按本地判断会把默认值写成本地覆写，
+     * 整块顶掉继承内容（如把继承的 health-check url / interval 盖成官方默认值）。
+     */
+    fun hasEffective(doc: YamlDoc, path: YPath): Boolean = effectiveValue(doc, path) != null
+
+    /** 展开视图里的布尔（YAML true/false 与字符串写法都认）；本地与继承都没有时 null。 */
+    fun effectiveBool(doc: YamlDoc, path: YPath): Boolean? = when (val v = effectiveValue(doc, path)) {
+        is Boolean -> v
+        is String -> when (v.lowercase()) {
+            "true", "yes", "on" -> true
+            "false", "no", "off" -> false
+            else -> null
+        }
+        else -> null
+    }
+
     /** 本地无值时按展开值给摘要（标量照写、布尔映开/关、集合报项数），尾标「继承」；无继承值返回 null。 */
     fun describeEffective(doc: YamlDoc, field: FormField, path: YPath): String? = when (val v = effectiveValue(doc, path)) {
         null -> null

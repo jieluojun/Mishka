@@ -53,6 +53,21 @@ kernel_base_commit() {
   sed -n 's/^base_commit=//p' "$root/patches/mihomo/BASELINE.txt" | head -1
 }
 
+# 内核版本串：对齐 jieluojun/mihomo 自己 CI（sync-and-build.yml）的
+#   VERSION="alpha-smart-$(git rev-parse --short HEAD)-with-at"（发布 tag：with-at-latest）。
+# app 主页「内核版本」直接显示内核 /version 的返回：构建时必须用 -Pmihomo.version 注入，
+# 否则沿用上游 gradle.properties 里 pin 的 v1.19.31+（那是 metacubex/mihomo 的版本号，
+# 与本定制内核无关——这正是「主页版本显示 1.19.31+」的根因）。
+kernel_version_string() {
+  local repo="$1" sha
+  sha="$(git -C "$repo/mihomo" rev-parse --short=8 HEAD 2>/dev/null || true)"
+  if [[ -z "$sha" ]]; then
+    # 内核目录没有 .git（源码包 / 浅缓存）：退回补丁基线 commit 的前 8 位
+    sha="$(kernel_base_commit "$(deliver_root)" | cut -c1-8)"
+  fi
+  printf 'alpha-smart-%s-with-at' "$sha"
+}
+
 kernel_patched() {
   local dir="$1"
   [[ -f "$dir/config/patch_mishka.go" ]] && grep -q 'mishkaPatch = patchMishka' "$dir/config/patch_mishka.go" 2>/dev/null

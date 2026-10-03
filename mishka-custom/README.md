@@ -44,7 +44,9 @@ bash mishka-custom/scripts/build-release.sh --repo .
 2. **可视化配置表单与入口**：P1 / P2 / P3 表单读取并写回已有 YAML 值；订阅编辑页在「覆写」下方提供入口，优先打开 `config.yaml`，否则选择首个 YAML 文件；YAML 编辑器工具栏也恢复表单快捷按钮，位于锚点面板按钮左侧。
 3. **内核换成 `jieluojun/mihomo`（`Alpha` 分支）**：Mishka 应用依赖的 4 处内核行为被移植到 Alpha 之上
    （`--override-json`、`mishka` build tag、DNS/TUN 的 Android 适配、fd TUN 的 forwarder 绑定），
-   并解决「Alpha 多出来的依赖没有 go.sum 哈希」的问题（`go.work` + `go.work.sum`）。
+   外加一处定制自加的 `external-ui` 默认注入（应用内「外部面板」要它伺服 `/ui`，见 `CUSTOMIZATION.md`
+   条目 27），并解决「Alpha 多出来的依赖没有 go.sum 哈希」的问题（`go.work` + `go.work.sum`）。
+   构建时主页显示的内核版本号会自动注入为 `alpha-smart-<hash>-with-at`（见 `BUILD.md`）。
 4. **只构建 release**：本地脚本与 CI 都只跑 `:app:assembleRelease`；`init/no-debug.init.gradle`
    在命令行点名 debug 任务时直接失败。签名支持仓库 secrets，也支持没有 secrets 时用固定参数的
    debug 风格密钥兜底（能装、能覆盖升级）。
@@ -149,7 +151,7 @@ git pull && bash mishka-custom/scripts/setup.sh --repo .
 
 ## 来源与许可
 
-* Mishka：<https://github.com/YuKongA/Mishka>（app 侧补丁基于 `e855709c476c8f82635b3bb6f751975e1319f391`）
+* Mishka：<https://github.com/YuKongA/Mishka>（app 侧补丁基线 `b66e844a84e62ae7610a9db0ae61c165777d2c74`，以 `patches/app/BASELINE.txt` 的 `upstream_commit` 为准）
 * 内核：<https://github.com/jieluojun/mihomo>（`Alpha`），移植内容来自 <https://github.com/YuKongA/mihomo> 的 `Mishka` 分支
 * 锚点算法参考：`mihomo_box` 模块的 WebUI（`webroot/ui/js/core.js` / `app.js`）
 * mihomo 及其分支均以 GPLv3 发布；本交付只包含补丁与脚本，不重新分发内核二进制。请遵守上游许可。

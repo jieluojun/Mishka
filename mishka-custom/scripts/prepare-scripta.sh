@@ -22,7 +22,7 @@ UPSTREAM="https://github.com/YuKongA/Mishka.git"
 SCRIPTA_URL="https://github.com/YuKongA/scripta.git"
 PIN=""
 FORCE=0
-# Mishka 上游（e855709c）里 scripta 子模块指向的 commit，取不到上游时用它兜底：
+# Mishka 上游里 scripta 子模块指向的 commit（与本包基线 b66e844a 处一致），取不到上游时用它兜底：
 FALLBACK_PIN="23820ff3085016a7490b1c1bb1c9dc76168be052"
 
 while [[ $# -gt 0 ]]; do

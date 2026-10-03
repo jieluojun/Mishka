@@ -132,7 +132,8 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
 22. **主页「外部面板」入口（app 侧，seed：`patches/app/external-panel.seed.patch`）**：主页「工具」
     网格下方新增整行卡片，点击在**应用内 WebView** 打开内核 `external-ui` 提供的网页控制台
     （zashboard 等）。地址由 `externalPanelUrl()` 从运行态 external-controller 推导
-    （`http://host:port/ui`，`0.0.0.0`/`*` 自动换 127.0.0.1，kotlinc 用例覆盖）；新增
+    （`0.0.0.0`/`*` 自动换 127.0.0.1；URL 契约已在条目 27 更新为
+    `http://h:p/ui/?hostname=…&port=…&secret=…`）；新增
     `Route.ExternalPanel(url)` 二级页 `ExternalPanelScreen`（JS + localStorage 开启、返回键先在
     面板内回退历史、主文档加载失败时显示排查提示：确认代理已启动且配置了 external-ui）。
 23. **锚点序列项参数编辑修复（custom 侧 `YamlEngine.parseSeqItem`）**：`- &锚点 { … }` /
@@ -141,6 +142,59 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     整个文件变成非法 YAML），块式项则被解析成空标量、整块缩进内容丢失且不可编辑。现在先剥
     前缀再判形态：flow 原地改、块式正常解析编辑，锚点逐字保留；`EditorLogicProps.testSeqItemAnchors`
     覆盖 5 种形态（flow/块式/内联首键/标签别名/映射条目头）回归。
+
+### 本轮用户反馈 4 bug 修复（2026-10-03：版本号 / 测速反馈 / 锚点写穿 / 外部面板）
+
+24. **主页内核版本号显示 `1.19.31+`（构建层根因）**：主页「内核版本」显示的是内核 `/version`
+    的返回（ldflags 注入 `constant.Version`），但上游 `gradle.properties` 里 pin 的
+    `mihomo.version=v1.19.31+` 是 metacubex/mihomo 的版本号、与本定制内核无关，且从未被覆盖。
+    现在 `scripts/lib.sh` 新增 `kernel_version_string()`：取 `<仓库>/mihomo` 当前提交的 8 位短哈希
+    （无 git 信息时回落 `patches/mihomo/BASELINE.txt` 的 `base_commit` 前 8 位），按 jieluojun/mihomo
+    官方 CI 的同一命名规则拼出 `alpha-smart-<hash>-with-at`；`build-release.sh` 与
+    `ci/build-release.yml` 构建时以 `-Pmihomo.version=…` 注入，`MIHOMO_VERSION` 环境变量可手动覆盖。
+    实测（真实构建 + 启动内核）：`/version` 返回 `{"version":"alpha-smart-fc45379e-with-at"}`。
+25. **代理页单节点测速「点了没反应」**：上一轮修的是命中区（条目 19）；本轮实测内核后确认
+    delay API 本身完全正常（含中文节点名、分组整体测速、失败节点返回 HTTP 503
+    `{"message":"An error occurred in the delay test"}`），真正断的是 app 侧的失败反馈链：
+    ① `MihomoApiClient` 没开 `expectSuccess`，delay 端点也不查状态码——503 错误体被反序列化成
+    `DelayResult(delay = 0)` 的**默认值**、当成「成功」；② `ProxyViewModel` 把 `Result` 直接丢弃，
+    成败都无声，用户看到的只有转圈停下。修复：客户端新增 `delayBodyOrThrow()`，非 2xx 抛
+    `DelayTestFailedException(node, status, reason)`（复用 `extractErrorMessage` 提取内核 message），
+    默认测速地址统一为 `https://www.gstatic.com/generate_204`（与参考实现一致，http 会被部分节点
+    拒绝）；ViewModel 把失败发成 `DelayTestEvent` 事件——单节点失败按异常链分类
+    `Node / Timeout / Network / Unknown` 四种（`NodeFailed`），整组测速只汇总失败数
+    （`GroupSummary`，成功时延迟数字原地刷新本身就是反馈）；`ProxyScreen` 收集事件后按分类
+    toast（新增 5 条 × 4 语言字符串）。主动取消（离开页面）不提示。fixes seed 因此新增 3 个
+    上游文件：`data/api/MihomoApiClient.kt`、`domain/repository/MihomoRepository.kt`、
+    `viewmodel/ProxyViewModel.kt`。
+26. **编辑带锚点继承的配置会把 `<<: *anchor` 小节整体物化覆盖**：此前在继承了锚点的小节里改
+    任一字段，写回会把整节重排成展开后的字面键值——merge key 引用消失、锚点定义再变化也不会
+    传导到这一节（用户报「锚点继承的段被完全覆盖」）。现在 `AnchorInheritance.applySetAware`
+    做**写穿（write-through）**：被编辑键的生效值来自 `<<: *anchor` 时，补丁直接落到锚点定义块
+    （provider），原小节逐字保留 `<<: *anchor` 引用；被多个小节引用的定义块同步更新（这正是锚点
+    语义）。`ConfigFormPanel` / `FlowFormPages` 的提交链路全部接入（`commitExprList` 写穿优先；
+    FormHost 递归进定义块时传 chaining 参数跳过 provider 门，修复了锚点链递归写不进去的问题）；
+    健康检查等编辑器的占位值改读**继承生效值**（`hasEffective` / `effectiveText` / `effectiveBool`，
+    区分本地值与继承值）；DNS 小节相关字段补了告警提示。性质测试
+    `tools/forms/kotlin/AnchorWriteThroughProps.kt` 16 组全过；引擎对拍 802/802、引用对拍
+    153 例 0 差异、三方锚点对拍 13/0、forms 性质测试 697 项全部保持绿。
+27. **外部面板打开空白**：两层根因，都已修并且都在真实内核上实测过。
+    **内核层**：mihomo 只在配置 `external-ui` 非空时才挂载 `/ui` 路由——订阅配置基本都不带这个
+    字段，`GET /ui` 返回 404 text/plain，WebView 里就是一片空白。`patch_mishka.go` 现在在
+    `external-ui` 与 `external-ui-name` 均未配置时注入默认值 `external-ui: ui`（配置目录下的相对
+    路径，能过 `IsSafePath`），且当下载地址仍是内置默认（直连 github.com，国内网络基本不可达）
+    时换成 gh-proxy 镜像的 zashboard：
+    `https://v6.gh-proxy.org/https://github.com/Zephyruso/zashboard/archive/refs/heads/gh-pages-no-fonts.zip`
+    （与作者 mihomo_box 自带配置同源）。`AutoDownloadUI` 在 `ui/` 目录为空时启动自动下载一次，
+    失败仅记日志、不影响内核运行；用户显式配置过 `external-ui` / `external-ui-name` /
+    `external-ui-url` 时一律尊重、不动。实测：注入后启动即下载成功，`/ui/` 200 伺服 zashboard。
+    **app 层**：`externalPanelUrl()` 改为 `http://h:p/ui/?hostname=h&port=p&secret=…`。两个实测
+    约束：**尾部斜杠必须带**——内核对 `/ui`（无斜杠）回 307，`Location: /ui/` 会丢掉全部 query
+    参数；**参数名按 zashboard 的自动登录契约**——解析面板 JS 确认 gate 参数是 `hostname`（缺失
+    时返回 null → 停在手动设置页），配合 `port` / `secret`，没有 `host` / `token` 兼容分支。
+    secret 从运行态 `ProxyServiceBridge.state` 取。WebView 补 `onReceivedHttpError`：HTTP 4xx/5xx
+    不触发 `onReceivedError`（那个只报网络层错误），此前 404 时白屏且没有任何提示，现在会显示
+    排查提示文案。
 
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
@@ -214,7 +268,7 @@ Alpha 里没有；另外 `mishka_core/go.sum` 里也没有 Alpha 新增依赖的
 | --- | --- | --- |
 | `0001-config-override-json` | `config.OverrideJSONPath` + `Parse()` 中合并 JSON（失败仅告警）。`mishka_core/runtime.go` 的 `--override-json` 依赖它。 | `ceafd04` |
 | `0002-sing-tun-mishka-build-tag` | `server_android.go` 的构建约束改成 `android && (!cmfa \|\| mishka)`、`server_notandroid.go` 改成 `!android \|\| (cmfa && !mishka)`；`mishka` 下无条件启用 uid→包名解析；fd 模式跳过重复建路由/无过滤时早返回。 | `2b7de8f` |
-| `0003-config-mishka-tun-dns-patch` | `mishkaPatch` 钩子 + `config/patch_mishka.go`（`//go:build mishka`）：DNS 关闭时注入 fake-ip 默认值（国内外 nameserver + `28.0.0.0/8` + STUN/主机/门禁过滤表）；VPN 模式追加 `system://` 兜底；VPN 模式按白名单重建 `tun` 段，丢掉 Linux-only 字段。 | `addd66b` + `4c724df` |
+| `0003-config-mishka-tun-dns-patch` | `mishkaPatch` 钩子 + `config/patch_mishka.go`（`//go:build mishka`）：DNS 关闭时注入 fake-ip 默认值（国内外 nameserver + `28.0.0.0/8` + STUN/主机/门禁过滤表）；VPN 模式追加 `system://` 兜底；VPN 模式按白名单重建 `tun` 段，丢掉 Linux-only 字段；`external-ui`/`external-ui-name` 均未配置时注入 `external-ui: ui` 并把内置默认下载地址换成 gh-proxy 镜像的 zashboard（供应用内外部面板伺服 `/ui`，条目 27，本条为定制自加、非 YuKongA 移植）。 | `addd66b` + `4c724df` |
 | `0004-sing-tun-forwarder-bind-interface` | fd 模式恢复 `forwarderBindInterface = true`（上游删掉后 Android VPN 下延迟测试通、真实流量不通）。 | `523fc3e` |
 
 未移植的两项（有意）：
@@ -260,8 +314,8 @@ Alpha 里没有；另外 `mishka_core/go.sum` 里也没有 Alpha 新增依赖的
 | --- | --- | --- |
 | 自定义源码 | `app/src/main/kotlin/.../custom/{anchor,forms}/*.kt`（17 个文件） | ✅ 新增（补丁） |
 | 配置入口与路由 | `AppNavigation.kt`、`Route.kt`、`SubscriptionEditScreen.kt`、`FileManagerEditorScreen.kt` 与 4 份 `strings.xml` | ⚠️ 8 个上游文件由 app 补丁可逆修改；锚点仍在工具栏，表单入口在「覆写」下方 |
-| 主页/代理页修复与 ROOT EBPF（条目 18–21） | `HomeViewModel.kt`、`StatusSection.kt`、`ProxyScreen.kt`、`SettingsScreen.kt`、`RootSettingsScreen.kt`、`ProxyServiceController.kt`、`MishkaRootService.kt`、`RuntimeOverrideBuilder.kt`、`DynamicNotificationManager.kt`、`MainActivity.kt`、4 份 `strings.xml` 与 `docs/root-mode.md` | ⚠️ 上游文件由 app 补丁可逆修改（seed：`home-proxy-root-fixes.seed.patch`） |
-| 主页外部面板（条目 22） | `ui/screen/panel/ExternalPanelScreen.kt`（新增）、`Route.kt`、`AppNavigation.kt`、`HomeScreen.kt`、`QuickEntriesSection.kt` 与 4 份 `strings.xml` | ⚠️ 上游文件由 app 补丁可逆修改（seed：`external-panel.seed.patch`） |
+| 主页/代理页修复与 ROOT EBPF（条目 18–21、24–26 的 app 侧） | `HomeViewModel.kt`、`StatusSection.kt`、`ProxyScreen.kt`、`SettingsScreen.kt`、`RootSettingsScreen.kt`、`ProxyServiceController.kt`、`MishkaRootService.kt`、`RuntimeOverrideBuilder.kt`、`DynamicNotificationManager.kt`、`MainActivity.kt`、`MihomoApiClient.kt`、`MihomoRepository.kt`、`ProxyViewModel.kt`、4 份 `strings.xml` 与 `docs/root-mode.md` | ⚠️ 上游文件由 app 补丁可逆修改（seed：`home-proxy-root-fixes.seed.patch`） |
+| 主页外部面板（条目 22、27 的 app 侧） | `ui/screen/panel/ExternalPanelScreen.kt`（新增）、`Route.kt`、`AppNavigation.kt`、`HomeScreen.kt`、`QuickEntriesSection.kt` 与 4 份 `strings.xml` | ⚠️ 上游文件由 app 补丁可逆修改（seed：`external-panel.seed.patch`） |
 | 内核替换 | `<仓库>/mihomo`（原子上游子模块目录） | 目录内容替换 + `submodule.mihomo.ignore=all`（可还原） |
 | 依赖哈希 | `<仓库>/go.work`、`go.work.sum` | ✅ 新增 |
 | 只出 release | `mishka-custom/init/no-debug.init.gradle` | ✅ 新增 |

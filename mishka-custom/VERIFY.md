@@ -24,20 +24,27 @@ ok  仓库 HEAD 与基线 commit 一致
 --- apply --check ---
 ok  补丁可应用
 --- apply（正向） ---
-25 个受影响文件的 blob 全部与 BASELINE.txt 一致
+47 个受影响文件的 blob 全部与 BASELINE.txt 一致
 --- apply -R（反向） ---
 ok  新增源码已移除
 ok  工作区已回到干净状态
 PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 ```
 
-当前 app 补丁：25 files changed / 13160 insertions / 1 deletion，包括 17 个新 Kotlin 源文件，以及 8 个上游文件（路由、订阅编辑页、YAML 编辑器和 4 份 strings.xml）。订阅页入口在「覆写」下方；YAML 编辑器工具栏也有表单快捷按钮，位于锚点面板按钮左侧。
+当前 app 补丁：47 files changed / 16656 insertions / 52 deletions，包括 23 个新 Kotlin 源文件
+（`custom/` 下 anchor 5 个 + forms 17 个，加 `ui/screen/panel/ExternalPanelScreen.kt`），以及
+24 个上游文件（19 个 .kt：路由、订阅编辑页、YAML 编辑器、主页/代理页修复、测速反馈链的
+`MihomoApiClient` / `MihomoRepository` / `ProxyViewModel` 等，加 4 份 `strings.xml` 与
+`docs/root-mode.md`）。订阅页入口在「覆写」下方；YAML 编辑器工具栏也有表单快捷按钮，位于锚点面板按钮左侧。
 
-基线（`patches/app/BASELINE.txt`）：`upstream_commit=e855709c476c8f82635b3bb6f751975e1319f391`，
-`patch_sha256=91962d35ee40b6d302060d47e839ef283c963585cef6e58c4b738ddd961c3109`。导出脚本使用稳定的
-`anchor-panel.seed.patch` + `visual-config-entry.seed.patch`；本次针对 CI 编译错误更新了 `ConfigFormPanel.kt` 补丁 hunk 与对应 blob 哈希，
-并在已打补丁的源码树上验证 `git apply -R` / `git apply` 均通过。`scripts/apply-patches.sh` 与 `scripts/revert-patches.sh`
-此前已在干净克隆上往返验证，撤销后 `git status` 为空。
+基线（`patches/app/BASELINE.txt`）：`upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74`，
+`patch_sha256=be2957d5f14412b19b423147321158e619d5f3815b92f1476cfb69cdf60d960b`。导出脚本
+（`tools/export_app_patch.sh`）依次应用 4 个稳定 seed（`anchor-panel` + `visual-config-entry` +
+`home-proxy-root-fixes` + `external-panel`），再用交付目录里的最新 `custom/` 源码覆盖后导出；
+2026-10-03 这轮把测速反馈（条目 25）与外部面板 URL / HTTP 错误态（条目 27）的改动重新导回
+`home-proxy-root-fixes.seed.patch` 与 `external-panel.seed.patch`，聚合补丁与基线同步重生成，
+并在已打补丁的源码树上验证 `git apply -R` / `git apply` 均通过。`scripts/apply-patches.sh` 与
+`scripts/revert-patches.sh` 此前已在干净克隆上往返验证，撤销后 `git status` 为空。
 
 导出时须在干净仓库运行；脚本会拒绝已有 `custom/` 目录，避免 `.git/info/exclude` 隐藏现存源码。源码入补丁使用 `git add -f -A`，
 反向应用后的残留检查不只依赖 `git status`（被忽略的文件不可见），而会检查 `find … -name '*.kt'`。
@@ -56,13 +63,44 @@ ok  blob config/patch_mishka.go
 ok  blob listener/sing_tun/server.go
 ok  blob listener/sing_tun/server_android.go
 ok  blob listener/sing_tun/server_notandroid.go
-期望 tree: 6d997de22fbc66a1297571a55f7cc65972558044
-实际 tree: 6d997de22fbc66a1297571a55f7cc65972558044
+期望 tree: 52a1fc0ebd7445a0955cbf65feb63b84472ce642
+实际 tree: 52a1fc0ebd7445a0955cbf65feb63b84472ce642
 PASS
 ```
 
-基线：`base_commit=fc45379ef1bdbe358c63cc9eb6134e3691cbb113`（jieluojun/mihomo `Alpha` 尖端），
-`config/patch_mishka.go` 与 YuKongA 分支**逐字一致**（`diff` 为空）。
+基线：`base_commit=fc45379ef1bdbe358c63cc9eb6134e3691cbb113`（jieluojun/mihomo `Alpha` 尖端）。
+`config/patch_mishka.go` 以 YuKongA 分支的移植为底，2026-10-03 起**有意多出一段定制自加逻辑**：
+`external-ui`/`external-ui-name` 均未配置时注入 `external-ui: ui` + gh-proxy 镜像下载地址
+（外部面板空白修复，见 `CUSTOMIZATION.md` 条目 27），`0003` 补丁与基线 blob/tree 哈希同步重生成。
+
+## 2.1 内核真机实测（2026-10-03，linux/amd64 真实构建二进制 + 真实 HTTP 请求）
+
+用交付同一套 flag 构建（`-tags cmfa,mishka,with_gvisor` + `-X …constant.Version=alpha-smart-fc45379e-with-at`），
+以一份不含 `external-ui`、节点名含中文的 config.yaml 启动，controller 挂 127.0.0.1:19090：
+
+```
+$ curl -s :19090/version
+{"meta":true,"version":"alpha-smart-fc45379e-with-at"}        # 条目 24 的注入链路端到端成立
+
+# 延迟测试（条目 25 的内核侧对照——API 本身完全正常）：
+$ curl -s ':19090/proxies/%E6%B5%8B%E8%AF%95%E7%9B%B4%E8%BF%9E/delay?timeout=5000&url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204'
+{"delay":4}                                                    # 中文节点名「测试直连」URL 编码后正常
+$ curl -s ':19090/proxies/%E5%88%86%E7%BB%84/delay?…'          → {"delay":5}   # 分组整体测速正常
+$ curl -s -i ':19090/proxies/%E6%B5%8B%E8%AF%95%E6%8B%92%E7%BB%9D/delay?…'
+HTTP/1.1 503 … {"message":"An error occurred in the delay test"}  # 失败节点 = 503 + message（app 侧此前把它当 delay=0 的「成功」）
+
+# 外部面板（条目 27）：config.yaml 不带 external-ui → 注入生效，启动日志：
+#   level=info msg="External UI downloading ..."  → ui/ 目录 5.2MB zashboard 落地
+$ curl -s -i ':19090/ui'            → 307, Location: /ui/      # 注意：query 参数全部被丢
+$ curl -s -i ':19090/ui/?hostname=127.0.0.1&port=19090&secret=' → 200, <title>zashboard</title>
+# 对照（未打补丁内核、无 external-ui）：GET /ui → 404 text/plain，WebView 里即白屏
+
+# zashboard 自动登录契约（解析面板 JS index-*.js 得出）：
+#   URLSearchParams(window.location.search || location.hash…)；gate 参数是 hostname（缺失→null→手动设置页），
+#   配 port / secret / protocol / secondaryPath / label；不存在 host / token 兼容分支。
+```
+
+历史端点同步验证：`/proxies/{name}` 的 `history` 里记录了真实 delay 值，测速成功后代理页原地刷新即可见。
 
 ## 3. 内核能编译过（真实构建，不是类型检查）
 
@@ -221,13 +259,22 @@ refs_diff：153 例，0 处差异，3 次改名被 Kotlin 拒绝（引用在别�
 运行 `bash tools/forms/run_editor_logic_tests.sh`（Kotlin 纯逻辑测试编译后执行）：
 
 ```
-eBPF role, FormValues reader, and MAPLIST rename/swap tests passed
+eBPF role, FormValues reader, expr inheritance, seq-item anchors, and MAPLIST rename/swap tests passed
+anchor inheritance and second-level anchor tests passed
+AnchorWriteThroughProps: all test groups passed
+proxy uri / yaml import tests passed
+listener types / templates / sections tests passed
+anchor block flow key/value tests passed
 ```
 
 覆盖现有 YAML 值摘要与读入、listener-specific 的 `listeners[index]` 状态解析（默认 local、mode 与角色 `enable` / 旧 `enabled`）、
 切换角色时保留 listener 其它参数、MAPLIST 单键改名/冲突检查/键交换与删除目标键，以及 `fakeip-icmp: reply` 的前置条件：
 要么 local 启用且 `local.data-plane=tc`，要么 shared 启用且 `shared.interface` 非空。这里验证的是配置条件判断与表单状态，
 不是目标设备上的 TC hook 实际挂载结果。
+
+`AnchorWriteThroughProps`（16 组）是条目 26「锚点继承写穿」的定向性质测试：写穿目标定位（provider gate 与
+chaining 递归）、写穿后 `<<: *anchor` 逐字保留、多引用小节经定义块同步、无 provider 时回落物化、
+锚点链（定义块再继承别的锚点）递归写入等，全部在真实 `YamlEngine` 上跑并逐字节断言。
 
 ## 8. app 补丁脚本与 Android 构建状态
 
@@ -245,10 +292,10 @@ eBPF role, FormValues reader, and MAPLIST rename/swap tests passed
 
 ```
 $ python3 tools/check_kotlin.py
-17 file(s), 0 with syntax errors   # custom/ 下的锚点与表单源码
+31 file(s), 0 with syntax errors   # custom/ 22 个锚点与表单源码 + tools/forms/kotlin/ 9 个性质测试源文件
 
-$ python3 tools/check_kotlin.py <4 个修改的上游 Kotlin 文件>
-4 file(s), 0 with syntax errors
+$ python3 tools/check_kotlin.py <19 个修改的上游 Kotlin 文件>
+19 file(s), 0 with syntax errors
 
 $ python3 tools/check_api.py --root /home/user/mishka-upstream
 核对 import 80 条、调用点 0 个
@@ -263,6 +310,10 @@ ok  FORMS-P2.md 与字段表一致
 $ python3 tools/equiv/model_freshness.py
 模型与 Kotlin 源码的基线一致
 ```
+
+`model_freshness` 的基线在 2026-10-03 这轮重新记录过：条目 26 改动了 `AnchorScan.kt` / `AnchorBlock.kt`
+（commentIndex 修复与 flow 键值拆分），先重跑 §5 三方对拍（13/0，对拍字段不含展示层逻辑）确认转写模型
+行为未漂移，再 `--update` 落新基线。
 
 `check_api.py` 当前仅能对 80 条 import 做部分符号检查；miuix UI / preference、scripta-editor、miuix-icons 与 icons-base 源码路径缺失，
 且调用点核对数为 0。不能替代真正的 Kotlin 编译；当前输出不能当作依赖 API 已完整验证。
@@ -283,4 +334,4 @@ tree-sitter 的 Kotlin 语法把 `open` / `dynamic` 这类**软关键字**当成
 | Android app 编译 / 完整 APK（Gradle + AGP + R8） | 最近一次 `:app:compileDebugKotlin` 在配置 `:app` 时因 `SDK location not found` 失败；未进入 Kotlin 编译 | 配置 Android SDK/`ANDROID_HOME` 或 `local.properties/sdk.dir` 后重跑，或用 CI 工作流 |
 | Android cgo 链接（NDK clang） | 沙箱没有 NDK | 同上；已补齐到「只差 NDK」并确认依赖层无问题 |
 | 表单与 eBPF 面板真机交互（点按、导航、写回、真实 hook） | 需要设备/模拟器及目标内核；定向纯逻辑测试不能证明设备上的 TC 挂载成功 | 安装成功构建的 APK，在支持的内核 / 设备上验证；eBPF 集成测试结果不代表生产路由或吞吐基准 |
-| Alpha 与 Mishka 官方内核的运行时行为差异 | 需要实机跑流量 | 重点看 VPN/ROOT 模式连通性与 TUN 栈（Alpha 默认 `mips`） |
+| Alpha 与 Mishka 官方内核的运行时行为差异 | controller/API 层已在沙箱实测（§2.1：真实二进制启动、`/version`、delay 端点、`/ui` 注入与伺服全部符合预期）；**流量面**（VPN/ROOT TUN 栈、真实转发）沙箱无法验证 | 重点看 VPN/ROOT 模式连通性与 TUN 栈（Alpha 默认 `mips`） |

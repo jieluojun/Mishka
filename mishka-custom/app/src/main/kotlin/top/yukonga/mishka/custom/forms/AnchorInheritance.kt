@@ -463,4 +463,127 @@ internal object AnchorInheritance {
 
     /** 单引号流式安全串：内部 `'` 翻倍（YAML 单引号转义）。 */
     private fun quoteSingle(s: String): String = "'" + s.replace("'", "''") + "'"
+
+    // ==================== 继承感知写入（写穿锚点 / 物化兜底） ====================
+    //
+    // 对齐 mihomo_box `dumpConfigKeepLayout`（core.js）的锚点语义：
+    //   · 值来自 `<<:` 合并继承时，改动优先写进锚点定义处（&名 所在块），别名 / 合并关系原样保留，
+    //     其它引用者同步生效——参考实现对 proxy-providers / rule-providers 的「键本身继承」也写穿
+    //     （其源码注释：用户反馈「修改部分参数值(比如自动更新间隔)没有同步到锚点参数」，这类集合
+    //     常把公共字段抽成 &锚点，编辑单个集合时期望同步到锚点定义）；其它顶层块的「键本身继承」
+    //     按 YAML 合并语义写本地覆写行（显式键优先于合并键），不写穿。
+    //   · 路径要「穿过」一个继承来的映射（如 `<<: *providers` 带进来的 health-check 里改 url）时，
+    //     一律写穿：本地只建一个子键会按 YAML 合并语义把继承映射整块顶掉，其余继承子键全部静默丢失
+    //     ——这就是「修改已继承锚点的配置会全量覆盖到继承锚点的地方」的根源。
+    //   · 写穿不可行（锚点侧是装不下的 flow、锚点定义找不到等）时的兜底：把继承来的整块映射
+    //     先物化成本地值（兄弟键一个不丢），再写目标键——仍保持语义等价，只是该块转为本地覆写。
+
+    /** 写穿落点：锚点定义侧的路径 + 锚点名（toast 里点名用）。 */
+    internal data class WriteThrough(val path: YPath, val anchor: String)
+
+    /** 继承感知写入的落点：结果文档 + 实际写入路径 +（写穿时）锚点名。 */
+    internal data class AnchorAwareWrite(val doc: YamlDoc, val path: YPath, val anchor: String?)
+
+    /** 「键本身继承」也写穿锚点的顶层块（对齐参考实现 core.js applySet 的 topKey 分支）。 */
+    private val WRITE_THROUGH_TOPS = setOf("proxy-providers", "rule-providers")
+
+    /**
+     * 全文 `&定义` → (锚点名, 定义行 1 基, 定义节点路径)。同名锚点重复定义时全部保留，
+     * 由 [writeThroughTarget] 按「定义必须在引用行之前」挑最近的一个（YAML 没有前向别名）。
+     */
+    fun anchorDefPaths(doc: YamlDoc): List<Triple<String, Int, YPath>> {
+        val out = ArrayList<Triple<String, Int, YPath>>()
+        fun walk(n: YamlNode?, path: YPath) {
+            if (n == null) return
+            n.anchor?.let { out.add(Triple(it, n.start + 1, path)) }
+            n.entries.forEach { e -> if (!e.isMerge) walk(e.node, path + e.key) }
+            n.items.forEachIndexed { i, item -> walk(item, path + i) }
+        }
+        walk(doc.root, emptyList())
+        return out
+    }
+
+    /**
+     * 计算 [path] 这次写入的写穿落点；返回 null = 按普通本地写（含「本地已有行，本地优先」与
+     * 「非合集块的键本身继承 → 本地覆写行」两种参考实现语义）。[depth] 防锚点链成环；
+     * [chaining] = 正在锚点链里往下追（顶层块名是锚点宿主，不再按用户写入路径做合集门控）。
+     */
+    fun writeThroughTarget(doc: YamlDoc, path: YPath, depth: Int = 0, chaining: Boolean = false): WriteThrough? {
+        if (path.isEmpty() || depth > 3) return null
+        if (doc.get(path) != null) return null                    // 本地已有行：本地优先，不碰锚点
+        var k = path.size - 1
+        while (k > 0 && doc.get(path.subList(0, k)) == null) k--  // 最深本地存在的前缀
+        if (k == 0) return null                                   // 连顶层都没有：普通新建
+        val prefix = path.subList(0, k)
+        val rest = path.subList(k, path.size)
+        val parentNode = doc.get(prefix) ?: return null
+        if (parentNode.kind != YamlNode.Kind.MAP) return null
+        // 「键本身继承」（只差最后一级）：只有代理集合 / 规则集合写穿；其它块写本地覆写行（参考实现语义）
+        if (rest.size == 1 && !chaining && WRITE_THROUGH_TOPS.none { it == path[0] }) return null
+        val state = entryMerges(doc, prefix)
+        if (state.merges.isEmpty()) return null
+        val refLine = state.mergeLines.minOrNull() ?: Int.MAX_VALUE
+        val defs = anchorDefPaths(doc)
+        for (name in state.merges) {
+            // 同名多处定义：取引用行之前最近的一个；都不在引用行前（异常文档）就退而取第一个
+            val defPath = defs.filter { it.first == name && it.second < refLine }
+                .maxByOrNull { it.second }?.third
+                ?: defs.firstOrNull { it.first == name }?.third
+                ?: continue
+            val target = defPath + rest
+            val usable = doc.get(target) != null ||
+                FormValues.effectiveValue(doc, target) != null ||
+                // 锚点侧至少有承载层（如锚点里的 health-check 映射）：新增子键也落锚点，与参考实现
+                // 「路径穿过合并进入锚点内部」的解析结果一致（新增键会同步给所有使用者）
+                (rest.size > 1 && doc.get(target.dropLast(1)) != null)
+            if (!usable) continue
+            // 锚点侧自己还是继承来的（锚点链）：继续往下追；追不动就落在 target
+            val deeper = if (doc.get(target) == null) writeThroughTarget(doc, target, depth + 1, chaining = true) else null
+            return WriteThrough(deeper?.path ?: target, deeper?.anchor ?: name)
+        }
+        return null
+    }
+
+    /**
+     * 物化兜底定位：路径上某一级父键本地缺失、但继承视图里是映射时，返回该级路径与完整继承内容
+     * （调用方先把整块落成本地值，再写目标键）。继承视图里父级是标量 / 序列时返回 null——
+     * 那种路径普通写入也会被引擎拒绝，不需要兜底。
+     */
+    fun materializeInheritedPrefix(doc: YamlDoc, path: YPath): Pair<YPath, Map<String, Any?>>? {
+        for (k in 1 until path.size) {
+            val prefix = path.subList(0, k)
+            if (doc.get(prefix) != null) continue
+            val eff = FormValues.effectiveValue(doc, prefix) ?: continue
+            if (eff !is Map<*, *>) return null
+            val m = LinkedHashMap<String, Any?>()
+            for ((key, v) in eff) if (key is String) m[key] = v
+            return if (m.isNotEmpty()) prefix to m else null
+        }
+        return null
+    }
+
+    /**
+     * 继承感知的 Set：FormHost.set / batch 与离线对拍（EditorLogicProps.applyBatch）都走这里。
+     * 依次尝试 写穿锚点 → 物化继承块后本地写 → 普通按路径写；每步都以引擎接受（返回新文档）为准，
+     * 全部被拒时返回原文档（调用方按「未改动」提示）。
+     */
+    fun applySetAware(doc: YamlDoc, path: YPath, value: Any?): AnchorAwareWrite {
+        writeThroughTarget(doc, path)?.let { wt ->
+            if (doc.canSet(wt.path)) {
+                val out = YamlPatch.setValue(doc, wt.path, value)
+                if (out !== doc) return AnchorAwareWrite(out, wt.path, wt.anchor)
+            }
+            // 锚点侧不收（flow 一行装不下、路径不可编辑…）：落到物化兜底，绝不静默丢改动
+        }
+        val mat = materializeInheritedPrefix(doc, path)
+        if (mat != null) {
+            val (prefix, effMap) = mat
+            val grown = YamlPatch.setValue(doc, prefix, effMap)
+            if (grown !== doc) {
+                val out = YamlPatch.setValue(grown, path, value)
+                if (out !== grown) return AnchorAwareWrite(out, path, null)
+            }
+        }
+        return AnchorAwareWrite(YamlPatch.setValue(doc, path, value), path, null)
+    }
 }

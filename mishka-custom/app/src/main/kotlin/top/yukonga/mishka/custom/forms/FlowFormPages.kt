@@ -638,7 +638,9 @@ private fun ProxyDetailPage(host: FormHost, nav: FormNav, seqPath: YPath, index:
                 if (value == null) ops.add(BatchOp.Remove(path)) else ops.add(BatchOp.Set(path, value))
                 val on = if (type == "anytls") value != false else value == true
                 if (on) {
-                    if (!FormValues.hasValue(doc, base + "servername") && !FormValues.hasValue(doc, base + "sni")) {
+                    // 现值按展开视图判断：servername / sni 经锚点继承进来时不算缺失，
+                    // 不再往条目里写 example.com 把继承的真值盖掉
+                    if (!FormValues.hasEffective(doc, base + "servername") && !FormValues.hasEffective(doc, base + "sni")) {
                         ops.add(BatchOp.Set(base + "servername", "example.com"))
                     }
                 } else {
@@ -657,7 +659,8 @@ private fun ProxyDetailPage(host: FormHost, nav: FormNav, seqPath: YPath, index:
         ops.add(BatchOp.Set(base + "network", v))
         val keep = netOptsKey(v)
         for (k in NET_OPTS_KEYS) if (k != keep) ops.add(BatchOp.Remove(base + k))
-        if (v == "http" && !FormValues.hasValue(doc, base + "http-opts" + "method")) ops.add(BatchOp.Set(base + "http-opts" + "method", "GET"))
+        // method 经锚点继承时不算缺失：不再写本地 GET 顶掉继承的方法
+        if (v == "http" && !FormValues.hasEffective(doc, base + "http-opts" + "method")) ops.add(BatchOp.Set(base + "http-opts" + "method", "GET"))
         host.batch(ops, "传输层 network", reveal = base + "network")
     }
 
@@ -968,6 +971,11 @@ private fun exprItems(doc: YamlDoc, base: YPath): List<String> = FormValues.expr
  */
 private fun commitExprList(host: FormHost, doc: YamlDoc, base: YPath, list: List<String>): Boolean {
     val path = base + "override" + "override-expr"
+    // 表达式经 `<<: *锚点` 继承时优先写穿到锚点定义（对齐参考实现：共享的 override-expr
+    // 改一处、所有继承条目一起生效）；本地已有 override-expr 行则照旧走本地覆写
+    if (list.isNotEmpty() && AnchorInheritance.writeThroughTarget(doc, path) != null) {
+        return host.set(path, list, "override-expr")
+    }
     val ov = doc.get(base + "override")
     if (ov != null && ov.kind == YamlNode.Kind.MAP && ov.flow) {
         val text = AnchorInheritance.setFlowMapListField(doc, base + "override", "override-expr", list)
@@ -1004,8 +1012,11 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
     var hcPick by remember { mutableStateOf(false) }
     var exprEditor by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<DeleteFlow?>(null) }
-    val hcEnable = FormValues.readBool(doc, base + "health-check" + "enable")
-    val hcHas = FormValues.hasValue(doc, base + "health-check" + "enable")
+    // 启用状态按展开视图读：health-check 常整块经 `<<: *锚点` 继承进来，按本地行判断会误显示成
+    // 「默认（不覆写）」，随后补默认值时又把继承的 url / interval 整块盖掉
+    val hcEnable = FormValues.effectiveBool(doc, base + "health-check" + "enable")
+    val hcHas = FormValues.hasEffective(doc, base + "health-check" + "enable")
+    val hcLocal = FormValues.hasValue(doc, base + "health-check" + "enable")
 
     // 切类型：file 去掉远程字段；inline 预置 payload（参考实现 cleanProviderForSave / 新建逻辑）
     val intercept: FieldInterceptor = { field, path, value ->
@@ -1014,7 +1025,8 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
             ops.add(BatchOp.Set(path, value))
             if (value == "file") {
                 for (k in FILE_HIDDEN_KEYS["sub"].orEmpty()) ops.add(BatchOp.Remove(base + k))
-                if (!FormValues.hasValue(doc, base + "path")) ops.add(BatchOp.Set(base + "path", "./proxies/${safeFileStem(name, "provider")}.yaml"))
+                // path 经锚点继承时不算缺失：不再写默认路径顶掉继承值
+                if (!FormValues.hasEffective(doc, base + "path")) ops.add(BatchOp.Set(base + "path", "./proxies/${safeFileStem(name, "provider")}.yaml"))
             }
             if (value == "inline" && doc.get(base + "payload") == null) ops.add(BatchOp.Set(base + "payload", emptyList<Any?>()))
             host.batch(ops, field.label, reveal = path)
@@ -1064,13 +1076,14 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
                 }
                 "provider-health-enable" -> RowCard(
                     title = "启用健康检查",
-                    summary = (if (!hcHas) "默认（不覆写）" else if (hcEnable == true) "开" else "关") +
-                        " · 选「默认（不覆写）」将删除整个 health-check 配置块",
+                    summary = (if (!hcHas) "默认（不覆写）" else (if (hcEnable == true) "开" else "关") + (if (!hcLocal) "（继承）" else "")) +
+                        (if (hcHas && !hcLocal) " · 值来自锚点继承，改动会写穿到锚点定义"
+                        else " · 选「默认（不覆写）」将删除整个 health-check 配置块"),
                     onClick = { hcPick = true },
                     endActions = { TextButton(text = "选择", onClick = { hcPick = true }) },
                 )
                 "override-expr" -> {
-                    // 本地行 + 展开视图（锚点 `<<:` / 别名）一起读；继承来的值标「继承」，编辑即本地化
+                    // 本地行 + 展开视图（锚点 `<<:` / 别名）一起读；继承来的值标「继承」，编辑写穿到锚点定义
                     val (items, inherited) = FormValues.exprItems(doc, base)
                     RowCard(
                         title = when {
@@ -1080,7 +1093,7 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
                         },
                         summary = (if (items.isEmpty()) "" else items.joinToString(" · ").take(80) + " · ") +
                             "yq v4 风格子集，逐条顺序执行，作用于单个节点；支持路径赋值 = / |= / del() / select" +
-                            (if (inherited && items.isNotEmpty()) "；当前值来自锚点继承，编辑后写入本条目" else ""),
+                            (if (inherited && items.isNotEmpty()) "；当前值来自锚点继承，编辑将写穿到锚点定义（所有继承它的条目一起生效）" else ""),
                         onClick = { exprEditor = true },
                         endActions = { TextButton(text = "编辑", onClick = { exprEditor = true }) },
                     )
@@ -1120,18 +1133,24 @@ private fun ProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
             onPick = { v ->
                 hcPick = false
                 if (v == null) {
-                    if (doc.get(base + "health-check") == null) showToast("health-check 本来就没有设置")
-                    else host.clear(base + "health-check", "健康检查")
+                    when {
+                        doc.get(base + "health-check") != null -> host.clear(base + "health-check", "健康检查")
+                        hcHas -> showToast("health-check 来自锚点继承，本地没有可删的块：请在下方「锚点与继承」里解除继承后再选「默认（不覆写）」", long = true)
+                        else -> showToast("health-check 本来就没有设置")
+                    }
                 } else {
                     val ops = ArrayList<BatchOp>()
-                    ops.add(BatchOp.Set(base + "health-check" + "enable", v))
+                    // 生效值已经是目标值就不写：不给继承块凭空物化一份本地副本
+                    if (hcEnable != v) ops.add(BatchOp.Set(base + "health-check" + "enable", v))
                     if (v) {
                         for ((k, dv) in HC_DEFAULTS) {
-                            val cur = FormValues.readRaw(doc, base + "health-check" + k)
+                            // 现值按展开视图读：继承来的 url / interval 不算「缺失」，绝不拿官方默认值盖掉锚点里的配置
+                            val cur = FormValues.effectiveText(doc, base + "health-check" + k)
                             if (cur.isNullOrEmpty()) ops.add(BatchOp.Set(base + "health-check" + k, dv))
                         }
                     }
-                    host.batch(ops, "启用健康检查", reveal = base + "health-check")
+                    if (ops.isEmpty()) showToast("健康检查没有变化（当前${if (hcHas && !hcLocal) "继承值" else "值"}已生效）")
+                    else host.batch(ops, "启用健康检查", reveal = base + "health-check")
                 }
             },
         )
@@ -1915,8 +1934,9 @@ private fun RuleProviderDetailPage(host: FormHost, nav: FormNav, name: String) {
             ops.add(BatchOp.Set(path, value))
             if (value == "file") {
                 for (k in FILE_HIDDEN_KEYS["ep"].orEmpty()) ops.add(BatchOp.Remove(base + k))
-                if (!FormValues.hasValue(doc, base + "path")) {
-                    ops.add(BatchOp.Set(base + "path", "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(FormValues.readRaw(doc, base + "format"))}"))
+                if (!FormValues.hasEffective(doc, base + "path")) {
+                    // format / path 都可能经 `<<: *锚点` 继承：按展开视图判断缺失，扩展名用生效的 format
+                    ops.add(BatchOp.Set(base + "path", "./rules/${safeFileStem(name, "ruleset")}.${ruleProviderExt(format)}"))
                 }
             }
             if (value == "inline" && doc.get(base + "payload") == null) ops.add(BatchOp.Set(base + "payload", emptyList<Any?>()))
