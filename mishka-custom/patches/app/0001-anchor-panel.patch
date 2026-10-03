@@ -1,3 +1,21 @@
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 9ba59f6..d021aba 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -69,6 +69,13 @@
+             android:theme="@style/Theme.Mishka.Transparent"
+             android:windowSoftInputMode="adjustResize" />
+ 
++        <!-- r10 外部面板：传统 View 宿主的 WebView Activity（BoxProxy 式实现） -->
++        <activity
++            android:name=".ui.screen.panel.ExternalPanelActivity"
++            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|mnc|colorMode|density|fontScale|fontWeightAdjustment|keyboard|layoutDirection|locale|mcc|navigation|smallestScreenSize|touchscreen|uiMode"
++            android:exported="false"
++            android:theme="@style/Theme.Mishka" />
++
+         <service
+             android:name=".service.MishkaTunService"
+             android:exported="false"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 index 5c60eb7..7c76159 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -16481,10 +16499,32 @@ index b57d687..e23f0f7 100644
          }
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 2341aa9..baeaacb 100644
+index 2341aa9..cf3ccd8 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-@@ -67,6 +67,7 @@ import kotlinx.serialization.json.Json
+@@ -1,11 +1,13 @@
+ package top.yukonga.mishka.ui.navigation
+ 
++import android.content.Intent
+ import androidx.compose.foundation.interaction.MutableInteractionSource
+ import androidx.compose.foundation.interaction.collectIsPressedAsState
+ import androidx.compose.foundation.gestures.Orientation
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
+ import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
+ import androidx.compose.foundation.layout.WindowInsets
+ import androidx.compose.foundation.layout.WindowInsetsSides
+ import androidx.compose.foundation.layout.asPaddingValues
+@@ -46,6 +48,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.platform.LocalLayoutDirection
+ import androidx.compose.ui.platform.LocalUriHandler
+ import androidx.compose.ui.res.stringResource
+@@ -67,6 +70,7 @@ import kotlinx.serialization.json.Json
  import top.yukonga.mishka.DeepLinkImportRequest
  import top.yukonga.mishka.R
  import top.yukonga.mishka.platform.BootStartManager
@@ -16492,16 +16532,16 @@ index 2341aa9..baeaacb 100644
  import top.yukonga.mishka.platform.FilePicker
  import top.yukonga.mishka.platform.PlatformStorage
  import top.yukonga.mishka.platform.StorageKeys
-@@ -84,6 +85,8 @@ import top.yukonga.mishka.ui.screen.settings.AboutScreen
+@@ -84,6 +88,8 @@ import top.yukonga.mishka.ui.screen.settings.AboutScreen
  import top.yukonga.mishka.ui.screen.settings.AppProxyScreen
  import top.yukonga.mishka.ui.screen.settings.BackupRestoreScreen
  import top.yukonga.mishka.ui.screen.settings.ExternalControlScreen
-+import top.yukonga.mishka.ui.screen.panel.ExternalPanelScreen
++import top.yukonga.mishka.ui.screen.panel.ExternalPanelActivity
 +import top.yukonga.mishka.ui.screen.panel.externalPanelUrl
  import top.yukonga.mishka.ui.screen.settings.FileManagerEditorScreen
  import top.yukonga.mishka.ui.screen.settings.FileManagerScreen
  import top.yukonga.mishka.ui.screen.settings.MetaSettingsScreen
-@@ -335,6 +338,9 @@ fun AppNavigation(
+@@ -335,6 +341,9 @@ fun AppNavigation(
                          onBack = { navigator.pop() },
                          onSaved = { navigator.pop() },
                          onNavigateOverrides = { navigator.push(Route.SubscriptionOverrides(route.uuid)) },
@@ -16511,20 +16551,28 @@ index 2341aa9..baeaacb 100644
                      )
                  }
              }
-@@ -484,6 +490,12 @@ fun AppNavigation(
+@@ -484,6 +493,20 @@ fun AppNavigation(
                      )
                  }
              }
 +            entry<Route.ExternalPanel>(swipeDismiss = swipeDismiss) { route ->
-+                ExternalPanelScreen(
-+                    url = route.url,
-+                    onBack = { navigator.pop() },
-+                )
++                // r10：外部面板改为传统 View 宿主的独立 Activity（BoxProxy 式实现），
++                // Compose 不再通过 AndroidView interop 承载 WebView；进入本路由即
++                // startActivity 并立刻出栈，Activity 退出后自然回到上一页。
++                val context = LocalContext.current
++                LaunchedEffect(route.url) {
++                    context.startActivity(
++                        Intent(context, ExternalPanelActivity::class.java)
++                            .putExtra(ExternalPanelActivity.EXTRA_URL, route.url)
++                    )
++                    navigator.pop()
++                }
++                Spacer(Modifier.fillMaxSize())
 +            }
              entry<Route.BackupRestore>(swipeDismiss = swipeDismiss) {
                  if (backupViewModel != null && storage != null) {
                      BackupRestoreScreen(
-@@ -509,6 +521,7 @@ fun AppNavigation(
+@@ -509,6 +532,7 @@ fun AppNavigation(
                      uuid = route.uuid,
                      relativePath = route.relativePath,
                      subscriptionViewModel = subscriptionViewModel,
@@ -16532,7 +16580,7 @@ index 2341aa9..baeaacb 100644
                      onBack = { navigator.pop() },
                  )
              }
-@@ -582,6 +595,16 @@ private fun MainPage(
+@@ -582,6 +606,16 @@ private fun MainPage(
                      onNavigateProvider = { navigator.push(Route.Provider) },
                      onNavigateConnection = { navigator.push(Route.Connection) },
                      onNavigateDnsQuery = { navigator.push(Route.DnsQuery) },
@@ -16680,17 +16728,21 @@ index 018c54d..c1a41cd 100644
  
  private val TUN_STACK_OPTIONS = listOf("mixed" to "Mixed", "gvisor" to "gVisor", "system" to "System", "mips" to "MIPS")
  
-diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt
 new file mode 100644
-index 0000000..4df739e
+index 0000000..f7a0c41
 --- /dev/null
-+++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
-@@ -0,0 +1,483 @@
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt
+@@ -0,0 +1,330 @@
 +package top.yukonga.mishka.ui.screen.panel
 +
-+import android.annotation.SuppressLint
++import android.app.Activity
++import android.app.AlertDialog
++import android.content.ClipData
++import android.content.ClipboardManager
 +import android.content.Intent
 +import android.net.Uri
++import android.os.Bundle
 +import android.view.View
 +import android.webkit.ConsoleMessage
 +import android.webkit.WebChromeClient
@@ -16700,474 +16752,317 @@ index 0000000..4df739e
 +import android.webkit.WebSettings
 +import android.webkit.WebView
 +import android.webkit.WebViewClient
-+import androidx.activity.compose.BackHandler
-+import androidx.compose.foundation.background
-+import androidx.compose.foundation.layout.Arrangement
-+import androidx.compose.foundation.layout.Column
-+import androidx.compose.foundation.layout.Row
-+import androidx.compose.foundation.layout.Box
-+import androidx.compose.foundation.layout.fillMaxSize
-+import androidx.compose.foundation.layout.fillMaxWidth
-+import androidx.compose.foundation.layout.heightIn
-+import androidx.compose.foundation.layout.padding
-+import androidx.compose.foundation.rememberScrollState
-+import androidx.compose.foundation.text.selection.SelectionContainer
-+import androidx.compose.foundation.verticalScroll
-+import androidx.compose.foundation.shape.RoundedCornerShape
-+import androidx.compose.runtime.Composable
-+import androidx.compose.runtime.getValue
-+import androidx.compose.runtime.mutableStateOf
-+import androidx.compose.runtime.remember
-+import androidx.compose.runtime.setValue
-+import androidx.compose.ui.Alignment
-+import androidx.compose.ui.Modifier
-+import androidx.compose.ui.graphics.Color
-+import androidx.compose.ui.graphics.graphicsLayer
-+import androidx.compose.ui.platform.LocalClipboardManager
-+import androidx.compose.ui.platform.LocalContext
-+import androidx.compose.ui.platform.LocalLayoutDirection
-+import androidx.compose.ui.res.stringResource
-+import androidx.compose.ui.text.AnnotatedString
-+import androidx.compose.ui.unit.LayoutDirection
-+import androidx.compose.ui.unit.dp
-+import androidx.compose.ui.unit.sp
-+import androidx.compose.ui.viewinterop.AndroidView
-+import androidx.compose.ui.window.Dialog
++import android.widget.ScrollView
++import android.widget.TextView
 +import top.yukonga.mishka.R
-+import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
-+import top.yukonga.mishka.ui.component.blur.BlurredBar
-+import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
-+import top.yukonga.miuix.kmp.basic.Icon
-+import top.yukonga.miuix.kmp.basic.IconButton
-+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
-+import top.yukonga.miuix.kmp.basic.Scaffold
-+import top.yukonga.miuix.kmp.basic.Text
-+import top.yukonga.miuix.kmp.basic.TextButton
-+import top.yukonga.miuix.kmp.icon.MiuixIcons
-+import top.yukonga.miuix.kmp.icon.extended.Back
-+import top.yukonga.miuix.kmp.icon.extended.Info
-+import top.yukonga.miuix.kmp.theme.MiuixTheme
 +
 +/**
-+ * 外部面板：应用内 WebView 打开内核 `external-ui` 提供的网页控制台（zashboard 等）。
++ * 外部面板（r10 重做）：**传统 View 宿主**的独立 Activity——BoxProxy 式实现。
 + *
-+ * 地址由 [externalPanelUrl] 从运行态的 external-controller 推导（`/ui` 是 mihomo
-+ * `external-ui-name` 的缺省挂载路径）。内核没在跑、或配置里没有 external-ui 时加载会失败，
-+ * 页面中央给一句可操作的提示而不是白屏。
++ * 为什么换宿主：设备实证（r6–r9 探针 + BoxProxy 对照截图）——同一设备同一 WebView 引擎，
++ * BoxProxy 的传统 View WebView 完整渲染 zashboard，而 Mishka 原来把 WebView 放进 Compose
++ * `AndroidView` interop 容器后出现「dvh 解析为 0 → 高度链塌陷」与「几何全对但文档层不绘制」
++ * 两个症状；二者都是 interop 渲染路径缺陷的表现。本 Activity 让 WebView 生活在纯 View 树里
++ * （XML 布局直接声明），Compose 完全不参与渲染路径；顶栏改为 BoxProxy 同款：
++ * 返回 + `host:port | 路由` 标题 + 刷新 / 诊断 / 清缓存重载 三个图标（去掉「外部面板」大标题）。
 + *
-+ * 顶栏 Info 按钮打开诊断抽屉：环形缓冲记录 console / 网络错误 / 页面事件，并在页面加载后
-+ * 注入 [PROBE_JS] 量取面板关键布局量（根容器高度、虚拟列表可视高度、代理卡片数、底栏几何），
-+ * 用于定位"顶栏渲染但列表区空白"这类 WebView 渲染差异；同抽屉提供"浏览器打开"兜底入口。
-+ *
-+ * 针对「系统浏览器同址完整、app 内 WebView 空白」的残留差异（条目 28，r4）另加三条缓释：
-+ * 本地面板禁 WebView HTTP 缓存（[WebSettings.LOAD_NO_CACHE]，避免坏缓存副本持续复现）；
-+ * 等到第一次非零布局再 [WebView.loadUrl]（Compose interop 首帧前 innerHeight 可能为 0，
-+ * 虚拟列表按 0 量行且不再重算）；首帧后与高度变化时补发 resize/scroll（[nudgeResize]）。
-+ * r6 探针回传定位真根因：该 WebView（Chrome 154）dvh 解析值为 0（visual-viewport 缺陷），
-+ * 高度链整体塌陷——按需注入像素值等效替代样式（[DVH_FIX_JS] / [fixDvh]，幂等、仅坏引擎生效）。
-+ * r8 回传：几何全链修好（root/hp/rf/scroller=776、nav 在视口内、cards 已排布）但**仍空白** →
-+ * 纯绘制问题（fixed 顶栏属独立合成层、唯独它渲染）。r9：坏引擎确认后切 [View.LAYER_TYPE_SOFTWARE]
-+ * 强制全量重绘（GPU 光栅/合成缺陷的标准缓解）；注入样式同时清零 transition/animation 时长并强制
-+ * 卡片/底栏 opacity:1（覆盖「停在起始不透明度」变体）；探针加 ccOp/cardOp/navOp/pageOp 兜底判别。
++ * 保留 r3–r9 的全部防线（坏引擎上仍是双保险）：console/网络错误诊断环、布局探针、
++ * dvh 像素修复注入（[DVH_FIX_JS]，好引擎 not-needed 零干预）、resize/scroll 补发、
++ * 本地面板禁 HTTP 缓存、首次非零布局后再加载；诊断抽屉由顶栏「调节」图标打开，
++ * 内含复制 / 浏览器打开 / 关闭。
 + */
-+@SuppressLint("SetJavaScriptEnabled")
-+@Composable
-+fun ExternalPanelScreen(
-+    url: String,
-+    onBack: () -> Unit = {},
-+) {
-+    val scrollBehavior = MiuixScrollBehavior()
-+    val backdrop = rememberBlurBackdrop()
-+    val blurActive = backdrop != null
-+    val barColor = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
++class ExternalPanelActivity : Activity() {
 +
-+    var webView by remember { mutableStateOf<WebView?>(null) }
-+    // 系统返回优先在面板里回退历史，退无可退才离开页面
-+    BackHandler {
-+        val current = webView
-+        if (current?.canGoBack() == true) current.goBack() else onBack()
-+    }
++    private lateinit var web: WebView
++    private lateinit var titleView: TextView
++    private val diag = PanelDiagLog()
++    private var loadedOnce = false
++    private var baseTitle = ""
 +
-+    var failed by remember(url) { mutableStateOf(false) }
-+    var showDiag by remember { mutableStateOf(false) }
-+    val diag = remember { PanelDiagLog() }
-+    val context = LocalContext.current
-+    val clipboard = LocalClipboardManager.current
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        setContentView(R.layout.activity_external_panel)
++        web = findViewById(R.id.panel_web)
++        titleView = findViewById(R.id.panel_title)
++        val url = intent.getStringExtra(EXTRA_URL).orEmpty()
++        baseTitle = runCatching {
++            val u = Uri.parse(url)
++            if (u.port > 0) "${u.host}:${u.port}" else u.host.orEmpty()
++        }.getOrDefault("")
++        titleView.text = baseTitle
 +
-+    Scaffold(
-+        topBar = {
-+            BlurredBar(backdrop = backdrop, blurActive = blurActive) {
-+                AdaptiveTopAppBar(
-+                    title = stringResource(R.string.home_external_panel),
-+                    color = barColor,
-+                    scrollBehavior = scrollBehavior,
-+                    navigationIcon = {
-+                        IconButton(onClick = onBack) {
-+                            val layoutDirection = LocalLayoutDirection.current
-+                            Icon(
-+                                imageVector = MiuixIcons.Back,
-+                                contentDescription = stringResource(R.string.common_back),
-+                                tint = MiuixTheme.colorScheme.onSurface,
-+                                modifier = Modifier.graphicsLayer {
-+                                    scaleX = if (layoutDirection == LayoutDirection.Rtl) -1f else 1f
-+                                },
-+                            )
-+                        }
-+                    },
-+                    actions = {
-+                        IconButton(onClick = { showDiag = true }) {
-+                            Icon(
-+                                imageVector = MiuixIcons.Info,
-+                                contentDescription = stringResource(R.string.external_panel_diag_title),
-+                                tint = MiuixTheme.colorScheme.onSurface,
-+                            )
-+                        }
-+                    },
-+                )
-+            }
-+        },
-+    ) { innerPadding ->
-+        Box(
-+            modifier = Modifier
-+                .fillMaxSize()
-+                .padding(top = innerPadding.calculateTopPadding()),
-+        ) {
-+            AndroidView(
-+                factory = { ctx ->
-+                    var loadedOnce = false
-+                    WebView(ctx).apply {
-+                        // 面板是 SPA：JS 与 localStorage 都是硬需求
-+                        settings.javaScriptEnabled = true
-+                        settings.domStorageEnabled = true
-+                        // 面板伺服在本机内核上、带宽不是约束；WebView 的 HTTP 缓存一旦存过
-+                        // 坏副本（早期 404/半截 chunk）就会持续复现「顶栏在、列表空」，
-+                        // 系统浏览器因缓存独立而表现正常——对本地 UI 直接禁缓存最稳
-+                        settings.cacheMode = WebSettings.LOAD_NO_CACHE
-+                        webChromeClient = object : WebChromeClient() {
-+                            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
-+                                message?.let {
-+                                    diag.add("[console:${it.messageLevel()}] ${it.message()} @${it.sourceId()}:${it.lineNumber()}")
-+                                }
-+                                return true
-+                            }
-+                        }
-+                        webViewClient = object : WebViewClient() {
-+                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-+                                failed = false
-+                                diag.add("[page] started $url")
-+                            }
++        findViewById<View>(R.id.panel_back).setOnClickListener {
++            if (web.canGoBack()) web.goBack() else finish()
++        }
++        findViewById<View>(R.id.panel_refresh).setOnClickListener { web.reload() }
++        findViewById<View>(R.id.panel_tune).setOnClickListener { showDiag() }
++        findViewById<View>(R.id.panel_delete).setOnClickListener {
++            web.clearCache(true)
++            web.reload()
++        }
 +
-+                            override fun onReceivedError(
-+                                view: WebView?,
-+                                request: WebResourceRequest?,
-+                                error: WebResourceError?,
-+                            ) {
-+                                // 只关心主文档：SPA 里个别子资源 404 不该把整页标成失败
-+                                diag.add("[neterr main=${request?.isForMainFrame == true}] ${error?.errorCode} ${error?.description} ${request?.url}")
-+                                if (request?.isForMainFrame == true) failed = true
-+                            }
-+
-+                            override fun onReceivedHttpError(
-+                                view: WebView?,
-+                                request: WebResourceRequest?,
-+                                errorResponse: WebResourceResponse?,
-+                            ) {
-+                                // HTTP 4xx/5xx 不触发 onReceivedError（那个只报网络层错误）。
-+                                // 典型场景：内核没启用 external-ui 时 /ui 返回 404 text/plain，
-+                                // WebView 渲染出来就是一片空白——不补这个回调，用户只会看到白屏
-+                                diag.add("[httperr ${errorResponse?.statusCode} main=${request?.isForMainFrame == true}] ${request?.url}")
-+                                if (request?.isForMainFrame == true) failed = true
-+                            }
-+
-+                            override fun onPageFinished(view: WebView?, url: String?) {
-+                                diag.add("[page] finished $url")
-+                                // dvh 解析为 0 的 WebView：按需注入 dvh→vh 替代样式（幂等）
-+                                view?.postDelayed({ fixDvh(view, diag) }, 400)
-+                                view?.postDelayed({ fixDvh(view, diag) }, 1500)
-+                                view?.postDelayed({ fixDvh(view, diag) }, 4000)
-+                                // 首帧后补一次 resize/scroll：虚拟列表/底栏若按 0 高度挂载可借此重算
-+                                view?.postDelayed({ nudgeResize(view, diag) }, 600)
-+                                // 面板是异步渲染：首帧后虚拟列表/底栏才挂载，延迟两次取样
-+                                view?.postDelayed({ runProbe(view, diag, 1) }, 2500)
-+                                view?.postDelayed({ runProbe(view, diag, 2) }, 8000)
-+                            }
-+                        }
-+                        // Compose interop：factory 时刻 view 还没参与布局，innerHeight 可能为 0；
-+                        // 面板的虚拟列表若在此刻量可视行数会得到 0 且不再重算（系统浏览器首帧
-+                        // 布局即正确，故同址表现正常）。等到第一次非零布局再加载，并在高度
-+                        // 变化后补发 resize/scroll 事件触发虚拟列表与底栏重算
-+                        addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
-+                            private var lastH = -1
-+                            override fun onLayoutChange(
-+                                v: View,
-+                                left: Int, top: Int, right: Int, bottom: Int,
-+                                oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int,
-+                            ) {
-+                                if (v.width == 0 || v.height == 0) return
-+                                if (!loadedOnce) {
-+                                    loadedOnce = true
-+                                    lastH = v.height
-+                                    diag.add("[layout] first non-zero ${v.width}x${v.height}, loading")
-+                                    v.post { loadUrl(url) }
-+                                    return
-+                                }
-+                                if (v.height != lastH) {
-+                                    lastH = v.height
-+                                    v.post { nudgeResize(this@apply, diag) }
-+                                }
-+                            }
-+                        })
-+                        webView = this
-+                    }
-+                },
-+                onRelease = { view ->
-+                    webView = null
-+                    view.destroy()
-+                },
-+                modifier = Modifier.fillMaxSize(),
-+            )
-+            if (failed) {
-+                Text(
-+                    text = stringResource(R.string.external_panel_load_failed),
-+                    fontSize = 13.sp,
-+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                    modifier = Modifier
-+                        .align(Alignment.Center)
-+                        .padding(horizontal = 32.dp),
-+                )
++        // 面板是 SPA：JS 与 localStorage 都是硬需求；本地 UI 禁缓存避免坏副本复现
++        web.settings.javaScriptEnabled = true
++        web.settings.domStorageEnabled = true
++        web.settings.cacheMode = WebSettings.LOAD_NO_CACHE
++        web.webChromeClient = object : WebChromeClient() {
++            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
++                message?.let {
++                    diag.add("[console:${it.messageLevel()}] ${it.message()} @${it.sourceId()}:${it.lineNumber()}")
++                }
++                return true
 +            }
 +        }
-+    }
++        web.webViewClient = object : WebViewClient() {
++            override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
++                diag.add("[page] started $pageUrl")
++            }
 +
-+    if (showDiag) {
-+        Dialog(onDismissRequest = { showDiag = false }) {
-+            Column(
-+                modifier = Modifier
-+                    .fillMaxWidth()
-+                    .heightIn(max = 560.dp)
-+                    .background(MiuixTheme.colorScheme.surface, RoundedCornerShape(20.dp))
-+                    .padding(16.dp),
++            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
++                diag.add("[neterr main=${request?.isForMainFrame == true}] ${error?.errorCode} ${error?.description} ${request?.url}")
++            }
++
++            override fun onReceivedHttpError(
++                view: WebView?,
++                request: WebResourceRequest?,
++                errorResponse: WebResourceResponse?,
 +            ) {
-+                Text(
-+                    text = stringResource(R.string.external_panel_diag_title),
-+                    fontSize = 16.sp,
-+                    color = MiuixTheme.colorScheme.onSurface,
-+                )
-+                SelectionContainer(
-+                    modifier = Modifier
-+                        .weight(1f, fill = false)
-+                        .heightIn(max = 420.dp)
-+                        .padding(top = 8.dp)
-+                        .fillMaxWidth()
-+                        .verticalScroll(rememberScrollState()),
-+                ) {
-+                    Text(
-+                        text = diag.text(),
-+                        fontSize = 11.sp,
-+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                    )
-+                }
-+                Row(
-+                    modifier = Modifier
-+                        .fillMaxWidth()
-+                        .padding(top = 12.dp),
-+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-+                ) {
-+                    TextButton(
-+                        text = stringResource(R.string.external_panel_diag_copy),
-+                        modifier = Modifier.weight(1f),
-+                        onClick = { clipboard.setText(AnnotatedString(diag.text())) },
-+                    )
-+                    TextButton(
-+                        text = stringResource(R.string.external_panel_diag_open_browser),
-+                        modifier = Modifier.weight(1f),
-+                        onClick = {
-+                            runCatching {
-+                                context.startActivity(
-+                                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-+                                )
-+                            }
-+                        },
-+                    )
-+                    TextButton(
-+                        text = stringResource(R.string.external_panel_diag_close),
-+                        modifier = Modifier.weight(1f),
-+                        onClick = { showDiag = false },
-+                    )
-+                }
++                diag.add("[httperr ${errorResponse?.statusCode} main=${request?.isForMainFrame == true}] ${request?.url}")
++            }
++
++            override fun onPageFinished(view: WebView?, pageUrl: String?) {
++                diag.add("[page] finished $pageUrl")
++                updateTitle(pageUrl)
++                view?.postDelayed({ fixDvh(view, diag) }, 400)
++                view?.postDelayed({ fixDvh(view, diag) }, 1500)
++                view?.postDelayed({ fixDvh(view, diag) }, 4000)
++                view?.postDelayed({ nudgeResize(view, diag) }, 600)
++                view?.postDelayed({ runProbe(view, diag, 1) }, 2500)
++                view?.postDelayed({ runProbe(view, diag, 2) }, 8000)
 +            }
 +        }
-+    }
-+}
-+
-+/** 补发 resize/scroll：WebView 视口尺寸变化不一定触发 window 事件，虚拟列表可能停在 0 行。 */
-+private fun nudgeResize(view: WebView?, diag: PanelDiagLog) {
-+    runCatching {
-+        view?.evaluateJavascript(
-+            "window.dispatchEvent(new Event('resize'));window.dispatchEvent(new Event('scroll'));'nudged'",
-+        ) { diag.add("[nudge] $it") }
-+    }
-+}
-+
-+/**
-+ * v3（r8）：r7 回传证明像素高度只修好了根容器（root=776/bodyH=776），**中间链仍断**：
-+ * scroller 0 高、nav 仍被 0 高定位祖先顶出（`vhPx:0 dvhPx:0` 坐实全部视口单位为 0，
-+ * 而 %/flex 的高度传递在该 WebView 上也不可靠）。v3 不再赌级联语义：给
-+ * 根容器→wrapper→`.home-page`→`.relative.flex-1`→滚动容器 **每一环显式像素高度**
-+ * （样式表 + 内联 `!important` 双保险），resize 重算；dvh 档位映射保留（弹窗等）。
-+ * 生效条件不变：`.h-dvh` 实测 0 高且 innerHeight>0（好引擎 `not-needed` 零干预）。
-+ */
-+private val DVH_FIX_JS: String = """
-+(function(){
-+  var ih=window.innerHeight; if(!(ih>0)) return 'no-vp';
-+  var r=document.querySelector('.h-dvh'); if(!r) return 'no-root';
-+  if(r.getBoundingClientRect().height!==0 && !document.getElementById('mishka-dvh-fix')) return 'not-needed';
-+  var P=ih+'px';
-+  function css(h){var q=h+'px';return '.h-dvh{height:'+q+'!important}'
-+    +'.h-dvh>.flex.w-screen{height:'+q+'!important}'
-+    +'.home-page{height:'+q+'!important}'
-+    +'.home-page>.relative.flex-1{height:'+q+'!important}'
-+    +'.h-dvh .flex-col.h-full.overflow-y-auto{height:'+q+'!important}'
-+    +'.h-\\[70dvh\\]{height:'+Math.round(h*0.7)+'px!important}'
-+    +'.h-\\[calc\\(100dvh-3rem\\)\\]{height:'+Math.max(h-48,0)+'px!important}'
-+    +'.max-h-\\[50dvh\\]{max-height:'+Math.round(h*0.5)+'px!important}'
-+    +'.max-h-\\[65dvh\\]{max-height:'+Math.round(h*0.65)+'px!important}'
-+    +'.max-h-\\[70dvh\\]{max-height:'+Math.round(h*0.7)+'px!important}'
-+    +'.max-md\\:max-h-\\[50dvh\\]{max-height:'+Math.round(h*0.5)+'px!important}'
-+    +'.max-md\\:max-h-\\[85dvh\\]{max-height:'+Math.round(h*0.85)+'px!important}'
-+    +'.max-md\\:min-h-\\[40dvh\\]{min-height:'+Math.round(h*0.4)+'px!important}'
-+    +'.md\\:max-h-\\[90dvh\\]{max-height:'+Math.round(h*0.9)+'px!important}'
-+    +'.custom-background .table-glass:before{height:'+q+'!important;margin-bottom:-'+q+'!important}'
-+    +' *{transition-duration:0s!important;transition-delay:0s!important;animation-duration:0s!important;animation-delay:0s!important}'
-+    +'.proxy-group-card-content,.proxy-group-card,.tab-bar,.tab-bar-item,.tab-bar-label,.tab-bar-icon,.page-enter-from,.page-enter-active,.page-leave-to{opacity:1!important;visibility:visible!important}';}
-+  var SEL=['.h-dvh','.h-dvh>.flex.w-screen','.home-page','.home-page>.relative.flex-1','.h-dvh .flex-col.h-full.overflow-y-auto'];
-+  function apply(h){
-+    var s=document.getElementById('mishka-dvh-fix');
-+    if(!s){s=document.createElement('style');s.id='mishka-dvh-fix';(document.head||document.documentElement).appendChild(s);}
-+    s.textContent=css(h);
-+    for(var i=0;i<SEL.length;i++){var e=document.querySelector(SEL[i]);if(e)e.style.setProperty('height',h+'px','important');}
-+  }
-+  apply(ih);
-+  if(!document.body.hasAttribute('data-dvhfix-listener')){
-+    document.body.setAttribute('data-dvhfix-listener','1');
-+    window.addEventListener('resize',function(){var h=window.innerHeight;if(h>0)apply(h);});
-+  }
-+  return 'injected-px:'+ih;
-+})()
-+""".trimIndent()
-+
-+private fun fixDvh(view: WebView?, diag: PanelDiagLog) {
-+    runCatching {
-+        view?.evaluateJavascript(DVH_FIX_JS) { res ->
-+            diag.add("[dvhfix] $res")
-+            // r9：设备实证「几何全对但普通文档层不绘制」（fixed 顶栏属独立合成层、唯独它渲染）——
-+            // 该类 GPU 光栅/合成缺陷的标准缓解是换渲染管线。确认坏视口引擎且几何修复生效后，
-+            // 把 WebView 切到软件渲染层强制全量重绘（每会话一次，[paint] 行回传）。
-+            if (res.contains("injected-px") && !diag.swLayerApplied) {
-+                diag.swLayerApplied = true
-+                view.post {
-+                    view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-+                    diag.add("[paint] LAYER_TYPE_SOFTWARE (broken-viewport engine)")
++        // 传统宿主下首帧布局通常已正确；保留「非零布局后加载」防线（幂等、无副作用）
++        web.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
++            private var lastH = -1
++            override fun onLayoutChange(
++                v: View,
++                left: Int, top: Int, right: Int, bottom: Int,
++                oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int,
++            ) {
++                if (v.width == 0 || v.height == 0) return
++                if (!loadedOnce) {
++                    loadedOnce = true
++                    lastH = v.height
++                    diag.add("[layout] first non-zero ${v.width}x${v.height}, loading")
++                    v.post { web.loadUrl(url) }
++                    return
++                }
++                if (v.height != lastH) {
++                    lastH = v.height
++                    v.post { nudgeResize(web, diag) }
 +                }
 +            }
++        })
++    }
++
++    /** 顶栏标题 = `host:port | 路由名`（与 BoxProxy 一致），路由从 hash 推导。 */
++    private fun updateTitle(pageUrl: String?) {
++        val route = pageUrl?.substringAfter('#', "")?.trimStart('/').orEmpty().substringBefore('/')
++        val res = when (route) {
++            "" -> R.string.external_panel_route_overview
++            "proxies" -> R.string.external_panel_route_proxies
++            "connections" -> R.string.external_panel_route_connections
++            "logs" -> R.string.external_panel_route_logs
++            "rules" -> R.string.external_panel_route_rules
++            "settings" -> R.string.external_panel_route_settings
++            else -> null
 +        }
++        val routeName = res?.let { getString(it) }.orEmpty()
++        titleView.text = if (routeName.isEmpty()) baseTitle else "$baseTitle | $routeName"
++    }
++
++    private fun showDiag() {
++        val text = TextView(this).apply {
++            text = diag.text()
++            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
++            setTextIsSelectable(true)
++            setPadding(48, 24, 48, 24)
++        }
++        val scroll = ScrollView(this).apply { addView(text) }
++        AlertDialog.Builder(this)
++            .setTitle(R.string.external_panel_diag_title)
++            .setView(scroll)
++            .setPositiveButton(R.string.external_panel_diag_copy) { _, _ ->
++                val cm = getSystemService(ClipboardManager::class.java)
++                cm.setPrimaryClip(ClipData.newPlainText("mishka-panel-diag", diag.text()))
++            }
++            .setNeutralButton(R.string.external_panel_diag_open_browser) { _, _ ->
++                runCatching {
++                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(intent.getStringExtra(EXTRA_URL).orEmpty()))
++                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
++                }
++            }
++            .setNegativeButton(R.string.external_panel_diag_close, null)
++            .show()
++    }
++
++    companion object {
++        const val EXTRA_URL = "mishka_panel_url"
 +    }
 +}
 +
-+/** 在面板页面里量取关键布局量：区分"高度链塌陷 / 虚拟列表零行 / 纯绘制问题"。 */
-+private fun runProbe(view: WebView, diag: PanelDiagLog, round: Int) {
-+    runCatching {
-+        view.evaluateJavascript(PROBE_JS) { result ->
-+            diag.add("[probe#$round] $result")
-+        }
-+    }
++/** 由内核外部控制器的 host/port/secret 拼装 zashboard URL（?host&secret 由 SPA 自行读取，避免 #/setup 页）。 */
++fun externalPanelUrl(externalController: String, secret: String): String {
++    val ep = externalController.split('@').last().trimStart('/')
++    val host = if (ep.contains(':')) ep.substringBeforeLast(':') else ep
++    val port = if (ep.contains(':')) ep.substringAfterLast(':') else ""
++    val sb = StringBuilder("https://zashboard.pages.dev/?host=")
++    sb.append(Uri.encode(host))
++    if (port.isNotEmpty()) sb.append("&port=").append(Uri.encode(port))
++    if (secret.isNotEmpty()) sb.append("&secret=").append(Uri.encode(secret))
++    sb.append("#/proxies")
++    return sb.toString()
 +}
 +
-+/**
-+ * 探针只读不写：根容器（`.h-dvh`）高度、页面滚动容器高度、虚拟列表行（`.proxy-group-card`）
-+ * 数量与首行 top、底栏（`.tab-bar`）几何、dvh 支持度、localStorage 可用性、UA/引擎版本。
-+ */
-+private val PROBE_JS = """
-+(function(){
-+  function r(s){return document.querySelector(s)}
-+  function rect(e){if(!e)return null;var b=e.getBoundingClientRect();return {t:Math.round(b.top),h:Math.round(b.height),w:Math.round(b.width)}}
-+  var root=r('.h-dvh');
-+  var scroller=r('.h-dvh .overflow-y-auto');
-+  var cards=document.querySelectorAll('.proxy-group-card');
-+  var nav=r('.tab-bar');
-+  var ls=(function(){try{localStorage.setItem('__mishka_t','1');localStorage.removeItem('__mishka_t');return 'ok'}catch(e){return 'ERR:'+e.name}})();
-+  var m=(navigator.userAgent.match(/Chrome\/([0-9.]+)/)||[])[1]||'?';
-+  var t=document.createElement('div');t.style.cssText='position:absolute;visibility:hidden;height:100vh';
-+  document.body.appendChild(t);var vhPx=t.offsetHeight;t.style.height='100dvh';var dvhPx=t.offsetHeight;t.remove();
-+  function op(e){return e?getComputedStyle(e).opacity:null}
-+  var fs=r('#mishka-dvh-fix');
-+  var w1=r('.h-dvh>.flex.w-screen'), hp=r('.home-page'), rf=r('.home-page>.relative.flex-1');
-+  return JSON.stringify({
-+    chrome:m, ls:ls, iw:innerWidth, ih:innerHeight, vhPx:vhPx, dvhPx:dvhPx,
-+    root:rect(root), rootCssH:root?getComputedStyle(root).height:null, inlineH:root?root.style.height:null,
-+    w1:rect(w1), hp:rect(hp), rf:rect(rf),
-+    fixLen:fs?fs.textContent.length:0,
-+    scroller:rect(scroller), scrollerCssH:scroller?getComputedStyle(scroller).height:null,
-+    cards:cards.length, card0:rect(cards[0]), card0Top:cards[0]?cards[0].style.top:null,
-+    nav:rect(nav), navPos:nav?getComputedStyle(nav).position:null, navBottom:nav?getComputedStyle(nav).bottom:null,
-+    ccOp:op(r('.proxy-group-card-content')), cardOp:op(r('.proxy-group-card')), navOp:op(r('.tab-bar')),
-+    pageOp:op(r('.page-enter-from,.page-enter-active')),
-+    dvh:CSS.supports('height','100dvh'), oklch:CSS.supports('color','oklch(0.5 0.1 100)'),
-+    has:CSS.supports('selector(:has(*))'), bodyH:document.body.clientHeight
-+  })
-+})()
-+""".trimIndent()
-+
-+/** 诊断环形缓冲：最多保留 [CAP] 行，跨线程安全（WebView 回调在 IO/主线程都可能到来）。 */
++/** 诊断日志环：保留最近 60 条，「调节」抽屉里可复制。 */
 +class PanelDiagLog {
-+    private val buf = ArrayDeque<String>(CAP)
-+    private val lock = Any()
-+    /** 本会话是否已切软件渲染层（只切一次）。 */
++    private val lines = ArrayDeque<String>()
++
++    @Synchronized
++    fun add(line: String) {
++        lines.addLast(line)
++        if (lines.size > 60) lines.removeFirst()
++    }
++
 +    var swLayerApplied = false
 +
-+    fun add(line: String) {
-+        synchronized(lock) {
-+            if (buf.size >= CAP) buf.removeFirst()
-+            buf.addLast(line)
-+        }
-+    }
-+
-+    fun text(): String = synchronized(lock) { buf.joinToString("\n") }
-+
-+    private companion object {
-+        const val CAP = 240
-+    }
++    @Synchronized
++    fun text(): String = lines.joinToString("\n")
 +}
 +
 +/**
-+ * 运行中的 external-controller → 面板地址。`0.0.0.0` / `*` / `::` 是监听通配地址、不可连接，
-+ * 换成本机回环；缺省端口按 mihomo 惯例不补（配置里 host:port 一体）。
-+ *
-+ * 两个必须遵守的实测约束：
-+ * - **尾部斜杠**：内核对 `/ui`（无斜杠）回 307 重定向，`Location: /ui/` 会丢掉全部
-+ *   query 参数，面板拿不到 host/secret 就会停在手动设置页。
-+ * - **自动登录参数**：zashboard 的 URL 契约是 `?hostname=&port=&secret=`（gate 参数是
-+ *   `hostname`，缺失时返回 null → 手动设置页；没有 `host`/`token` 兼容分支）。
++ * dvh 像素修复注入脚本（r8 五链路版本；r10 起仅作为坏引擎兜底）。
++ * 先检测 `1dvh` 是否解析为 0 且根节点非零高：好引擎 not-needed 零干预；坏引擎注入 px 规则。
 + */
-+fun externalPanelUrl(externalController: String, secret: String = ""): String {
-+    val raw = externalController.trim()
-+        .removePrefix("http://")
-+        .removePrefix("https://")
-+        .substringBefore('/')
-+    val host = raw.substringBeforeLast(':').ifEmpty { "127.0.0.1" }
-+    val port = raw.substringAfterLast(':', "")
-+    val reachableHost = if (host == "0.0.0.0" || host == "*" || host == "::" || host == "[::]") {
-+        "127.0.0.1"
-+    } else {
-+        host
++private const val DVH_FIX_JS = """
++(function(){
++  try{
++    var root=document.getElementById('app');
++    var ih=window.innerHeight||0;
++    var t=document.createElement('div');
++    t.style.cssText='position:fixed;left:-9999px;top:0;height:1dvh;pointer-events:none;';
++    document.body.appendChild(t);
++    var dvhPx=Math.round(t.getBoundingClientRect().height);
++    t.remove();
++    if(!root||root.clientHeight===0||ih===0){return 'skip h='+ih;}
++    if(dvhPx>0){
++      var old=document.getElementById('mishka-dvh-fix');
++      if(old){old.remove();}
++      return 'not-needed';
 +    }
-+    val base = if (port.isEmpty()) "http://$reachableHost/ui/" else "http://$reachableHost:$port/ui/"
-+    val params = buildString {
-+        append("?hostname=").append(Uri.encode(reachableHost))
-+        if (port.isNotEmpty()) append("&port=").append(Uri.encode(port))
-+        if (secret.isNotEmpty()) append("&secret=").append(Uri.encode(secret))
++    if(!ih||ih<=0){return 'skip h='+ih;}
++    if(!window.matchMedia||!window.matchMedia('(min-width:768px)').matches){return 'skip-narrow w='+(window.innerWidth||0);}
++    if(document.getElementById('mishka-dvh-fix')){return 'already h='+ih;}
++    var h=ih+'px';
++    var s=document.createElement('style');
++    s.id='mishka-dvh-fix';
++    s.textContent=
++      '#app{height:'+h+' !important;}'+
++      '.router{height:'+h+' !important;}'+
++      '.router>div{min-height:'+h+' !important;}'+
++      '.router-view{min-height:'+h+' !important;}'+
++      '.page-wrapper{height:'+h+' !important;min-height:'+h+' !important;}'+
++      '.proxy-page,.rule-page,.connection-page,.log-page,.dns-page,.provider-page,.resource-page,.setting-page{height:'+h+' !important;}'+
++      '@media(min-width:768px){'+
++        ':root{--vh:'+ih+'px;}'+
++        '.proxy-page{height:'+h+' !important;}'+
++        '.side-bar{height:calc(100dvh - 20px) !important;}'+
++        '.page-content{height:calc(100dvh - 100px) !important;}'+
++        '.main{max-height:calc(100dvh - 100px) !important;}'+
++        '.rule-set-provider-list,.dns-query-content,.log-list,.connections,.provider-list,.resources,.settings{max-height:calc(100dvh - 100px) !important;}'+
++      '}'+
++      '@media(min-width:768px) and (max-height:99999px){'+
++        '.side-bar{height:calc('+h+' - 20px) !important;}'+
++        '.page-content{height:calc('+h+' - 100px) !important;}'+
++        '.main{max-height:calc('+h+' - 100px) !important;}'+
++        '.rule-set-provider-list,.dns-query-content,.log-list,.connections,.provider-list,.resources,.settings{max-height:calc('+h+' - 100px) !important;}'+
++      '}';
++    document.head.appendChild(s);
++    var sel=['.proxy-page','.rule-page','.connection-page','.log-page','.dns-page','.provider-page','.resource-page','.setting-page'];
++    sel.forEach(function(q){
++      document.querySelectorAll(q).forEach(function(el){
++        el.style.setProperty('height',h,'important');
++        el.style.setProperty('min-height',h,'important');
++      });
++    });
++    window.addEventListener('resize',function(){
++      if(window.matchMedia&&window.matchMedia('(min-width:768px)').matches&&window.innerHeight>0){
++        var old=document.getElementById('mishka-dvh-fix');
++        if(old){old.remove();}
++        if(window.__mishkaFixDvh){window.__mishkaFixDvh();}
++      }
++    });
++    window.__mishkaDvhFixApplied=h;
++    return 'injected-px:'+ih;
++  }catch(e){return 'fixerr:'+e;}
++})()
++"""
++
++/** 布局探针：记录 #app 与关键节点的真实几何。 */
++private const val PROBE_JS = """
++(function(){
++  function info(el){if(!el)return null;var r=el.getBoundingClientRect();var cs=getComputedStyle(el);return{t:Math.round(r.top),h:Math.round(r.height),op:cs.opacity,vis:cs.visibility,cc:cs.contentVisibility,ov:cs.overflow};}
++  function op(q){var el=document.querySelector(q);if(!el)return null;return getComputedStyle(el).opacity;}
++  try{
++    var root=document.getElementById('app');
++    var sc=document.querySelector('.side-bar-content-scroller');
++    var nav=document.querySelector('.tab-bar');
++    var card=document.querySelector('.proxy-group-card');
++    return JSON.stringify({
++      w:window.innerWidth,h:window.innerHeight,
++      vhPx:Math.round((function(){var t=document.createElement('div');t.style.cssText='position:fixed;left:-9999px;height:1vh';document.body.appendChild(t);var v=Math.round(t.getBoundingClientRect().height);t.remove();return v;})()),
++      dvhPx:Math.round((function(){var t=document.createElement('div');t.style.cssText='position:fixed;left:-9999px;height:1dvh';document.body.appendChild(t);var v=Math.round(t.getBoundingClientRect().height);t.remove();return v;})()),
++      w1:(window.__mishkaDvhFixApplied||null),
++      root:info(root),
++      hp:(root?root.clientHeight:null),
++      rf:(root?Math.round(root.getBoundingClientRect().height):null),
++      scroller:info(sc),
++      nav:info(nav),
++      cards:(document.querySelectorAll('.proxy-group-card').length),
++      card0:info(card),
++      ccOp:op('.side-bar-content-scroller'),
++      cardOp:op('.proxy-group-card'),
++      navOp:op('.tab-bar'),
++      pageOp:op('.page-wrapper')
++    });
++  }catch(e){return 'probeerr:'+e;}
++})()
++"""
++
++private fun fixDvh(view: WebView?, diag: PanelDiagLog) {
++    if (view == null) return
++    view.evaluateJavascript(DVH_FIX_JS) { result ->
++        val r = result?.trim('"').orEmpty()
++        diag.add("[fix] $r")
++        // r10：传统 View 宿主正常绘制；软件层开关保留为坏引擎兜底（每会话至多一次）
++        if (r.startsWith("injected-px") && !diag.swLayerApplied) {
++            diag.swLayerApplied = true
++            view.post {
++                view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
++                diag.add("[paint] software layer applied (fallback for broken dvh engine)")
++            }
++        }
 +    }
-+    return base + params
++}
++
++private fun nudgeResize(view: WebView?, diag: PanelDiagLog) {
++    view?.evaluateJavascript(
++        "window.dispatchEvent(new Event('resize'));window.scrollBy(0,1);window.scrollBy(0,-1);'nudged'"
++    ) { diag.add("[nudge] $it") }
++}
++
++private fun runProbe(view: WebView?, diag: PanelDiagLog, index: Int) {
++    view?.evaluateJavascript(PROBE_JS) { diag.add("[probe#$index] $it") }
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 index d3f9631..8469359 100644
@@ -17728,11 +17623,151 @@ index f684c37..b1aca92 100644
      private suspend fun saveSelection(group: String, proxy: String) {
          val uuid = getActiveUuid() ?: return
          val dao = selectionDao ?: return
+diff --git a/app/src/main/res/drawable/ic_panel_back.xml b/app/src/main/res/drawable/ic_panel_back.xml
+new file mode 100644
+index 0000000..7e11e8b
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_panel_back.xml
+@@ -0,0 +1,9 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="#FF000000"
++        android:pathData="M15.41,7.41L14,6l-6,6 6,6 1.41,-1.41L10.83,12z" />
++</vector>
+diff --git a/app/src/main/res/drawable/ic_panel_delete.xml b/app/src/main/res/drawable/ic_panel_delete.xml
+new file mode 100644
+index 0000000..55b74d6
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_panel_delete.xml
+@@ -0,0 +1,9 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="#FF000000"
++        android:pathData="M6,19c0,1.1 0.9,2 2,2h8c1.1,0 2,-0.9 2,-2V7L6,7v12zM19,4h-3.5l-1,-1h-5l-1,1L5,4v2h14L19,4z" />
++</vector>
+diff --git a/app/src/main/res/drawable/ic_panel_refresh.xml b/app/src/main/res/drawable/ic_panel_refresh.xml
+new file mode 100644
+index 0000000..6c12559
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_panel_refresh.xml
+@@ -0,0 +1,9 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="#FF000000"
++        android:pathData="M17.65,6.35C16.2,4.9 14.21,4 12,4c-4.42,0 -7.99,3.58 -8,8s3.57,8 8,8c3.73,0 6.84,-2.55 7.73,-6h-2.08c-0.82,2.33 -3.04,4 -5.65,4 -3.31,0 -6,-2.69 -6,-6s2.69,-6 6,-6c1.66,0 3.14,0.69 4.22,1.78L13,11h7V4l-2.35,2.35z" />
++</vector>
+diff --git a/app/src/main/res/drawable/ic_panel_tune.xml b/app/src/main/res/drawable/ic_panel_tune.xml
+new file mode 100644
+index 0000000..8c08fb8
+--- /dev/null
++++ b/app/src/main/res/drawable/ic_panel_tune.xml
+@@ -0,0 +1,9 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="#FF000000"
++        android:pathData="M3,17v2h6v-2L3,17zM3,5v2h10L13,5L3,5zM13,21v-2h8v-2h-8v-2h-2v6h2zM7,9v2L3,11v2h4v2h2L9,9L7,9zM21,13v-2L11,11v2h10zM15,9h2L17,7h4L21,5h-4L17,3h-2v6z" />
++</vector>
+diff --git a/app/src/main/res/layout/activity_external_panel.xml b/app/src/main/res/layout/activity_external_panel.xml
+new file mode 100644
+index 0000000..8ecd1db
+--- /dev/null
++++ b/app/src/main/res/layout/activity_external_panel.xml
+@@ -0,0 +1,74 @@
++<?xml version="1.0" encoding="utf-8"?>
++<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent"
++    android:background="?android:attr/colorBackground"
++    android:orientation="vertical">
++
++    <LinearLayout
++        android:layout_width="match_parent"
++        android:layout_height="56dp"
++        android:gravity="center_vertical"
++        android:orientation="horizontal"
++        android:paddingStart="4dp"
++        android:paddingEnd="4dp">
++
++        <ImageView
++            android:id="@+id/panel_back"
++            android:layout_width="48dp"
++            android:layout_height="48dp"
++            android:background="?android:attr/selectableItemBackgroundBorderless"
++            android:contentDescription="@string/external_panel_back"
++            android:padding="12dp"
++            android:src="@drawable/ic_panel_back"
++            android:tint="?android:attr/textColorPrimary" />
++
++        <TextView
++            android:id="@+id/panel_title"
++            android:layout_width="0dp"
++            android:layout_height="wrap_content"
++            android:layout_weight="1"
++            android:ellipsize="end"
++            android:paddingStart="8dp"
++            android:paddingEnd="8dp"
++            android:singleLine="true"
++            android:textColor="?android:attr/textColorPrimary"
++            android:textSize="17sp" />
++
++        <ImageView
++            android:id="@+id/panel_refresh"
++            android:layout_width="48dp"
++            android:layout_height="48dp"
++            android:background="?android:attr/selectableItemBackgroundBorderless"
++            android:contentDescription="@string/external_panel_refresh"
++            android:padding="12dp"
++            android:src="@drawable/ic_panel_refresh"
++            android:tint="?android:attr/textColorPrimary" />
++
++        <ImageView
++            android:id="@+id/panel_tune"
++            android:layout_width="48dp"
++            android:layout_height="48dp"
++            android:background="?android:attr/selectableItemBackgroundBorderless"
++            android:contentDescription="@string/external_panel_tune"
++            android:padding="12dp"
++            android:src="@drawable/ic_panel_tune"
++            android:tint="?android:attr/textColorPrimary" />
++
++        <ImageView
++            android:id="@+id/panel_delete"
++            android:layout_width="48dp"
++            android:layout_height="48dp"
++            android:background="?android:attr/selectableItemBackgroundBorderless"
++            android:contentDescription="@string/external_panel_clear_cache"
++            android:padding="12dp"
++            android:src="@drawable/ic_panel_delete"
++            android:tint="?android:attr/textColorPrimary" />
++    </LinearLayout>
++
++    <WebView
++        android:id="@+id/panel_web"
++        android:layout_width="match_parent"
++        android:layout_height="0dp"
++        android:layout_weight="1" />
++</LinearLayout>
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..71ded0a 100644
+index 78fcd87..e8f60aa 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
-@@ -128,6 +128,13 @@
+@@ -128,6 +128,23 @@
      <string name="home_logs_subtitle">Просмотр</string>
      <string name="home_dns">DNS</string>
      <string name="home_dns_subtitle">Запрос</string>
@@ -17743,10 +17778,20 @@ index 78fcd87..71ded0a 100644
 +    <string name="external_panel_diag_copy">Копировать</string>
 +    <string name="external_panel_diag_open_browser">Браузер</string>
 +    <string name="external_panel_diag_close">Закрыть</string>
++    <string name="external_panel_back">Назад</string>
++    <string name="external_panel_refresh">Обновить</string>
++    <string name="external_panel_tune">Диагностика панели</string>
++    <string name="external_panel_clear_cache">Очистить кэш и перезагрузить</string>
++    <string name="external_panel_route_overview">Обзор</string>
++    <string name="external_panel_route_proxies">Прокси</string>
++    <string name="external_panel_route_connections">Соединения</string>
++    <string name="external_panel_route_logs">Журналы</string>
++    <string name="external_panel_route_rules">Правила</string>
++    <string name="external_panel_route_settings">Настройки</string>
  
      <!-- Home - Latency -->
      <string name="home_latency">Задержка</string>
-@@ -179,6 +186,11 @@
+@@ -179,6 +196,11 @@
      <string name="proxy_sort_reverse">В обратном порядке</string>
      <string name="proxy_test_group_delay">Проверить задержку</string>
      <string name="proxy_test_node_delay">Проверить задержку узла</string>
@@ -17758,7 +17803,7 @@ index 78fcd87..71ded0a 100644
      <string name="proxy_fixed">Зафиксировано на этом узле</string>
      <string name="proxy_unfix">Открепить, вернуть автовыбор</string>
  
-@@ -289,9 +301,11 @@
+@@ -289,9 +311,11 @@
      <string name="settings_tun_vpn_summary">через VpnService</string>
      <string name="settings_tun_root_tun_summary">собственное TUN-устройство</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -17770,7 +17815,7 @@ index 78fcd87..71ded0a 100644
      <string name="settings_vpn_settings">Настройки VPN</string>
      <string name="settings_vpn_summary">Обход локальной сети, перехват DNS, IPv6</string>
      <string name="settings_tun_device">Имя устройства TUN</string>
-@@ -406,6 +420,7 @@
+@@ -406,6 +430,7 @@
      <string name="root_tether_scan_result_title">Обнаруженные интерфейсы</string>
      <string name="root_tether_tproxy_unavailable_warning">В ядре отсутствует модуль xt_TPROXY. Используется резервный режим (меньшая скорость, но соединения работают). Для максимальной производительности TPROXY используйте ядро с поддержкой xt_TPROXY.</string>
      <string name="root_tproxy_tether_note">В режиме TPROXY весь трафик точки доступа направляется через ядро автоматически; переключение «В обход / Через прокси» не требуется.</string>
@@ -17778,7 +17823,7 @@ index 78fcd87..71ded0a 100644
      <string name="root_tun_jumbo_mtu_title">Jumbo MTU и GSO</string>
      <string name="root_tun_jumbo_mtu_summary">Агрегация больших пакетов (mtu=9000, gso=on) уменьшает системные вызовы на пакет для максимальной пропускной способности. Отключите, если восходящий канал отбрасывает фрагментированные пакеты.</string>
      <string name="root_attach_force_reapply_title">Принудительно применять правила при переподключении</string>
-@@ -615,4 +630,6 @@
+@@ -615,4 +640,6 @@
          <item quantity="other">Выбрано %1$d переопределения</item>
      </plurals>
      <string name="subscription_overrides">Переопределения</string>
@@ -17786,10 +17831,10 @@ index 78fcd87..71ded0a 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..52f8991 100644
+index cba1bbb..ef8efde 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
-@@ -126,6 +126,13 @@
+@@ -126,6 +126,23 @@
      <string name="home_logs_subtitle">查看</string>
      <string name="home_dns">DNS</string>
      <string name="home_dns_subtitle">查询</string>
@@ -17800,10 +17845,20 @@ index cba1bbb..52f8991 100644
 +    <string name="external_panel_diag_copy">复制</string>
 +    <string name="external_panel_diag_open_browser">浏览器打开</string>
 +    <string name="external_panel_diag_close">关闭</string>
++    <string name="external_panel_back">返回</string>
++    <string name="external_panel_refresh">刷新</string>
++    <string name="external_panel_tune">面板诊断</string>
++    <string name="external_panel_clear_cache">清除缓存并重载</string>
++    <string name="external_panel_route_overview">概览</string>
++    <string name="external_panel_route_proxies">代理</string>
++    <string name="external_panel_route_connections">连接</string>
++    <string name="external_panel_route_logs">日志</string>
++    <string name="external_panel_route_rules">规则</string>
++    <string name="external_panel_route_settings">设置</string>
  
      <!-- Home - Latency -->
      <string name="home_latency">延迟</string>
-@@ -177,6 +184,11 @@
+@@ -177,6 +194,11 @@
      <string name="proxy_sort_reverse">倒序</string>
      <string name="proxy_test_group_delay">测试延迟</string>
      <string name="proxy_test_node_delay">测试节点延迟</string>
@@ -17815,7 +17870,7 @@ index cba1bbb..52f8991 100644
      <string name="proxy_fixed">已固定到此节点</string>
      <string name="proxy_unfix">解除固定，恢复自动选择</string>
  
-@@ -287,9 +299,11 @@
+@@ -287,9 +309,11 @@
      <string name="settings_tun_vpn_summary">通过 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 设备</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -17827,7 +17882,7 @@ index cba1bbb..52f8991 100644
      <string name="settings_vpn_settings">VPN 设置</string>
      <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
      <string name="settings_tun_device">TUN 设备名称</string>
-@@ -404,6 +418,7 @@
+@@ -404,6 +428,7 @@
      <string name="root_tether_scan_result_title">检测到以下接口</string>
      <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有热点流量由内核规则自动代理，无需切换「绕过 / 走代理」。</string>
@@ -17835,7 +17890,7 @@ index cba1bbb..52f8991 100644
      <string name="root_tun_jumbo_mtu_title">大 MTU 与 GSO</string>
      <string name="root_tun_jumbo_mtu_summary">大包聚合（mtu=9000、开启 gso）减少每包 syscall，提升吞吐。上游链路丢弃分片时可关闭。</string>
      <string name="root_attach_force_reapply_title">重连时强制重建规则</string>
-@@ -610,4 +625,6 @@
+@@ -610,4 +635,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -17843,10 +17898,10 @@ index cba1bbb..52f8991 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..ffa0c3c 100644
+index f6895e0..e562f75 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
-@@ -126,6 +126,13 @@
+@@ -126,6 +126,23 @@
      <string name="home_logs_subtitle">檢視</string>
      <string name="home_dns">DNS</string>
      <string name="home_dns_subtitle">查詢</string>
@@ -17857,10 +17912,20 @@ index f6895e0..ffa0c3c 100644
 +    <string name="external_panel_diag_copy">複製</string>
 +    <string name="external_panel_diag_open_browser">瀏覽器開啟</string>
 +    <string name="external_panel_diag_close">關閉</string>
++    <string name="external_panel_back">返回</string>
++    <string name="external_panel_refresh">重新整理</string>
++    <string name="external_panel_tune">面板診斷</string>
++    <string name="external_panel_clear_cache">清除快取並重新載入</string>
++    <string name="external_panel_route_overview">概覽</string>
++    <string name="external_panel_route_proxies">代理</string>
++    <string name="external_panel_route_connections">連線</string>
++    <string name="external_panel_route_logs">日誌</string>
++    <string name="external_panel_route_rules">規則</string>
++    <string name="external_panel_route_settings">設定</string>
  
      <!-- Home - Latency -->
      <string name="home_latency">延遲</string>
-@@ -177,6 +184,11 @@
+@@ -177,6 +194,11 @@
      <string name="proxy_sort_reverse">反向</string>
      <string name="proxy_test_group_delay">測試延遲</string>
      <string name="proxy_test_node_delay">測試節點延遲</string>
@@ -17872,7 +17937,7 @@ index f6895e0..ffa0c3c 100644
      <string name="proxy_fixed">已固定至此節點</string>
      <string name="proxy_unfix">解除固定，恢復自動選擇</string>
  
-@@ -287,9 +299,11 @@
+@@ -287,9 +309,11 @@
      <string name="settings_tun_vpn_summary">透過 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 裝置</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -17884,7 +17949,7 @@ index f6895e0..ffa0c3c 100644
      <string name="settings_vpn_settings">VPN 設定</string>
      <string name="settings_vpn_summary">繞過私人網路、DNS 攔截、IPv6</string>
      <string name="settings_tun_device">TUN 裝置名稱</string>
-@@ -404,6 +418,7 @@
+@@ -404,6 +428,7 @@
      <string name="root_tether_scan_result_title">偵測到以下介面</string>
      <string name="root_tether_tproxy_unavailable_warning">目前核心缺少 xt_TPROXY 模組，已降級為相容路徑（吞吐量略低，連線仍可用）。如需原生 TPROXY 效能，請更換支援該模組的核心。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有熱點流量由核心規則自動代理，無需切換「繞過／經過代理」。</string>
@@ -17892,7 +17957,7 @@ index f6895e0..ffa0c3c 100644
      <string name="root_tun_jumbo_mtu_title">大 MTU 與 GSO</string>
      <string name="root_tun_jumbo_mtu_summary">大封包聚合（mtu=9000、開啟 gso）可減少每個封包的 syscall，提升吞吐量。上游線路丟棄分段封包時可關閉。</string>
      <string name="root_attach_force_reapply_title">重新連線時強制重建規則</string>
-@@ -610,4 +625,6 @@
+@@ -610,4 +635,6 @@
          <item quantity="other">已選擇 %1$d 項覆寫</item>
      </plurals>
      <string name="subscription_overrides">覆寫</string>
@@ -17900,10 +17965,10 @@ index f6895e0..ffa0c3c 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..b1f5475 100644
+index d1acc59..808cca4 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -128,6 +128,13 @@
+@@ -128,6 +128,23 @@
      <string name="home_logs_subtitle">View</string>
      <string name="home_dns">DNS</string>
      <string name="home_dns_subtitle">Query</string>
@@ -17914,10 +17979,20 @@ index d1acc59..b1f5475 100644
 +    <string name="external_panel_diag_copy">Copy</string>
 +    <string name="external_panel_diag_open_browser">Browser</string>
 +    <string name="external_panel_diag_close">Close</string>
++    <string name="external_panel_back">Back</string>
++    <string name="external_panel_refresh">Refresh</string>
++    <string name="external_panel_tune">Panel diagnostics</string>
++    <string name="external_panel_clear_cache">Clear cache and reload</string>
++    <string name="external_panel_route_overview">Overview</string>
++    <string name="external_panel_route_proxies">Proxies</string>
++    <string name="external_panel_route_connections">Connections</string>
++    <string name="external_panel_route_logs">Logs</string>
++    <string name="external_panel_route_rules">Rules</string>
++    <string name="external_panel_route_settings">Settings</string>
  
      <!-- Home - Latency -->
      <string name="home_latency">Latency</string>
-@@ -179,6 +186,11 @@
+@@ -179,6 +196,11 @@
      <string name="proxy_sort_reverse">Reverse</string>
      <string name="proxy_test_group_delay">Test latency</string>
      <string name="proxy_test_node_delay">Test node delay</string>
@@ -17929,7 +18004,7 @@ index d1acc59..b1f5475 100644
      <string name="proxy_fixed">Fixed to this node</string>
      <string name="proxy_unfix">Unfix, restore automatic selection</string>
  
-@@ -289,9 +301,11 @@
+@@ -289,9 +311,11 @@
      <string name="settings_tun_vpn_summary">via VpnService</string>
      <string name="settings_tun_root_tun_summary">owns TUN device</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -17941,7 +18016,7 @@ index d1acc59..b1f5475 100644
      <string name="settings_vpn_settings">VPN Settings</string>
      <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
      <string name="settings_tun_device">TUN Device Name</string>
-@@ -406,6 +420,7 @@
+@@ -406,6 +430,7 @@
      <string name="root_tether_scan_result_title">Detected interfaces</string>
      <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
      <string name="root_tproxy_tether_note">TPROXY mode proxies all hotspot traffic via kernel rules; no Bypass/Through toggle needed.</string>
@@ -17949,7 +18024,7 @@ index d1acc59..b1f5475 100644
      <string name="root_tun_jumbo_mtu_title">Jumbo MTU &amp; GSO</string>
      <string name="root_tun_jumbo_mtu_summary">Large-packet aggregation (mtu=9000, gso=on) reduces per-packet syscalls for throughput. Disable if the upstream link drops fragmented traffic.</string>
      <string name="root_attach_force_reapply_title">Force re-apply on reconnect</string>
-@@ -613,4 +628,6 @@
+@@ -613,4 +638,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>

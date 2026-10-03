@@ -292,6 +292,26 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     （覆盖「停在起始不透明度」变体）。探针新增 `ccOp/cardOp/navOp/pageOp` 四个 computed opacity：
     若软件层仍未解决，回传能区分「不透明度卡住」与「光栅失败」。
 
+### r10：BoxProxy 同机对照实锤 → 宿主重做为传统 View Activity（2026-10-03）
+
+34. **r9 回传截图仍空白 + BoxProxy 对照截图（决定性证据）**：同一台设备上，BoxProxy
+    （`com.boxproxy.box`）用**传统 View 宿主**的 WebView 完整渲染同一个 zashboard
+    （卡片、底栏、几何全部正常），而 Mishka 把 WebView 放进 Compose `AndroidView` interop
+    容器后出现「dvh/vh 解析为 0」与「几何全对但文档层不绘制」两个症状——引擎无恙，
+    **interop 渲染路径才是根因**，r5–r9 全部 CSS/绘制层修复方向就此关闭。r10 参照 BoxProxy
+    的 web 界面实现方式整体重做：新建 `ui/screen/panel/ExternalPanelActivity.kt`
+    （普通 `Activity`，XML 布局 `activity_external_panel.xml` 直接声明 WebView，Compose 完全
+    退出渲染路径）；导航路由进入即 `startActivity` 并立刻出栈，返回键 `canGoBack()` 优先、
+    否则关页。顶栏与 BoxProxy 一致（去掉「外部面板」大标题）：返回箭头 +
+    `host:port | 路由名` 标题（路由名从 URL hash 推导，`#/proxies`→「代理」等 6 个路由 ×4 语言）
+    + 右侧刷新 / 诊断（调节图标，传统 AlertDialog 抽屉：可复制、浏览器打开、关闭）/
+    清缓存重载（垃圾桶图标）三个按钮。r3–r9 的全部防线原样保留在 Activity 内
+    （console/HTTP 错误诊断环、布局探针、dvh 像素修复注入、禁 HTTP 缓存、非零布局后加载、
+    resize/scroll 补发）；好引擎下修复脚本 `not-needed` 零干预，软件层兜底仅在坏引擎触发。
+    `external-panel.seed.patch` 相应重生成：不再包含 `ExternalPanelScreen.kt`，新增
+    Activity、布局、4 个顶栏矢量图标与 manifest 注册（`exported=false`，沿用 `Theme.Mishka`
+    与 MainActivity 同款 `configChanges`）。
+
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
 ### 三条安全边界（这也是它敢写盘的依据）
