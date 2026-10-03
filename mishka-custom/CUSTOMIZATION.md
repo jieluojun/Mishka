@@ -359,6 +359,13 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     （清缓存 + 重载）即等价的手动更新路径。诊断抽屉（调节图标）改为合并展示
     **启动诊断环 `StartDiag`**（guard 决策 / cleanup 退出码 / attach 结果 / 完整
     listen 错误 / 重试结果，80 行环）+ 面板自身诊断，一键复制回传，下一轮定位不再靠猜。
+41. **r12 首包的两处 CI 编译错误修复**：① `RootHelper.cleanupOrphanedMihomo` 改返回
+    `Int` 后 catch 分支漏 return（`NO_RETURN_IN_FUNCTION_WITH_BLOCK_BODY`，RootHelper.kt:249）
+    ——补 `return -2` 并记 `[cleanup] exception (no su?)` 诊断行；② `onOpenPanel` 是普通
+    lambda 而非 @Composable，其中调用 `LocalContext.current` 违反可组合上下文约束
+    （AppNavigation.kt:610）——改为在外层 `pagerContent` 可组合 lambda 开头
+    `val panelContext = LocalContext.current` 捕获后传入。教训已入流程：改返回类型的函数
+    逐分支核 return；非 composable lambda 内禁用可组合 API。
 
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 

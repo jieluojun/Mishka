@@ -17,7 +17,7 @@ index 9ba59f6..d021aba 100644
              android:name=".service.MishkaTunService"
              android:exported="false"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 334bcdc..391c23b 100644
+index 334bcdc..ff61de7 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 @@ -1,11 +1,13 @@
@@ -72,13 +72,23 @@ index 334bcdc..391c23b 100644
              entry<Route.BackupRestore>(swipeDismiss = swipeDismiss) {
                  if (backupViewModel != null && storage != null) {
                      BackupRestoreScreen(
-@@ -586,6 +605,11 @@ private fun MainPage(
+@@ -557,6 +576,9 @@ private fun MainPage(
+ 
+     // 页面主体：手机与宽屏两套外壳共用，仅传入不同的容器 modifier 与底部留白
+     val pagerContent: @Composable (Modifier, Dp) -> Unit = { pagerModifier, bottomPadding ->
++        // r12 构建修复：onOpenPanel 是普通 lambda（非 @Composable），LocalContext.current
++        // 必须在外层可组合上下文先取值捕获
++        val panelContext = LocalContext.current
+         HorizontalPager(
+             modifier = pagerModifier.pagerGestureOverride(
+                 pagerState = mainPagerState.pagerState,
+@@ -586,6 +608,11 @@ private fun MainPage(
                      onNavigateProvider = { navigator.push(Route.Provider) },
                      onNavigateConnection = { navigator.push(Route.Connection) },
                      onNavigateDnsQuery = { navigator.push(Route.DnsQuery) },
 +                    onOpenPanel = {
 +                        navigator.push(
-+                            Route.ExternalPanel(externalPanelUrlFrom(LocalContext.current))
++                            Route.ExternalPanel(externalPanelUrlFrom(panelContext))
 +                        )
 +                    },
                      onStartProxy = { homeViewModel?.startProxy() },

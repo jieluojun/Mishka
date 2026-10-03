@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=b28abe669c5b2a7290392a037f6490165b2e87e5eca3163b5a708ba27451efe2
+patch_sha256=942263d505122771ff4b2e862e8a47c5a01c33d5766a4d2794771820536efdaa
 blob_after=d021abaaa111aeefdb215cbbb02f79e3a64d2a32 app/src/main/AndroidManifest.xml
 blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 blob_new=c3e1f9edf2f023b70f0dc8ad528bc81385a97fdd app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
@@ -34,10 +34,10 @@ blob_after=44da07197b532d9bc67dbd5b1c5ac32cb44fbc0b app/src/main/kotlin/top/yuko
 blob_new=aaaafa598c789ba3eb0fb20e2535cbf9a4ee32d7 app/src/main/kotlin/top/yukonga/mishka/service/ExtCtlPortGuard.kt
 blob_after=b783ea6955054c33a5b9a77b39729a6fc73d567f app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 blob_after=06fb9e302ef4967fb861930c4f599ad6fab94b39 app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
-blob_after=483842d80b5d7feec643c9a74882e28dc17654c7 app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
+blob_after=dbf903fb713be6f9aa6695af5077eb201f22567b app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 blob_after=e23f0f7958cd744b7b6ad9eddee18452cfc9c28a app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 blob_new=69fe3c4d6f8234d46e07dd5b91cded522c298df2 app/src/main/kotlin/top/yukonga/mishka/service/StartDiag.kt
-blob_after=391c23b839c71aae7e68fd409e5aed6612981eda app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+blob_after=ff61de7f2b3fd00efd6da9c48b7e840ccac9e045 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 blob_after=1d8ee7fc163f73307c7fe4765fbdacbc615c6f48 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
 blob_after=92fdd02aee0b10164558dfe65f9b418c9db4fd63 app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
 blob_after=83ca9194ffc168c715d850da832f8ddbefe1c933 app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt

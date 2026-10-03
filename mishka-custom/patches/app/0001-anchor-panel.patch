@@ -16683,7 +16683,7 @@ index fa04d69..06fb9e3 100644
              // 记录运行状态，用于开机自启判断
              PlatformStorage(this@MishkaTunService).putString(StorageKeys.SERVICE_WAS_RUNNING, "true")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
-index 0a60c2e..483842d 100644
+index 0a60c2e..dbf903f 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 @@ -199,7 +199,7 @@ object RootHelper {
@@ -16695,7 +16695,7 @@ index 0a60c2e..483842d 100644
          val tunCleanupLine = tunDevice?.let {
              "ip link delete ${escapeShellSingleQuoted(it)} 2>/dev/null; true"
          } ?: "true"
-@@ -235,11 +235,14 @@ object RootHelper {
+@@ -235,13 +235,18 @@ object RootHelper {
              if (!exited) {
                  process.destroyForcibly()
                  Log.e(TAG, "cleanupOrphanedMihomo timed out")
@@ -16710,7 +16710,11 @@ index 0a60c2e..483842d 100644
 +            return process.exitValue()
          } catch (_: Exception) {
              // 无 su 设备 ProcessBuilder 抛 IOException，静默降级
++            StartDiag.add("[cleanup] exception (no su?)")
++            return -2
          }
+     }
+ 
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 index b57d687..e23f0f7 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
@@ -16773,7 +16777,7 @@ index 0000000..69fe3c4
 +    fun text(): String = lines.joinToString("\n")
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 2341aa9..391c23b 100644
+index 2341aa9..ff61de7 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 @@ -1,11 +1,13 @@
@@ -16846,13 +16850,23 @@ index 2341aa9..391c23b 100644
                      onBack = { navigator.pop() },
                  )
              }
-@@ -582,6 +605,11 @@ private fun MainPage(
+@@ -553,6 +576,9 @@ private fun MainPage(
+ 
+     // 页面主体：手机与宽屏两套外壳共用，仅传入不同的容器 modifier 与底部留白
+     val pagerContent: @Composable (Modifier, Dp) -> Unit = { pagerModifier, bottomPadding ->
++        // r12 构建修复：onOpenPanel 是普通 lambda（非 @Composable），LocalContext.current
++        // 必须在外层可组合上下文先取值捕获
++        val panelContext = LocalContext.current
+         HorizontalPager(
+             modifier = pagerModifier.pagerGestureOverride(
+                 pagerState = mainPagerState.pagerState,
+@@ -582,6 +608,11 @@ private fun MainPage(
                      onNavigateProvider = { navigator.push(Route.Provider) },
                      onNavigateConnection = { navigator.push(Route.Connection) },
                      onNavigateDnsQuery = { navigator.push(Route.DnsQuery) },
 +                    onOpenPanel = {
 +                        navigator.push(
-+                            Route.ExternalPanel(externalPanelUrlFrom(LocalContext.current))
++                            Route.ExternalPanel(externalPanelUrlFrom(panelContext))
 +                        )
 +                    },
                      onStartProxy = { homeViewModel?.startProxy() },
