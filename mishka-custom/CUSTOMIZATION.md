@@ -338,6 +338,27 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     实参类型仍是 `OnBackInvokedCallback?`。改为局部 `val cb = backInvokedCallback` 承接后
     判空传入（注册点同写法加固）。沙箱用 kotlinc 2.1.21 + android.window 桩复现了旧写法的
     同款报错、并验证新写法编译通过且运行正常。
+### r12：listen 失败自愈重试 + 面板地址源修正 + 更新按钮与诊断环（2026-10-04）
+
+38. **对照上游的结论与 listen 失败自愈**：逐文件 diff 上游 `b66e844a`，启动机制
+    （`MihomoRunner.kt` / `ConfigGenerator.kt`，secret 与 `--ext-ctl` 的 CLI 通道）与上游
+    **零差异**；启动链差异仅 eBPF submode、`ExtCtlPortGuard` 与模式枚举三处，均不碰监听
+    装配。故 `External controller listen error` 的成因是 **bind 时刻 9090 已被活进程占用**
+    （面板截图为证：`127.0.0.1:9090 | 设置` 连上的正是占用者——配置无 secret 时 API
+    免鉴权，zashboard 把对方的实时统计当真面板渲染）。r11 的端口探针与 bind 之间存在
+    竞态窗口（或清理未净）时仍会失败，r12 在 ROOT / VPN 两条路径加**自愈重试**：
+    `runner.errorMessage` 含 `already in use` 时取备用段 39090–39099 第一个空闲端口再
+    `runner.start` 一次，成功即以新地址更新 bridge state；诊断行进 StartDiag。
+39. **面板地址源修正**：启动失败后 bridge state 留默认 `127.0.0.1:9090`，面板 URL 因而
+    连到占用者（「面板没用配置里的地址」的真相）。新增持久化键 `PANEL_LAST_EXT_CTL` /
+    `PANEL_LAST_SECRET`（每次启动尝试与成功后写入），`externalPanelUrlFrom(context)`
+    优先读它、state 兜底；AppNavigation 的 `onOpenPanel` 改用它。
+40. **面板「更新面板」按钮与诊断回传**：zashboard 设置页「更新面板」在 WebView 里触发
+    下载流时，无 `DownloadListener` 会被静默丢弃（「点了没反应」）；r12 设
+    DownloadListener 交外部浏览器处理并记 `[download]` 诊断行。顶栏垃圾桶图标
+    （清缓存 + 重载）即等价的手动更新路径。诊断抽屉（调节图标）改为合并展示
+    **启动诊断环 `StartDiag`**（guard 决策 / cleanup 退出码 / attach 结果 / 完整
+    listen 错误 / 重试结果，80 行环）+ 面板自身诊断，一键复制回传，下一轮定位不再靠猜。
 
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 

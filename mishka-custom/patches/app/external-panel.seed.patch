@@ -17,7 +17,7 @@ index 9ba59f6..d021aba 100644
              android:name=".service.MishkaTunService"
              android:exported="false"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 334bcdc..cf3ccd8 100644
+index 334bcdc..391c23b 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 @@ -1,11 +1,13 @@
@@ -42,24 +42,16 @@ index 334bcdc..cf3ccd8 100644
  import androidx.compose.ui.platform.LocalLayoutDirection
  import androidx.compose.ui.platform.LocalUriHandler
  import androidx.compose.ui.res.stringResource
-@@ -67,6 +70,7 @@ import kotlinx.serialization.json.Json
- import top.yukonga.mishka.DeepLinkImportRequest
- import top.yukonga.mishka.R
- import top.yukonga.mishka.platform.BootStartManager
-+import top.yukonga.mishka.platform.ProxyServiceBridge
- import top.yukonga.mishka.platform.FilePicker
- import top.yukonga.mishka.platform.PlatformStorage
- import top.yukonga.mishka.platform.StorageKeys
-@@ -84,6 +88,8 @@ import top.yukonga.mishka.ui.screen.settings.AboutScreen
+@@ -84,6 +87,8 @@ import top.yukonga.mishka.ui.screen.settings.AboutScreen
  import top.yukonga.mishka.ui.screen.settings.AppProxyScreen
  import top.yukonga.mishka.ui.screen.settings.BackupRestoreScreen
  import top.yukonga.mishka.ui.screen.settings.ExternalControlScreen
 +import top.yukonga.mishka.ui.screen.panel.ExternalPanelActivity
-+import top.yukonga.mishka.ui.screen.panel.externalPanelUrl
++import top.yukonga.mishka.ui.screen.panel.externalPanelUrlFrom
  import top.yukonga.mishka.ui.screen.settings.FileManagerEditorScreen
  import top.yukonga.mishka.ui.screen.settings.FileManagerScreen
  import top.yukonga.mishka.ui.screen.settings.MetaSettingsScreen
-@@ -487,6 +493,20 @@ fun AppNavigation(
+@@ -487,6 +492,20 @@ fun AppNavigation(
                      )
                  }
              }
@@ -80,18 +72,13 @@ index 334bcdc..cf3ccd8 100644
              entry<Route.BackupRestore>(swipeDismiss = swipeDismiss) {
                  if (backupViewModel != null && storage != null) {
                      BackupRestoreScreen(
-@@ -586,6 +606,16 @@ private fun MainPage(
+@@ -586,6 +605,11 @@ private fun MainPage(
                      onNavigateProvider = { navigator.push(Route.Provider) },
                      onNavigateConnection = { navigator.push(Route.Connection) },
                      onNavigateDnsQuery = { navigator.push(Route.DnsQuery) },
 +                    onOpenPanel = {
 +                        navigator.push(
-+                            Route.ExternalPanel(
-+                                externalPanelUrl(
-+                                    ProxyServiceBridge.state.value.externalController,
-+                                    ProxyServiceBridge.state.value.secret,
-+                                )
-+                            )
++                            Route.ExternalPanel(externalPanelUrlFrom(LocalContext.current))
 +                        )
 +                    },
                      onStartProxy = { homeViewModel?.startProxy() },
@@ -165,10 +152,10 @@ index ce37f91..83ca919 100644
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt
 new file mode 100644
-index 0000000..f3a6176
+index 0000000..256020a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt
-@@ -0,0 +1,369 @@
+@@ -0,0 +1,395 @@
 +package top.yukonga.mishka.ui.screen.panel
 +
 +import android.app.Activity
@@ -193,6 +180,10 @@ index 0000000..f3a6176
 +import android.widget.ScrollView
 +import android.widget.TextView
 +import top.yukonga.mishka.R
++import top.yukonga.mishka.platform.PlatformStorage
++import top.yukonga.mishka.platform.ProxyServiceBridge
++import top.yukonga.mishka.platform.StorageKeys
++import top.yukonga.mishka.service.StartDiag
 +
 +/**
 + * 外部面板（r10 重做）：**传统 View 宿主**的独立 Activity——BoxProxy 式实现。
@@ -264,6 +255,14 @@ index 0000000..f3a6176
 +        web.settings.javaScriptEnabled = true
 +        web.settings.domStorageEnabled = true
 +        web.settings.cacheMode = WebSettings.LOAD_NO_CACHE
++        // r12：zashboard「更新面板」等按钮可能触发下载流；无 DownloadListener 时 WebView
++        // 静默丢弃 → 「点了没反应」。交给外部浏览器处理。
++        web.setDownloadListener { dlUrl, _, _, _, _ ->
++            diag.add("[download] $dlUrl")
++            runCatching {
++                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dlUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
++            }
++        }
 +        web.webChromeClient = object : WebChromeClient() {
 +            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
 +                message?.let {
@@ -342,7 +341,7 @@ index 0000000..f3a6176
 +
 +    private fun showDiag() {
 +        val text = TextView(this).apply {
-+            text = diag.text()
++            text = StartDiag.text() + "\n---- panel ----\n" + diag.text()
 +            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
 +            setTextIsSelectable(true)
 +            setPadding(48, 24, 48, 24)
@@ -383,6 +382,20 @@ index 0000000..f3a6176
 +    companion object {
 +        const val EXTRA_URL = "mishka_panel_url"
 +    }
++}
++
++/**
++ * r12：面板 URL 的地址源 = 最近一次**实际启动尝试**的 ext-ctl/secret（持久化），
++ * 桥接 state 兜底。修「启动失败后 state 留默认 127.0.0.1:9090 → 面板连到占用者」的误导。
++ */
++fun externalPanelUrlFrom(context: android.content.Context): String {
++    val storage = PlatformStorage(context)
++    val state = ProxyServiceBridge.state.value
++    val ec = storage.getString(StorageKeys.PANEL_LAST_EXT_CTL, "")
++        .ifEmpty { state.externalController }
++    val secret = storage.getString(StorageKeys.PANEL_LAST_SECRET, "")
++        .ifEmpty { state.secret }
++    return externalPanelUrl(ec, secret)
 +}
 +
 +/** 由内核外部控制器的 host/port/secret 拼装 zashboard URL（?host&secret 由 SPA 自行读取，避免 #/setup 页）。 */
