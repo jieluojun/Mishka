@@ -117,23 +117,36 @@ index ce37f91..83ca919 100644
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
 new file mode 100644
-index 0000000..1f46c78
+index 0000000..65d484e
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,350 @@
 +package top.yukonga.mishka.ui.screen.panel
 +
 +import android.annotation.SuppressLint
++import android.content.Intent
 +import android.net.Uri
++import android.webkit.ConsoleMessage
++import android.webkit.WebChromeClient
 +import android.webkit.WebResourceError
 +import android.webkit.WebResourceRequest
 +import android.webkit.WebResourceResponse
 +import android.webkit.WebView
 +import android.webkit.WebViewClient
 +import androidx.activity.compose.BackHandler
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
 +import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
 +import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.text.selection.SelectionContainer
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.foundation.shape.RoundedCornerShape
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.getValue
 +import androidx.compose.runtime.mutableStateOf
@@ -143,12 +156,16 @@ index 0000000..1f46c78
 +import androidx.compose.ui.Modifier
 +import androidx.compose.ui.graphics.Color
 +import androidx.compose.ui.graphics.graphicsLayer
++import androidx.compose.ui.platform.LocalClipboardManager
++import androidx.compose.ui.platform.LocalContext
 +import androidx.compose.ui.platform.LocalLayoutDirection
 +import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.AnnotatedString
 +import androidx.compose.ui.unit.LayoutDirection
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.unit.sp
 +import androidx.compose.ui.viewinterop.AndroidView
++import androidx.compose.ui.window.Dialog
 +import top.yukonga.mishka.R
 +import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
 +import top.yukonga.mishka.ui.component.blur.BlurredBar
@@ -158,8 +175,10 @@ index 0000000..1f46c78
 +import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 +import top.yukonga.miuix.kmp.basic.Scaffold
 +import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.basic.TextButton
 +import top.yukonga.miuix.kmp.icon.MiuixIcons
 +import top.yukonga.miuix.kmp.icon.extended.Back
++import top.yukonga.miuix.kmp.icon.extended.Info
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +
 +/**
@@ -168,6 +187,10 @@ index 0000000..1f46c78
 + * 地址由 [externalPanelUrl] 从运行态的 external-controller 推导（`/ui` 是 mihomo
 + * `external-ui-name` 的缺省挂载路径）。内核没在跑、或配置里没有 external-ui 时加载会失败，
 + * 页面中央给一句可操作的提示而不是白屏。
++ *
++ * 顶栏 Info 按钮打开诊断抽屉：环形缓冲记录 console / 网络错误 / 页面事件，并在页面加载后
++ * 注入 [PROBE_JS] 量取面板关键布局量（根容器高度、虚拟列表可视高度、代理卡片数、底栏几何），
++ * 用于定位"顶栏渲染但列表区空白"这类 WebView 渲染差异；同抽屉提供"浏览器打开"兜底入口。
 + */
 +@SuppressLint("SetJavaScriptEnabled")
 +@Composable
@@ -188,6 +211,10 @@ index 0000000..1f46c78
 +    }
 +
 +    var failed by remember(url) { mutableStateOf(false) }
++    var showDiag by remember { mutableStateOf(false) }
++    val diag = remember { PanelDiagLog() }
++    val context = LocalContext.current
++    val clipboard = LocalClipboardManager.current
 +
 +    Scaffold(
 +        topBar = {
@@ -209,6 +236,15 @@ index 0000000..1f46c78
 +                            )
 +                        }
 +                    },
++                    actions = {
++                        IconButton(onClick = { showDiag = true }) {
++                            Icon(
++                                imageVector = MiuixIcons.Info,
++                                contentDescription = stringResource(R.string.external_panel_diag_title),
++                                tint = MiuixTheme.colorScheme.onSurface,
++                            )
++                        }
++                    },
 +                )
 +            }
 +        },
@@ -219,14 +255,23 @@ index 0000000..1f46c78
 +                .padding(top = innerPadding.calculateTopPadding()),
 +        ) {
 +            AndroidView(
-+                factory = { context ->
-+                    WebView(context).apply {
++                factory = { ctx ->
++                    WebView(ctx).apply {
 +                        // 面板是 SPA：JS 与 localStorage 都是硬需求
 +                        settings.javaScriptEnabled = true
 +                        settings.domStorageEnabled = true
++                        webChromeClient = object : WebChromeClient() {
++                            override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
++                                message?.let {
++                                    diag.add("[console:${it.messageLevel()}] ${it.message()} @${it.sourceId()}:${it.lineNumber()}")
++                                }
++                                return true
++                            }
++                        }
 +                        webViewClient = object : WebViewClient() {
 +                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
 +                                failed = false
++                                diag.add("[page] started $url")
 +                            }
 +
 +                            override fun onReceivedError(
@@ -235,6 +280,7 @@ index 0000000..1f46c78
 +                                error: WebResourceError?,
 +                            ) {
 +                                // 只关心主文档：SPA 里个别子资源 404 不该把整页标成失败
++                                diag.add("[neterr main=${request?.isForMainFrame == true}] ${error?.errorCode} ${error?.description} ${request?.url}")
 +                                if (request?.isForMainFrame == true) failed = true
 +                            }
 +
@@ -246,7 +292,15 @@ index 0000000..1f46c78
 +                                // HTTP 4xx/5xx 不触发 onReceivedError（那个只报网络层错误）。
 +                                // 典型场景：内核没启用 external-ui 时 /ui 返回 404 text/plain，
 +                                // WebView 渲染出来就是一片空白——不补这个回调，用户只会看到白屏
++                                diag.add("[httperr ${errorResponse?.statusCode} main=${request?.isForMainFrame == true}] ${request?.url}")
 +                                if (request?.isForMainFrame == true) failed = true
++                            }
++
++                            override fun onPageFinished(view: WebView?, url: String?) {
++                                diag.add("[page] finished $url")
++                                // 面板是异步渲染：首帧后虚拟列表/底栏才挂载，延迟两次取样
++                                view?.postDelayed({ runProbe(view, diag, 1) }, 2500)
++                                view?.postDelayed({ runProbe(view, diag, 2) }, 8000)
 +                            }
 +                        }
 +                        loadUrl(url)
@@ -270,6 +324,120 @@ index 0000000..1f46c78
 +                )
 +            }
 +        }
++    }
++
++    if (showDiag) {
++        Dialog(onDismissRequest = { showDiag = false }) {
++            Column(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .heightIn(max = 560.dp)
++                    .background(MiuixTheme.colorScheme.surface, RoundedCornerShape(20.dp))
++                    .padding(16.dp),
++            ) {
++                Text(
++                    text = stringResource(R.string.external_panel_diag_title),
++                    fontSize = 16.sp,
++                    color = MiuixTheme.colorScheme.onSurface,
++                )
++                SelectionContainer(
++                    modifier = Modifier
++                        .weight(1f, fill = false)
++                        .heightIn(max = 420.dp)
++                        .padding(top = 8.dp)
++                        .fillMaxWidth()
++                        .verticalScroll(rememberScrollState()),
++                ) {
++                    Text(
++                        text = diag.text(),
++                        fontSize = 11.sp,
++                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                    )
++                }
++                Row(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(top = 12.dp),
++                    horizontalArrangement = Arrangement.spacedBy(8.dp),
++                ) {
++                    TextButton(
++                        text = stringResource(R.string.external_panel_diag_copy),
++                        modifier = Modifier.weight(1f),
++                        onClick = { clipboard.setText(AnnotatedString(diag.text())) },
++                    )
++                    TextButton(
++                        text = stringResource(R.string.external_panel_diag_open_browser),
++                        modifier = Modifier.weight(1f),
++                        onClick = {
++                            runCatching {
++                                context.startActivity(
++                                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
++                                )
++                            }
++                        },
++                    )
++                    TextButton(
++                        text = stringResource(R.string.external_panel_diag_close),
++                        modifier = Modifier.weight(1f),
++                        onClick = { showDiag = false },
++                    )
++                }
++            }
++        }
++    }
++}
++
++/** 在面板页面里量取关键布局量：区分"高度链塌陷 / 虚拟列表零行 / 纯绘制问题"。 */
++private fun runProbe(view: WebView, diag: PanelDiagLog, round: Int) {
++    runCatching {
++        view.evaluateJavascript(PROBE_JS) { result ->
++            diag.add("[probe#$round] $result")
++        }
++    }
++}
++
++/**
++ * 探针只读不写：根容器（`.h-dvh`）高度、页面滚动容器高度、虚拟列表行（`.proxy-group-card`）
++ * 数量与首行 top、底栏（`.tab-bar`）几何、dvh 支持度、localStorage 可用性、UA/引擎版本。
++ */
++private val PROBE_JS = """
++(function(){
++  function r(s){return document.querySelector(s)}
++  function rect(e){if(!e)return null;var b=e.getBoundingClientRect();return {t:Math.round(b.top),h:Math.round(b.height),w:Math.round(b.width)}}
++  var root=r('.h-dvh');
++  var scroller=r('.h-dvh .overflow-y-auto');
++  var cards=document.querySelectorAll('.proxy-group-card');
++  var nav=r('.tab-bar');
++  var ls=(function(){try{localStorage.setItem('__mishka_t','1');localStorage.removeItem('__mishka_t');return 'ok'}catch(e){return 'ERR:'+e.name}})();
++  var m=(navigator.userAgent.match(/Chrome\/([0-9.]+)/)||[])[1]||'?';
++  return JSON.stringify({
++    chrome:m, ls:ls, iw:innerWidth, ih:innerHeight,
++    root:rect(root), rootCssH:root?getComputedStyle(root).height:null,
++    scroller:rect(scroller), scrollerCssH:scroller?getComputedStyle(scroller).height:null,
++    cards:cards.length, card0:rect(cards[0]), card0Top:cards[0]?cards[0].style.top:null,
++    nav:rect(nav), navPos:nav?getComputedStyle(nav).position:null, navBottom:nav?getComputedStyle(nav).bottom:null,
++    dvh:CSS.supports('height','100dvh'), oklch:CSS.supports('color','oklch(0.5 0.1 100)'),
++    has:CSS.supports('selector(:has(*))'), bodyH:document.body.clientHeight
++  })
++})()
++""".trimIndent()
++
++/** 诊断环形缓冲：最多保留 [CAP] 行，跨线程安全（WebView 回调在 IO/主线程都可能到来）。 */
++class PanelDiagLog {
++    private val buf = ArrayDeque<String>(CAP)
++    private val lock = Any()
++
++    fun add(line: String) {
++        synchronized(lock) {
++            if (buf.size >= CAP) buf.removeFirst()
++            buf.addLast(line)
++        }
++    }
++
++    fun text(): String = synchronized(lock) { buf.joinToString("\n") }
++
++    private companion object {
++        const val CAP = 240
 +    }
 +}
 +
@@ -304,58 +472,74 @@ index 0000000..1f46c78
 +    return base + params
 +}
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index b4cf75a..5ead170 100644
+index b4cf75a..71ded0a 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
-@@ -128,6 +128,9 @@
+@@ -128,6 +128,13 @@
      <string name="home_logs_subtitle">Просмотр</string>
      <string name="home_dns">DNS</string>
      <string name="home_dns_subtitle">Запрос</string>
 +    <string name="home_external_panel">Внешняя панель</string>
 +    <string name="home_external_panel_subtitle">Веб-панель</string>
 +    <string name="external_panel_load_failed">Не удалось загрузить панель. Убедитесь, что прокси запущен и в профиле включён external-ui.</string>
++    <string name="external_panel_diag_title">Диагностика панели</string>
++    <string name="external_panel_diag_copy">Копировать</string>
++    <string name="external_panel_diag_open_browser">Браузер</string>
++    <string name="external_panel_diag_close">Закрыть</string>
  
      <!-- Home - Latency -->
      <string name="home_latency">Задержка</string>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index ac013ce..66f30ca 100644
+index ac013ce..52f8991 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
-@@ -126,6 +126,9 @@
+@@ -126,6 +126,13 @@
      <string name="home_logs_subtitle">查看</string>
      <string name="home_dns">DNS</string>
      <string name="home_dns_subtitle">查询</string>
 +    <string name="home_external_panel">外部面板</string>
 +    <string name="home_external_panel_subtitle">网页控制台</string>
 +    <string name="external_panel_load_failed">面板加载失败：请确认代理已启动，且配置里启用了 external-ui。</string>
++    <string name="external_panel_diag_title">面板诊断</string>
++    <string name="external_panel_diag_copy">复制</string>
++    <string name="external_panel_diag_open_browser">浏览器打开</string>
++    <string name="external_panel_diag_close">关闭</string>
  
      <!-- Home - Latency -->
      <string name="home_latency">延迟</string>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index 546ad6f..d6696f0 100644
+index 546ad6f..ffa0c3c 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
-@@ -126,6 +126,9 @@
+@@ -126,6 +126,13 @@
      <string name="home_logs_subtitle">檢視</string>
      <string name="home_dns">DNS</string>
      <string name="home_dns_subtitle">查詢</string>
 +    <string name="home_external_panel">外部面板</string>
 +    <string name="home_external_panel_subtitle">網頁控制台</string>
 +    <string name="external_panel_load_failed">面板載入失敗：請確認代理已啟動，且設定中啟用了 external-ui。</string>
++    <string name="external_panel_diag_title">面板診斷</string>
++    <string name="external_panel_diag_copy">複製</string>
++    <string name="external_panel_diag_open_browser">瀏覽器開啟</string>
++    <string name="external_panel_diag_close">關閉</string>
  
      <!-- Home - Latency -->
      <string name="home_latency">延遲</string>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 46c1baf..dd1f557 100644
+index 46c1baf..b1f5475 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -128,6 +128,9 @@
+@@ -128,6 +128,13 @@
      <string name="home_logs_subtitle">View</string>
      <string name="home_dns">DNS</string>
      <string name="home_dns_subtitle">Query</string>
 +    <string name="home_external_panel">External Panel</string>
 +    <string name="home_external_panel_subtitle">Web dashboard</string>
 +    <string name="external_panel_load_failed">Couldn\'t load the panel. Make sure the proxy is running and external-ui is configured in your profile.</string>
++    <string name="external_panel_diag_title">Panel diagnostics</string>
++    <string name="external_panel_diag_copy">Copy</string>
++    <string name="external_panel_diag_open_browser">Browser</string>
++    <string name="external_panel_diag_close">Close</string>
  
      <!-- Home - Latency -->
      <string name="home_latency">Latency</string>
