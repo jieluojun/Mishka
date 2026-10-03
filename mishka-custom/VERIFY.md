@@ -38,7 +38,7 @@ PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 `docs/root-mode.md`）。订阅页入口在「覆写」下方；YAML 编辑器工具栏也有表单快捷按钮，位于锚点面板按钮左侧。
 
 基线（`patches/app/BASELINE.txt`）：`upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74`，
-`patch_sha256=580cde50619bf8f59e5341f5352fe89db65c54668f22f2ccdfa8aecd5ec4bbd2`（r6：条目 30 dvh 替代样式导回后）。导出脚本
+`patch_sha256=3f8a163db2b3309d30f2bc39eaad7e80175d982641bb46280fe6cca80ac00429`（r7：条目 31 像素值 v2 导回后）。导出脚本
 （`tools/export_app_patch.sh`）依次应用 4 个稳定 seed（`anchor-panel` + `visual-config-entry` +
 `home-proxy-root-fixes` + `external-panel`），再用交付目录里的最新 `custom/` 源码覆盖后导出；
 2026-10-03 这轮把测速反馈（条目 25）与外部面板 URL / HTTP 错误态（条目 27）的改动重新导回
@@ -47,6 +47,7 @@ r3 轮又把面板诊断抽屉 + 布局探针 + 浏览器兜底（条目 28）�
 r4 轮把三条 WebView 缓释（禁缓存 / 非零布局后加载 / resize 补发）导回同一 seed，
 r5 轮把条目 29（写穿拒写时 flow 映射展开块式）的 `custom/forms/AnchorInheritance.kt` 改动
 经 `custom/` 覆盖路径并入 0001，r6 轮把条目 30（dvh→vh 按需注入）导回 `external-panel.seed.patch`，
+r7 轮设备回传证明 vh 系单位同样为 0、条目 31 改像素值 v2（内联 !important + 动态样式表 + resize 重算）导回同一 seed，
 并在已打补丁的源码树上验证 `git apply -R` / `git apply` 均通过。`scripts/apply-patches.sh` 与
 `scripts/revert-patches.sh` 此前已在干净克隆上往返验证，撤销后 `git status` 为空。
 

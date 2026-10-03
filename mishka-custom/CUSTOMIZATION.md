@@ -253,6 +253,20 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     正常 root=915 / 模拟坏 root=0 / 模拟坏+注入 root=915(`injected`) / 正常+注入 root=915(`not-needed`)。
     诊断探针与缓释保留：`[dvhfix]` 行回传注入结果。
 
+### r7：dvh 修复 v2——像素值方案（设备证明 vh 系单位同样为 0）（2026-10-03）
+
+31. **r6 的 dvh→vh 注入在设备上无效**（回传 `[dvhfix] "injected"` 但布局仍空白）：证明该
+    WebView 的 visual-viewport 缺陷影响**全部视口单位**（dvh 与 vh 都解析为 0），只有 JS 的
+    `window.innerHeight` 是真实值（776）。v2 改**像素值**方案：以 `innerHeight` 为基准动态生成
+    bundle 全部 dvh 规则的等效替代样式表（`.h-dvh`=ih、`70dvh`=0.7·ih、`calc(100dvh-3rem)`=ih−48、
+    `max/min-h` 各档按比例、背景玻璃 ±ih），并**直接给根容器写内联 `!important` 像素高度**
+    （内联样式不依赖样式表生命周期、优先级最高），`resize` 时重算覆盖（监听器挂一次）。
+    生效条件不变：`.h-dvh` 实测 0 高且 `innerHeight>0` 才注入（好引擎 `not-needed` 零干预），
+    返回值守改为 `injected-px:<ih>` 便于回传核对。探针同步扩展：`vhPx` / `dvhPx`（100vh/100dvh
+    测试 div 的实测像素）、`inlineH`（根容器内联高度）、`fixLen`（注入样式表长度）——下一轮回传
+    可直接确认设备单位病理与修复落点。沙箱四维复验（dvh→0px 模拟坏引擎）：
+    坏 root=0 / 坏+v2 root=915 `injected-px:915` / 好+v2 root=915 `not-needed`。
+
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 
 ### 三条安全边界（这也是它敢写盘的依据）
