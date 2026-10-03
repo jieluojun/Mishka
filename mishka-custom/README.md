@@ -145,7 +145,7 @@ git pull && bash mishka-custom/scripts/setup.sh --repo .
   Alpha 默认 TUN 栈是 mips）需要你实机验证。要退回官方内核：`revert-patches.sh --all`。
 * **签名**：与官方 Mishka 的签名不同，无法覆盖安装官方版（先卸载或用不同 `applicationId`）；
   CI 在没配 secrets 时用的 debug 风格密钥是公开的，只适合自用。
-* 本包**尚未完成 Android Gradle/APK 构建验证**：当前沙箱没有 Android SDK；用户提供的 CI 曾在 `ConfigFormPanel.kt` 的 `IntRange?` 空值检查处编译失败，已修复并更新 app 补丁，等待重跑 CI 确认。Android 端最终结果请以新的 CI 或本地 `build-release.sh` 为准；离线引擎与表单逻辑测试此前已通过。
+* 本包**尚未完成 Android Gradle/APK 构建验证**：当前沙箱没有 Android SDK。用户 CI 最近报告 `ProxyScreen.kt` 的 `minimumInteractiveComponentSize()` 未解析；已移除该不可用 API，改用项目已有的 `Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)`，不新增依赖。请用更新后的补丁重跑 CI 确认；Android 端最终结果仍以 CI 或本地 `build-release.sh` 为准，离线引擎与表单逻辑测试此前已通过。
 
 ## 来源与许可
 

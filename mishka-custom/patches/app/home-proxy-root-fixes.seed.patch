@@ -242,15 +242,7 @@ index d3f9631..198fd46 100644
  import androidx.compose.foundation.interaction.MutableInteractionSource
  import androidx.compose.foundation.layout.Arrangement
  import androidx.compose.foundation.layout.Box
-@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
- import androidx.compose.foundation.layout.fillMaxSize
- import androidx.compose.foundation.layout.fillMaxWidth
- import androidx.compose.foundation.layout.height
-+import androidx.compose.foundation.layout.minimumInteractiveComponentSize
- import androidx.compose.foundation.layout.padding
- import androidx.compose.foundation.layout.size
- import androidx.compose.foundation.layout.sizeIn
-@@ -769,6 +772,7 @@ private fun ProxyNodeRow(
+@@ -769,6 +771,7 @@ private fun ProxyNodeRow(
      }
  }
  
@@ -258,7 +250,7 @@ index d3f9631..198fd46 100644
  @Composable
  private fun ProxyNodeCard(
      name: String,
-@@ -803,9 +807,19 @@ private fun ProxyNodeCard(
+@@ -803,9 +806,19 @@ private fun ProxyNodeCard(
                  if (isSelectable) {
                      Modifier
                          .squircleSurface(color = backgroundColor, cornerRadius = 12.dp)
@@ -280,12 +272,12 @@ index d3f9631..198fd46 100644
                  }
              )
              .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp),
-@@ -848,6 +862,8 @@ private fun ProxyNodeCard(
+@@ -848,6 +861,7 @@ private fun ProxyNodeCard(
                  Box(
                      modifier = Modifier
-                         .sizeIn(minWidth = 28.dp)
-+                        // 视觉尺寸不变，命中区扩到 48dp 最小触控标准——原先 ~28×16dp 基本点不中
-+                        .minimumInteractiveComponentSize()
+-                        .sizeIn(minWidth = 28.dp)
++                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
++                        // 48dp 触控区；角标自身字号/图标不变
                          .clickable(
                              enabled = !isTesting,
                              interactionSource = null,

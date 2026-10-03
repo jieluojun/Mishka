@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=91fed9bfbb8c0a5fcc43376a279f064aec3162e569a229c2efcd150be802b4a2
+patch_sha256=a6d6e03bc86caf3b3c71cb8083b6c9ca66c19c2fea19219a35b47d0e5d41e002
 blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 blob_new=c3e1f9edf2f023b70f0dc8ad528bc81385a97fdd app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 blob_new=a4f77270cd6fa40bf31105ab49f881b2a1ec7cee app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
@@ -35,7 +35,7 @@ blob_after=92fdd02aee0b10164558dfe65f9b418c9db4fd63 app/src/main/kotlin/top/yuko
 blob_after=83ca9194ffc168c715d850da832f8ddbefe1c933 app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
 blob_after=c1a41cdd9710c03c4c4d375265de84d2d732c073 app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
 blob_new=d81eee004ff81fb88411497add84b29f505c96d8 app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelScreen.kt
-blob_after=198fd46abdaf05151ae6bd6e60f19c7dff3d359f app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
+blob_after=0074ed22fbea662856f52328f7c50f65ad85cd6d app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 blob_after=7da18acdd4ed9794d6e6ce9ad5a858a4aba9a9fd app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 blob_after=2a0b7743c1cba229e4b6d3f3cffc17874d03da67 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
 blob_after=f4fe9ce13cce83f719a3116402a46055599717e3 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt

@@ -116,9 +116,9 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
 18. **主页内核版本号不更新**：版本号原先只在每次建立连接时取一次 `/version`，内核升级重启后
     同一 app 会话里永远显示旧值。现在并入首页 2s 可见轮询（`refreshRuntimeConfig`），
     限流 10s 拉一次 `/version`，值变化才更新状态；repository 换代后旧响应被丢弃。
-19. **代理页单节点测速点不动**：命中区只有延迟角标 ~28×16dp，基本点不中。角标加
-    `minimumInteractiveComponentSize()`（视觉不变、命中区扩到 48dp 最小触控标准）；
-    节点卡改 `combinedClickable`——短按选中、**长按测速**，与 mihomo_box 参考实现交互一致。
+19. **代理页单节点测速点不动**：命中区只有延迟角标 ~28×16dp，基本点不中。角标外框改用
+    `sizeIn(minWidth = 48.dp, minHeight = 48.dp)`，角标文字 / 图标尺寸不变，触控区至少 48×48dp
+    （必要时该行卡片增高）；节点卡改 `combinedClickable`——短按选中、**长按测速**，与 mihomo_box 参考实现交互一致。
 20. **主页代理模式显示中文**：模式卡片与选择弹窗的取值 `Rule / Global / Direct` 改为
     `规则 / 全局 / 直连`（`StatusSection.MODE_OPTIONS`；发给内核的值仍是小写协议标识）。
 21. **隧道模式新增 ROOT EBPF**：`TunMode.RootEbpf`（存储值 `root_ebpf`，submode `ebpf`）复用
