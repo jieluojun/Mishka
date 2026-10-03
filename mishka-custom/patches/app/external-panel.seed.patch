@@ -165,10 +165,10 @@ index ce37f91..83ca919 100644
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt
 new file mode 100644
-index 0000000..f7a0c41
+index 0000000..6eb29ae
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/ExternalPanelActivity.kt
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,366 @@
 +package top.yukonga.mishka.ui.screen.panel
 +
 +import android.app.Activity
@@ -177,6 +177,7 @@ index 0000000..f7a0c41
 +import android.content.ClipboardManager
 +import android.content.Intent
 +import android.net.Uri
++import android.os.Build
 +import android.os.Bundle
 +import android.view.View
 +import android.webkit.ConsoleMessage
@@ -187,6 +188,8 @@ index 0000000..f7a0c41
 +import android.webkit.WebSettings
 +import android.webkit.WebView
 +import android.webkit.WebViewClient
++import android.window.OnBackInvokedCallback
++import android.window.OnBackInvokedDispatcher
 +import android.widget.ScrollView
 +import android.widget.TextView
 +import top.yukonga.mishka.R
@@ -214,21 +217,41 @@ index 0000000..f7a0c41
 +    private var loadedOnce = false
 +    private var baseTitle = ""
 +
++    /** 返回语义统一在这里：WebView 有历史先回退网页，否则关闭面板页。 */
++    private fun panelBack() {
++        if (web.canGoBack()) web.goBack() else finish()
++    }
++
++    /** targetSdk 35+ 不再回调 onBackPressed()：API 33+ 必须走 OnBackInvokedCallback。 */
++    private val backInvokedCallback = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++        OnBackInvokedCallback { panelBack() }
++    } else {
++        null
++    }
++
 +    override fun onCreate(savedInstanceState: Bundle?) {
 +        super.onCreate(savedInstanceState)
 +        setContentView(R.layout.activity_external_panel)
 +        web = findViewById(R.id.panel_web)
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
++            onBackInvokedDispatcher.registerOnBackInvokedCallback(
++                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
++                backInvokedCallback,
++            )
++        }
 +        titleView = findViewById(R.id.panel_title)
 +        val url = intent.getStringExtra(EXTRA_URL).orEmpty()
++        // r10 二轮修正：面板 URL 的 host/port 在 **query** 里（zashboard.pages.dev 只是载体），
++        // 上一版误从 authority 取 → 顶栏显示成域名；改从 query 参数还原真实控制器地址。
 +        baseTitle = runCatching {
 +            val u = Uri.parse(url)
-+            if (u.port > 0) "${u.host}:${u.port}" else u.host.orEmpty()
++            val h = u.getQueryParameter("host") ?: u.host.orEmpty()
++            val qport = u.getQueryParameter("port")
++            if (!qport.isNullOrEmpty()) "$h:$qport" else h
 +        }.getOrDefault("")
 +        titleView.text = baseTitle
 +
-+        findViewById<View>(R.id.panel_back).setOnClickListener {
-+            if (web.canGoBack()) web.goBack() else finish()
-+        }
++        findViewById<View>(R.id.panel_back).setOnClickListener { panelBack() }
 +        findViewById<View>(R.id.panel_refresh).setOnClickListener { web.reload() }
 +        findViewById<View>(R.id.panel_tune).setOnClickListener { showDiag() }
 +        findViewById<View>(R.id.panel_delete).setOnClickListener {
@@ -339,6 +362,19 @@ index 0000000..f7a0c41
 +            }
 +            .setNegativeButton(R.string.external_panel_diag_close, null)
 +            .show()
++    }
++
++    @Suppress("DEPRECATION")
++    override fun onBackPressed() {
++        // API 31–32（未注册 OnBackInvokedCallback 的旧路径）；33+ 由 backInvokedCallback 接管
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) panelBack() else super.onBackPressed()
++    }
++
++    override fun onDestroy() {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backInvokedCallback != null) {
++            runCatching { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backInvokedCallback) }
++        }
++        super.onDestroy()
 +    }
 +
 +    companion object {
@@ -561,15 +597,16 @@ index 0000000..8c08fb8
 +</vector>
 diff --git a/app/src/main/res/layout/activity_external_panel.xml b/app/src/main/res/layout/activity_external_panel.xml
 new file mode 100644
-index 0000000..8ecd1db
+index 0000000..0d26ef3
 --- /dev/null
 +++ b/app/src/main/res/layout/activity_external_panel.xml
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,75 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
 +    android:layout_width="match_parent"
 +    android:layout_height="match_parent"
 +    android:background="?android:attr/colorBackground"
++    android:fitsSystemWindows="true"
 +    android:orientation="vertical">
 +
 +    <LinearLayout

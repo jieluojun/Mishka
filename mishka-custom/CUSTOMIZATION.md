@@ -311,6 +311,27 @@ app 补丁共 37 个文件：app 侧 28 个（20 个新 custom Kotlin 源文件 
     `external-panel.seed.patch` 相应重生成：不再包含 `ExternalPanelScreen.kt`，新增
     Activity、布局、4 个顶栏矢量图标与 manifest 注册（`exported=false`，沿用 `Theme.Mishka`
     与 MainActivity 同款 `configChanges`）。
+    r10 修订版补齐两处 targetSdk 37 行为适配：系统返回键改走 `OnBackInvokedCallback`
+    （API 33+；31–32 保留 legacy `onBackPressed` 兜底），语义与顶栏返回一致——WebView
+    有历史先回退网页，否则关页；根布局 `fitsSystemWindows="true"` 适配 Android 15+
+    强制 edge-to-edge，避免顶栏顶进状态栏。
+
+### r10 二轮：端口冲突自愈 + 顶栏标题 query 解析（2026-10-04）
+
+35. **回传截图 + toast：`mihomo 进程运行中但 API 无响应 / External controller listen
+    error: listen tcp 127.0.0.1:9090: bind: address already in use`，代理起不来**。
+    `RootHelper.cleanupOrphanedMihomo` 只清 Mishka 自己的 `libmihomo_runner.so` 孤儿；
+    为对照测试安装的第三方 clash 系应用（BoxProxy 等，默认同样监听 127.0.0.1:9090）的内核
+    占住首选端口时，mihomo 的 external-controller bind 失败 → 进程活着但 API 死 →
+    主页「已停止」、面板连不上只能停 setup 页。新增 `service/ExtCtlPortGuard.kt`：
+    启动点装配 `--ext-ctl` 时（孤儿清理之后、ROOT 与 VPN 两条路径都过）先探测回环端口，
+    空闲→尊重用户配置原样使用；被占→备用段 `39090–39099` 取第一个空闲者；全占→保留首选
+    走原报错路径不静默乱跳。仅对本机回环生效，远程 controller 不动。bridge state 的
+    externalController 随 fallback 更新，API 客户端 / 订阅解析 / 面板 URL 全部自动一致。
+36. **面板顶栏标题显示成 `zashboard.pages.dev`**：r10 首版从 URL authority 取 host:port，
+    但面板 URL 的真实控制器地址在 **query**（`?host=…&port=…&secret=…`，
+    zashboard.pages.dev 只是 SPA 载体）。改为 `Uri.getQueryParameter("host"/"port")`
+    还原，顶栏恢复 BoxProxy 式 `127.0.0.1:9090 | 代理`（端口 fallback 后同样如实显示）。
 
 表单入口有两处：YAML 编辑器工具栏在锚点 `MiuixIcons.Link` 左侧提供表单快捷按钮，打开当前 YAML；导入型订阅的「编辑配置 → 覆写」下方也保留入口，优先选 `config.yaml`，否则选首个 `.yaml` / `.yml` 并在内容载入后自动打开表单。两处共用同一编辑器草稿、撤销与保存路径；锚点按钮本身仍留在原位。所有路由、订阅页、编辑器和多语言资源的变化都由 app 补丁统一管理，反向应用即可还原。
 

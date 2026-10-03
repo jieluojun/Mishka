@@ -31,7 +31,7 @@ ok  工作区已回到干净状态
 PASS: app 侧补丁双向可逆、结果与基线逐文件一致
 ```
 
-当前 app 补丁：53 files changed / 16218 insertions / 52 deletions，包括 28 个新文件
+当前 app 补丁：55 files files changed / 17097 insertions / , 54 deletions，包括 28 个新文件
 （23 个 Kotlin：`custom/` 下 anchor 5 个 + forms 17 个，加 r10 的 `ui/screen/panel/
 ExternalPanelActivity.kt`；5 个 XML：`activity_external_panel.xml` 布局与 4 个顶栏图标），
 以及 25 个上游文件（19 个 .kt：路由、订阅编辑页、YAML 编辑器、主页/代理页修复、测速反馈链的
@@ -39,7 +39,7 @@ ExternalPanelActivity.kt`；5 个 XML：`activity_external_panel.xml` 布局与 
 4 份 `strings.xml` 与 `docs/root-mode.md`）。订阅页入口在「覆写」下方；YAML 编辑器工具栏也有表单快捷按钮，位于锚点面板按钮左侧。
 
 基线（`patches/app/BASELINE.txt`）：`upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74`，
-`patch_sha256=ede82aeecc3905f517a6c3903eab5505792c07f4adf11810c31fc9c1b1af7f2a`（r10：条目 34 传统 View 宿主 Activity 导回后）。导出脚本
+`patch_sha256=2af823a455713da8d36cbb30d687bd602dec5ba95d537ef904e74267c7275a91`（r10 二轮：条目 35 端口冲突自愈 + 条目 36 顶栏标题 query 解析导回后）。导出脚本
 （`tools/export_app_patch.sh`）依次应用 4 个稳定 seed（`anchor-panel` + `visual-config-entry` +
 `home-proxy-root-fixes` + `external-panel`），再用交付目录里的最新 `custom/` 源码覆盖后导出；
 2026-10-03 这轮把测速反馈（条目 25）与外部面板 URL / HTTP 错误态（条目 27）的改动重新导回
@@ -51,7 +51,12 @@ r5 轮把条目 29（写穿拒写时 flow 映射展开块式）的 `custom/forms
 r7 轮设备回传证明 vh 系单位同样为 0、条目 31 改像素值 v2（内联 !important + 动态样式表 + resize 重算）导回同一 seed；r8 轮回传证明 v2 只修好根容器、条目 32 改高度链逐环显式像素（样式表 + 内联双保险）导回同一 seed；r9 轮回传证明几何全对仍空白（纯绘制）、条目 33 切软件渲染层 + 过渡清零 + opacity 强制导回同一 seed；
 r10 轮 BoxProxy 同机对照截图证明 WebView 引擎无恙、Compose `AndroidView` interop 宿主才是根因，
 条目 34 把面板整体重做为传统 View 宿主的独立 Activity（BoxProxy 式顶栏，seed 不再含
-`ExternalPanelScreen.kt`，新增 Activity/布局/图标/manifest 注册）重新导回同一 seed，
+`ExternalPanelScreen.kt`，新增 Activity/布局/图标/manifest 注册）重新导回同一 seed；
+r10 二轮回传证明第三方 clash 系内核（对照测试的 BoxProxy）占住 127.0.0.1:9090 导致
+`bind: address already in use`、代理起不来且面板只能停 setup 页——条目 35 在启动点加
+端口冲突自愈（回环被占→备用段 39090–39099），导回 `home-proxy-root-fixes.seed.patch`；
+条目 36 修顶栏标题误从 URL authority 取 host:port（显示成载体域名）改为 query 解析，
+导回 `external-panel.seed.patch`，
 并在已打补丁的源码树上验证 `git apply -R` / `git apply` 均通过。`scripts/apply-patches.sh` 与
 `scripts/revert-patches.sh` 此前已在干净克隆上往返验证，撤销后 `git status` 为空。
 

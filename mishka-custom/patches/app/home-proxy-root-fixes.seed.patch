@@ -185,8 +185,67 @@ index ecdcdb5..44da071 100644
                      TunMode.Vpn -> R.string.settings_tun_mode_vpn
                  }
              )
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ExtCtlPortGuard.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ExtCtlPortGuard.kt
+new file mode 100644
+index 0000000..6b6ea69
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/ExtCtlPortGuard.kt
+@@ -0,0 +1,53 @@
++package top.yukonga.mishka.service
++
++import android.util.Log
++import java.net.InetSocketAddress
++import java.net.Socket
++
++/**
++ * r10 二轮：external-controller 端口冲突自愈。
++ *
++ * 设备实证（2026-10-04 回传）：`External controller listen error: listen tcp 127.0.0.1:9090:
++ * bind: address already in use` 形态的启动失败——[RootHelper.cleanupOrphanedMihomo] 只清
++ * Mishka 自己的 `libmihomo_runner.so` 孤儿，**第三方 clash 系应用的内核**（对照测试装的
++ * BoxProxy 等，默认同样监听 127.0.0.1:9090）占了首选端口时，mihomo 的 external-controller
++ * bind 失败 → 进程活着但 API 无响应 → 主页「已停止」+ 面板连不上只能停在 setup 页。
++ *
++ * 自愈规则（只在本机回环地址上生效，远程 controller 原样保留）：
++ * 1. 首选地址空闲 → 原样使用（尊重用户配置）；
++ * 2. 被占 → 从备用端口段 39090–39099 选第一个空闲者；
++ * 3. 备用段全占（极端）→ 仍用首选，让原有错误路径报错，不静默乱跳。
++ * 调用点在各启动路径装配 `--ext-ctl` 处（孤儿清理之后），bridge state / API 客户端 /
++ * 面板 URL 全部读 bridge 的 externalController，随 fallback 自动一致。
++ */
++object ExtCtlPortGuard {
++    private const val TAG = "ExtCtlPortGuard"
++    private val FALLBACK_PORTS = 39090..39099
++
++    private fun isLoopback(host: String): Boolean =
++        host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
++
++    /** 能建立 TCP 连接即视为被监听（connect 被拒 = 空闲）。 */
++    fun isBusy(host: String, port: Int): Boolean = try {
++        Socket().use { s ->
++            s.connect(InetSocketAddress(host, port), 250)
++            true
++        }
++    } catch (_: Exception) {
++        false
++    }
++
++    fun resolve(preferred: String): String {
++        val host = preferred.substringBeforeLast(':')
++        val port = preferred.substringAfterLast(':').toIntOrNull() ?: return preferred
++        if (!isLoopback(host)) return preferred
++        if (!isBusy(host, port)) return preferred
++        val alt = FALLBACK_PORTS.firstOrNull { !isBusy(host, it) }
++        if (alt == null) {
++            Log.w(TAG, "ext-ctl $preferred busy and no fallback port free; keeping preferred")
++            return preferred
++        }
++        Log.w(TAG, "ext-ctl $preferred occupied by foreign listener; falling back to $host:$alt")
++        return "$host:$alt"
++    }
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 6cf8283..9298c02 100644
+index 6cf8283..83e39f0 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 @@ -37,20 +37,23 @@ import java.io.File
@@ -236,6 +295,15 @@ index 6cf8283..9298c02 100644
                      }
                      ProxyServiceBridge.updateState(
                          ProxyServiceStatus(
+@@ -353,7 +359,7 @@ class MishkaRootService : Service() {
+             // secret / extCtl 走 CLI flag 不进 JSON
+             val userOverride = overrideStore.load()
+             val secret = ConfigGenerator.resolveSecret(this@MishkaRootService, userOverride, subscriptionId)
+-            val extCtl = userOverride.resolveExternalController()
++            val extCtl = ExtCtlPortGuard.resolve(userOverride.resolveExternalController())
+             // 仅 TUN submode 且用户选 PROXY 时才探测 xt_TPROXY 为 RootTetherHijacker 开 tproxy-port 入站；
+             // 探测结果同步写入 StorageKeys.ROOT_TPROXY_KERNEL_CAPABLE，UI 据此决定是否显示降级告警
+             val userWantsProxy = submode == Submode.Tun &&
 @@ -428,6 +434,8 @@ class MishkaRootService : Service() {
              when (submode) {
                  Submode.Tun -> applyTetherRules(storage, tproxyForTether)
@@ -245,6 +313,19 @@ index 6cf8283..9298c02 100644
              }
  
              // 7. 更新状态和通知
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+index fa04d69..c1c43f7 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+@@ -308,7 +308,7 @@ class MishkaTunService : VpnService() {
+             // 2. 装配 override.run.json（用户设置 + 运行时字段 tun.file-descriptor 等）
+             // secret / extCtl 走 CLI flag 不进 JSON
+             val secret = ConfigGenerator.resolveSecret(this@MishkaTunService, userOverride, subscriptionId)
+-            val extCtl = userOverride.resolveExternalController()
++            val extCtl = ExtCtlPortGuard.resolve(userOverride.resolveExternalController())
+             val viaProxy = storage.getString(StorageKeys.SUBSCRIPTION_UPDATE_VIA_PROXY, "true") == "true"
+             val transformPlan = try {
+                 prepareRuntimeTransform(this@MishkaTunService, subscriptionId, subscriptionRepository, transformWriter)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 index b57d687..e23f0f7 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
