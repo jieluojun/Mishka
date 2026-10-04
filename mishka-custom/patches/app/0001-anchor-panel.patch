@@ -1,9 +1,9 @@
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 new file mode 100644
-index 0000000..c3e1f9e
+index 0000000..6a7e076
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,469 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.runtime.Immutable
@@ -60,13 +60,28 @@ index 0000000..c3e1f9e
 +    val lineCount: Int get() = lines.size
 +}
 +
-+/** 一行可编辑内容。[seed] 为 null 表示新增行。 */
++/** 一行可编辑内容。[seed] 为 null 表示新增行。[items] 非 null 表示这一行的值是
++ * 「块序列单行项」（如 override-expr 的表达式列表），按项编辑、逐行写回。 */
 +@Immutable
 +data class DefRow(
 +    val seed: DefEntrySeed?,
 +    val key: String,
 +    val value: String,
++    val items: List<SeqItemEdit>? = null,
 +)
++
++/** 嵌套块序列的一行（如 override-expr 下的每条表达式）：块内行号 + 行正文原文。 */
++@Immutable
++data class NestedSeqItem(
++    val lineIdx: Int,
++    val raw: String,
++    val indent: String,
++    val comment: String,
++)
++
++/** 可视化编辑器对嵌套块序列一行的写回意图：[lineIdx] 为 null 表示新增行。 */
++@Immutable
++data class SeqItemEdit(val lineIdx: Int?, val value: String)
 +
 +object AnchorBlock {
 +
@@ -186,6 +201,63 @@ index 0000000..c3e1f9e
 +    }
 +
 +    /**
++     * 尝试把嵌套行的值解析成「块序列 · 单行项」（典型：override-expr 的表达式列表）。
++     * 拆不动（嵌套映射、项带子块、缩进不齐、空项、项里再套序列、中间夹空行）返回 null，
++     * 对话框维持「请切文本」的保守提示。
++     */
++    fun parseNestedSeqItems(block: DefBlock, seed: DefEntrySeed): List<NestedSeqItem>? {
++        if (!seed.nested) return null
++        val items = mutableListOf<NestedSeqItem>()
++        var itemIndent = -1
++        var i = seed.startIdx + 1
++        while (i <= seed.endIdx) {
++            val line = block.lines[i]
++            if (line.isBlank()) return null
++            val m = SeqItemRegex.find(line) ?: return null
++            val indent = m.groupValues[1]
++            if (itemIndent < 0) itemIndent = indent.length
++            if (indent.length != itemIndent) return null
++            val value = AnchorScan.withoutComment(m.groupValues[2]).trim()
++            if (value.isEmpty() || value.startsWith("- ")) return null
++            items += NestedSeqItem(i, value, indent, AnchorScan.trailingComment(line))
++            i++
++        }
++        if (items.isEmpty()) return null
++        return items
++    }
++
++    /**
++     * 按 [edits] 写回嵌套块序列：未改动的行逐字保留（含缩进与行尾注释）；改过的行按
++     * `- 规范化值` 重写（沿用原行缩进与行尾注释）；新增行按原项缩进追加。
++     * 任一值规范化失败返回 null，调用方回落逐字保留。
++     */
++    fun renderNestedSeqItems(block: DefBlock, seed: DefEntrySeed, edits: List<SeqItemEdit>): List<String>? {
++        val items = parseNestedSeqItems(block, seed) ?: return null
++        val indent = items.firstOrNull()?.indent ?: " ".repeat(seed.indent.length + 2)
++        val out = mutableListOf<String>()
++        for (edit in edits) {
++            val orig = edit.lineIdx?.let { idx -> items.firstOrNull { it.lineIdx == idx } }
++            if (orig != null && edit.value == orig.raw) {
++                out += block.lines[orig.lineIdx]
++                continue
++            }
++            val value = YamlValue.normalize(edit.value) ?: return null
++            val sb = StringBuilder(indent).append("- ").append(value)
++            if (orig != null && orig.comment.isNotEmpty()) sb.append(' ').append(orig.comment)
++            out += sb.toString()
++        }
++        return out
++    }
++
++    /** 嵌套序列的项被删空：键行收成空序列（映射 `key: []` / 序列项 `- []`），不留悬空 null 值。 */
++    fun renderEmptySeqLine(block: DefBlock, seed: DefEntrySeed): String {
++        val sb = StringBuilder(seed.indent)
++        if (block.kind == DefKind.Seq) sb.append("- []") else sb.append(seed.keyRaw).append(": []")
++        if (seed.comment.isNotEmpty()) sb.append(' ').append(seed.comment)
++        return sb.toString()
++    }
++
++    /**
 +     * 按 [rows] 生成新的块文本：改过值的行整行重写（保留行尾注释），删掉的行连同其嵌套子行一起消失，
 +     * 其余行逐字保留，新增行追加在块尾。
 +     */
@@ -225,6 +297,19 @@ index 0000000..c3e1f9e
 +            val row = rows.firstOrNull { it.seed === seed }
 +            when {
 +                row == null -> Unit // 删除：连同 startIdx..endIdx 一起跳过
++                row.items != null -> {
++                    if (row.items.isEmpty()) {
++                        out += renderEmptySeqLine(block, seed)
++                    } else {
++                        val renderedItems = renderNestedSeqItems(block, seed, row.items)
++                        if (renderedItems == null) {
++                            out.addAll(block.lines.subList(seed.startIdx, seed.endIdx + 1))
++                        } else {
++                            out += block.lines[seed.startIdx]
++                            out += renderedItems
++                        }
++                    }
++                }
 +                seed.nested || row.value == seed.value -> out.addAll(block.lines.subList(seed.startIdx, seed.endIdx + 1))
 +                else -> out += renderEntry(block, seed.keyRaw, row.value, seed.comment, seed.indent)
 +            }
@@ -390,10 +475,10 @@ index 0000000..c3e1f9e
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 new file mode 100644
-index 0000000..a4f7727
+index 0000000..74d54f4
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
-@@ -0,0 +1,818 @@
+@@ -0,0 +1,902 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.foundation.background
@@ -461,10 +546,21 @@ index 0000000..a4f7727
 +/**
 + * 可视化表单的一行草稿：[seed] 为 null 表示这一行是新加的。
 + * key/value 是 Compose state——输入即触发重组，校验与预览跟着一起更新。
++ * [itemDrafts] 非 null 表示该行的值是「块序列 · 单行项」（如 override-expr 表达式列表），逐行编辑。
 + */
-+private class RowDraft(val seed: DefEntrySeed?, key: String, value: String) {
++private class RowDraft(
++    val seed: DefEntrySeed?,
++    key: String,
++    value: String,
++    val itemDrafts: MutableList<ItemDraft>? = null,
++) {
 +    var key by mutableStateOf(key)
 +    var value by mutableStateOf(value)
++}
++
++/** 嵌套块序列里的一条表达式草稿：[lineIdx] 为 null 表示新加的行。 */
++private class ItemDraft(val lineIdx: Int?, raw: String) {
++    var value by mutableStateOf(raw)
 +}
 +
 +private data class RowsResult(val rows: List<DefRow>?, val error: String)
@@ -485,7 +581,21 @@ index 0000000..a4f7727
 +    for (draft in drafts) {
 +        val seed = draft.seed
 +        if (seed != null && seed.nested) {
-+            out += DefRow(seed, seed.keyRaw, seed.value)
++            val items = draft.itemDrafts
++            if (items == null) {
++                out += DefRow(seed, seed.keyRaw, seed.value)
++                continue
++            }
++            val label = if (seed.keyRaw.isNotEmpty()) seed.keyRaw else "嵌套序列"
++            val edits = mutableListOf<SeqItemEdit>()
++            for ((i, it) in items.withIndex()) {
++                if (it.value.isBlank()) return RowsResult(null, "「$label」第 ${i + 1} 行是空的：填内容或用行尾按钮删掉")
++                if (YamlValue.normalize(it.value) == null) {
++                    return RowsResult(null, "「$label」第 ${i + 1} 行不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `")
++                }
++                edits += SeqItemEdit(it.lineIdx, it.value)
++            }
++            out += DefRow(seed, seed.keyRaw, seed.value, items = edits)
 +            continue
 +        }
 +        val label = if (seed != null) seed.keyRaw else draft.key.ifBlank { NewParamLabel }
@@ -522,7 +632,13 @@ index 0000000..a4f7727
 +    var textDraft by remember(block) { mutableStateOf(original) }
 +    val drafts = remember(block) {
 +        mutableStateListOf<RowDraft>().apply {
-+            block.entries.forEach { add(RowDraft(it, it.keyRaw, it.value)) }
++            block.entries.forEach { seed ->
++                val parsed = if (seed.nested) AnchorBlock.parseNestedSeqItems(block, seed) else null
++                val items = parsed?.let { list ->
++                    mutableStateListOf<ItemDraft>().apply { list.forEach { add(ItemDraft(it.lineIdx, it.raw)) } }
++                }
++                add(RowDraft(seed, seed.keyRaw, seed.value, items))
++            }
 +        }
 +    }
 +
@@ -589,7 +705,7 @@ index 0000000..a4f7727
 +                else -> {
 +                    DialogHint(
 +                        if (block.kind == DefKind.Map) {
-+                            "键名沿用原文（要改键名用卡片上的「改名」）；值支持单行标量与 `[..]` / `{..}`。"
++                            "键名沿用原文（要改键名用卡片上的「改名」）；值支持单行标量与 `[..]` / `{..}`；块序列的值（如 override-expr 表达式列表）逐行编辑、增删。"
 +                        } else {
 +                            "每行一个列表项；值支持单行标量与 `[..]` / `{..}`。"
 +                        },
@@ -605,12 +721,65 @@ index 0000000..a4f7727
 +                            horizontalArrangement = Arrangement.spacedBy(8.dp),
 +                        ) {
 +                            if (nested) {
-+                                Text(
-+                                    text = "嵌套块（${(draft.seed?.endIdx ?: 0) - (draft.seed?.startIdx ?: 0) + 1} 行）· 请切「文本」编辑",
-+                                    modifier = Modifier.weight(1f),
-+                                    fontSize = 12.sp,
-+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                                )
++                                val items = draft.itemDrafts
++                                if (items == null) {
++                                    Text(
++                                        text = "嵌套块（${(draft.seed?.endIdx ?: 0) - (draft.seed?.startIdx ?: 0) + 1} 行）· 请切「文本」编辑",
++                                        modifier = Modifier.weight(1f),
++                                        fontSize = 12.sp,
++                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                                    )
++                                } else {
++                                    Column(modifier = Modifier.weight(1f)) {
++                                        Text(
++                                            text = if (draft.key.isNotEmpty()) draft.key + ":" else "嵌套序列 · 每行一个值",
++                                            fontFamily = FontFamily.Monospace,
++                                            fontSize = 13.sp,
++                                            color = MiuixTheme.colorScheme.onSurfaceSecondary,
++                                            maxLines = 1,
++                                            overflow = TextOverflow.Ellipsis,
++                                        )
++                                        Spacer(Modifier.height(4.dp))
++                                        items.forEachIndexed { i, item ->
++                                            Row(
++                                                modifier = Modifier
++                                                    .fillMaxWidth()
++                                                    .padding(bottom = 6.dp),
++                                                verticalAlignment = Alignment.CenterVertically,
++                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
++                                            ) {
++                                                TextField(
++                                                    value = item.value,
++                                                    onValueChange = { nv -> item.value = nv },
++                                                    modifier = Modifier.weight(1f),
++                                                    label = "表达式 ${i + 1}",
++                                                    insideMargin = CompactInsideMargin,
++                                                    textStyle = MonoTextStyle,
++                                                    singleLine = true,
++                                                )
++                                                IconButton(
++                                                    onClick = { items.remove(item) },
++                                                    minWidth = 32.dp,
++                                                    minHeight = 32.dp,
++                                                ) {
++                                                    Icon(
++                                                        imageVector = MiuixIcons.Delete,
++                                                        contentDescription = "删除这一行",
++                                                        tint = StatusColors.danger,
++                                                    )
++                                                }
++                                            }
++                                        }
++                                        TextButton(
++                                            text = "＋ 添加一行",
++                                            onClick = { items.add(ItemDraft(null, "")) },
++                                            minWidth = 0.dp,
++                                            minHeight = 32.dp,
++                                            insideMargin = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
++                                            textStyle = MiuixTheme.textStyles.button.copy(fontSize = 13.sp),
++                                        )
++                                    }
++                                }
 +                            } else {
 +                                if (draft.seed == null) {
 +                                    TextField(

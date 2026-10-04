@@ -1,9 +1,9 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=27f9faa0638bff098960c7daafa78bcfe863595e0e3d3e122e3a07f4b6abe371
-blob_new=c3e1f9edf2f023b70f0dc8ad528bc81385a97fdd app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
-blob_new=a4f77270cd6fa40bf31105ab49f881b2a1ec7cee app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
+patch_sha256=f3c9d12b355093174ed0cd3b5494ead14981065285fc3fcc0e8cc711a301d9a9
+blob_new=6a7e0760933550e7f274e889988540551368fbb3 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
+blob_new=74d54f411bcb256815c71fd78ea2ff7a28cb8a34 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 blob_new=44c20972a2ecb1d97174a1979fef1df11f1f6a63 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
 blob_new=5d8e127c03b9b2b1a99db977e3410e2167e54cca app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 blob_new=9fb5450f4beb2cf08f800cc43a184b4a10ad7375 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
