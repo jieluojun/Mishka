@@ -759,7 +759,7 @@ index 0000000..a47ce98
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 new file mode 100644
-index 0000000..cea2dfc
+index 0000000..6c90cf8
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 @@ -0,0 +1,1117 @@
@@ -837,7 +837,7 @@ index 0000000..cea2dfc
 +    val seed: DefEntrySeed?,
 +    key: String,
 +    value: String,
-+    val seedValue: String,
++    val seedValue: String = value,
 +    val ve: VeDraft? = null,
 +) {
 +    var key by mutableStateOf(key)
