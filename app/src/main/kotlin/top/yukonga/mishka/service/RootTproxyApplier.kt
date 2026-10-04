@@ -1,0 +1,408 @@
+package top.yukonga.mishka.service
+
+import android.util.Log
+import top.yukonga.mishka.viewmodel.AppProxyMode
+
+/**
+ * ROOT TPROXY 模式的 netfilter 规则装配。
+ *
+ * 与 [RootTetherHijacker] 互斥（前者为仅热点 TPROXY，本类扩展到本机 + 热点全流量）：
+ * - 本类接管 `mangle PREROUTING + OUTPUT` + `nat PREROUTING + OUTPUT`；
+ * - mihomo 此模式下 `tun.enable=false`、`tproxy-port=7895`、`routing-mark=0xff`、`dns.listen=0.0.0.0:1053`；
+ * - sing-tun 完全不初始化，流量全部靠 iptables fwmark + `ip route add local default dev lo` 透明劫持。
+ *
+ * 常量选值对齐 box_for_magisk / Surfing / box4magisk 三家 Magisk 代理模块的共识值，
+ * 以及 Mishka 现有 [RootTetherHijacker] 的 fwmark/table/priority，避开 Android Netd 低 16 位 mark。
+ *
+ * 生命周期：`MishkaRootService.startProxy`（ROOT_TPROXY 分支）成功后 apply；
+ * stop/restart/进程死亡三路径 teardown（都走 NonCancellable）。
+ * 幂等：重复 apply 会先 teardown 残留再装配；teardown 每条命令 `|| true`，可从任意前置状态清理。
+ */
+object RootTproxyApplier {
+
+    private const val TAG = "RootTproxyApplier"
+
+    // ========== fwmark / route table / priority（与 RootTetherHijacker 共享） ==========
+    internal const val MARK = 0x01000000
+    internal const val MASK = 0x01000000
+    internal const val TABLE = 2024
+    internal const val PRIORITY = 7999
+
+    // ========== mihomo 监听端口 ==========
+    internal const val TPROXY_PORT = RootTetherHijacker.TPROXY_PORT  // 7895
+    internal const val DNS_PORT = 1053
+
+    // ========== mihomo 出站自绕方式 ==========
+    // **不用** mihomo 的 `routing-mark` + `-m mark -j RETURN` 做精确放行：Android Netd
+    // 用 fwmark 低 16 位编码 netId（见 `ip rule` 里的 `fwmark 0x1006d/0x1ffff lookup wlan0`），
+    // mihomo 带任何 SO_MARK 都会被当成不存在的 netId，命中 legacy_system 表（无默认路由）
+    // → mihomo 出站全部 network unreachable。
+    // 现方案：不设 SO_MARK，按 `-m owner --uid-owner 0 -j RETURN` 放行所有 root 进程。
+    // mihomo 通过 su 以 uid=0 运行，因此精确覆盖；副作用是 adbd/系统 root 工具的出站也不经 TPROXY，
+    // 但用户空间 app（uid 10000+）全部正常代理，符合 box_for_magisk 等模块的常见取舍。
+    internal const val MIHOMO_BYPASS_UID = 0
+
+    // ========== 自建 chain 名 ==========
+    private const val CHAIN_PRE = "mishka_tproxy_pre"
+    private const val CHAIN_OUT = "mishka_tproxy_out"
+    private const val CHAIN_DIVERT = "mishka_tproxy_divert"
+    private const val CHAIN_DNS_PRE = "mishka_dns_pre"
+    private const val CHAIN_DNS_OUT = "mishka_dns_out"
+
+    // xt_comment 前缀：所有 iptables 规则都打此标签，便于 [anyRulesPresent] 精确探测，
+    // 与第三方代理模块共存时也方便辨识来源
+    internal const val COMMENT_TAG_PREFIX = "mishka:tproxy:"
+
+    /** 生成 `-m comment --comment "mishka:tproxy:<label>"` 片段；追加到 iptables 命令末尾。 */
+    private fun tag(label: String): String = "-m comment --comment \"$COMMENT_TAG_PREFIX$label\""
+
+    /**
+     * 探测 xt_TPROXY 支持。复用 [RootTetherHijacker.probeTproxySupport]。
+     */
+    fun probeTproxySupport(): Boolean = RootTetherHijacker.probeTproxySupport()
+
+    /**
+     * 装配全部 TPROXY 规则。
+     *
+     * @param appUid Mishka 自身 UID（兜底自绕，routing-mark 之外的防御深度）
+     * @param selectedUids AppProxyMode 的已选 UID 集合（白/黑名单语义由 mode 决定）
+     * @param mode 分应用代理模式
+     * @param tetherIfaces 热点接口列表（复用 ROOT_TETHER_IFACES 存储项）
+     * @param ipv6Enabled 是否注入 ip6tables / `ip -6` 规则。复用 [StorageKeys.VPN_ALLOW_IPV6]：
+     *   关闭（默认）时 IPv6 出站走内核原生主路由表，不被劫持到 mihomo；与 VPN/ROOT TUN
+     *   `inet6-address` 控制粒度对齐，避免 mihomo `ipv6: false` 时 TPROXY 重定向 → 拨号
+     *   失败 → App 重试紧密循环造成 mihomo 内存增长。
+     */
+    fun apply(
+        appUid: Int,
+        selectedUids: Set<Int>,
+        mode: AppProxyMode,
+        tetherIfaces: List<String>,
+        ipv6Enabled: Boolean,
+    ) {
+        Log.i(TAG, "apply: appUid=$appUid mode=$mode selected=${selectedUids.size} ifaces=$tetherIfaces ipv6=$ipv6Enabled")
+        val script = buildApplyScript(appUid, selectedUids, mode, tetherIfaces, ipv6Enabled)
+        val code = RootHelper.runRootScriptHeredoc(script, timeoutSeconds = 20)
+        Log.i(TAG, "apply finished code=$code")
+    }
+
+    /**
+     * 拆除全部 TPROXY 规则（严格逆序 + 每步 `|| true`，幂等）。
+     */
+    fun teardown() {
+        Log.i(TAG, "teardown")
+        val code = RootHelper.runRootScriptHeredoc(buildTeardownScript(), timeoutSeconds = 15)
+        Log.i(TAG, "teardown finished code=$code")
+    }
+
+    /**
+     * Attach 路径快速自检：本类的任一显著 anchor 是否仍存在。
+     * anchor 选 `mishka_tproxy_pre` / `mishka_tproxy_out` chain 与 priority 7999 ip rule —— 任一
+     * 存在即视为规则未被清掉，attach 可 skip re-apply。任一 anchor 缺失即视为需要 re-apply。
+     *
+     * exit 0 表示存在、1 表示不存在、其他为 shell/su 错误（保守当作"存在"避免误清）。
+     */
+    fun anyRulesPresent(): Boolean {
+        // 优先 xt_comment 扫描（精度最高），次选 chain 名，最后 priority anchor
+        val w = RootTetherHijacker.IPT_WAIT_SECONDS
+        val script = """
+            #!/system/bin/sh
+            $IPT4 -t mangle -S 2>/dev/null | grep -q '$COMMENT_TAG_PREFIX' && exit 0
+            $IPT4 -t nat    -S 2>/dev/null | grep -q '$COMMENT_TAG_PREFIX' && exit 0
+            $IPT4 -t mangle -S 2>/dev/null | grep -q '$CHAIN_PRE' && exit 0
+            $IPT4 -t mangle -S 2>/dev/null | grep -q '$CHAIN_OUT' && exit 0
+            ip rule show 2>/dev/null | grep -q '^$PRIORITY:' && exit 0
+            exit 1
+        """.trimIndent()
+        // 超时需容纳 `-w` 的锁等待，否则等锁的那几秒会被当成 su 错误
+        val code = RootHelper.runRootScriptHeredoc(script, timeoutSeconds = w + 5L)
+        return code != 1
+    }
+
+    // ========================================================================
+    // 脚本生成
+    // ========================================================================
+
+    private fun buildApplyScript(
+        appUid: Int,
+        selectedUids: Set<Int>,
+        mode: AppProxyMode,
+        tetherIfaces: List<String>,
+        ipv6Enabled: Boolean,
+    ): String {
+        // ipv6Enabled=false 时全程跳过 ip6tables / ip -6 命令的发射，保证 IPv6 出站走内核原生
+        // 主路由表（设备有 native v6 时直连，无时 ENETUNREACH 让 App 快失败）
+        val tables = if (ipv6Enabled) TABLES else V4_ONLY_TABLES
+        val sb = StringBuilder()
+        sb.appendLine("#!/system/bin/sh")
+        sb.appendLine("set +e")
+        // 0. 幂等前置：清残留（可能来自旧版本 / 异常退出 / 上次 ipv6 开关相反），失败全忽略
+        sb.append(buildTeardownScript(includeShebang = false))
+        sb.appendLine()
+        sb.appendLine("# === 1. ip rule + route ===")
+        sb.appendLine("ip rule  add fwmark $MARK/$MASK lookup $TABLE priority $PRIORITY 2>/dev/null")
+        sb.appendLine("ip  route add local default dev lo table $TABLE 2>/dev/null")
+        if (ipv6Enabled) {
+            sb.appendLine("ip -6 rule add fwmark $MARK/$MASK lookup $TABLE priority $PRIORITY 2>/dev/null")
+            sb.appendLine("ip -6 route add local default dev lo table $TABLE 2>/dev/null")
+        }
+
+        sb.appendLine()
+        sb.appendLine("# === 2. 自建 chain ===")
+        for (t in tables) {
+            sb.appendLine("$t -t mangle -N $CHAIN_PRE")
+            sb.appendLine("$t -t mangle -N $CHAIN_OUT")
+            sb.appendLine("$t -t mangle -N $CHAIN_DIVERT")
+            sb.appendLine("$t -t nat -N $CHAIN_DNS_PRE 2>/dev/null")
+            sb.appendLine("$t -t nat -N $CHAIN_DNS_OUT 2>/dev/null")
+        }
+
+        sb.appendLine()
+        sb.appendLine("# === 3. DIVERT chain: ESTABLISHED 流快速通道 (MARK + ACCEPT) ===")
+        for (t in tables) {
+            sb.appendLine("$t -t mangle -A $CHAIN_DIVERT -j MARK --set-xmark $MARK/$MASK ${tag("divert-mark")}")
+            sb.appendLine("$t -t mangle -A $CHAIN_DIVERT -j ACCEPT ${tag("divert-accept")}")
+        }
+
+        sb.appendLine()
+        sb.appendLine("# === 4. PREROUTING 主链 (intranet RETURN + LOCAL RETURN + DIVERT + TPROXY) ===")
+        appendIntranetReturns(sb, table = "mangle", chain = CHAIN_PRE, tagLabel = "pre-intranet", ipv6Enabled = ipv6Enabled)
+        // 本机接口任一 IP 为 dst 的包：RETURN（mihomo API、系统服务、dns.listen 等本地监听都要放行，避免劫持）
+        sb.appendLine("$IPT4 -t mangle -A $CHAIN_PRE -m addrtype --dst-type LOCAL -j RETURN ${tag("pre-local")}")
+        if (ipv6Enabled) {
+            sb.appendLine("$IPT6 -t mangle -A $CHAIN_PRE -m addrtype --dst-type LOCAL -j RETURN ${tag("pre-local-v6")} 2>/dev/null")
+        }
+        // DIVERT：已有 mihomo accepted socket 的后续包（ESTABLISHED TCP 或复用 UDP socket）跳过 TPROXY，
+        // 仅打 mark 让 fwmark 路由命中 table 2024 投递 socket；避免 TPROXY 重复拦截造成连接中断
+        for (t in tables) {
+            sb.appendLine("$t -t mangle -A $CHAIN_PRE -p tcp -m socket -j $CHAIN_DIVERT ${tag("pre-divert-tcp")}")
+            sb.appendLine("$t -t mangle -A $CHAIN_PRE -p udp -m socket -j $CHAIN_DIVERT ${tag("pre-divert-udp")}")
+        }
+        // lo TPROXY：OUTPUT 打 mark 后经 `local default dev lo` reinject，命中这里 attach mihomo socket
+        for (proto in listOf("tcp", "udp")) {
+            sb.appendLine(
+                "$IPT4 -t mangle -A $CHAIN_PRE -p $proto -i lo -j TPROXY --on-ip 127.0.0.1 --on-port $TPROXY_PORT --tproxy-mark $MARK/$MASK ${
+                    tag(
+                        "pre-tproxy-lo-$proto"
+                    )
+                }"
+            )
+            if (ipv6Enabled) {
+                sb.appendLine(
+                    "$IPT6 -t mangle -A $CHAIN_PRE -p $proto -i lo -j TPROXY --on-ip ::1 --on-port $TPROXY_PORT --tproxy-mark $MARK/$MASK ${
+                        tag(
+                            "pre-tproxy-lo-$proto-v6"
+                        )
+                    } 2>/dev/null"
+                )
+            }
+        }
+        // tether ifaces：热点客户端转发流量直接 TPROXY
+        for (iface in tetherIfaces) {
+            val esc = RootHelper.escapeShellSingleQuoted(iface)
+            for (proto in listOf("tcp", "udp")) {
+                sb.appendLine(
+                    "$IPT4 -t mangle -A $CHAIN_PRE -p $proto -i $esc -j TPROXY --on-ip 127.0.0.1 --on-port $TPROXY_PORT --tproxy-mark $MARK/$MASK ${
+                        tag(
+                            "pre-tproxy-tether-$proto"
+                        )
+                    }"
+                )
+                if (ipv6Enabled) {
+                    sb.appendLine(
+                        "$IPT6 -t mangle -A $CHAIN_PRE -p $proto -i $esc -j TPROXY --on-ip ::1 --on-port $TPROXY_PORT --tproxy-mark $MARK/$MASK ${
+                            tag(
+                                "pre-tproxy-tether-$proto-v6"
+                            )
+                        } 2>/dev/null"
+                    )
+                }
+            }
+        }
+
+        sb.appendLine()
+        sb.appendLine("# === 5. OUTPUT 主链 (本机按 AppProxyMode 打 mark) ===")
+        for (t in tables) {
+            // 5a. root 进程放行：mihomo 以 uid=0 (via su) 运行，必须排除否则死循环；
+            //      顺带放行所有 root 工具（adbd / shell 等），是 box_for_magisk 系的常见取舍
+            sb.appendLine("$t -t mangle -A $CHAIN_OUT -m owner --uid-owner $MIHOMO_BYPASS_UID -j RETURN ${tag("out-bypass-root")}")
+            // 5b. Mishka 自身 app uid 兜底（非必要但多层防御）
+            if (appUid != MIHOMO_BYPASS_UID) {
+                sb.appendLine("$t -t mangle -A $CHAIN_OUT -m owner --uid-owner $appUid -j RETURN ${tag("out-bypass-self")}")
+            }
+            // 5c. 本机地址 / 广播 RETURN（curl localhost / mDNS / DHCP 等，不劫持）
+            sb.appendLine("$t -t mangle -A $CHAIN_OUT -m addrtype --dst-type LOCAL -j RETURN ${tag("out-local")}")
+            sb.appendLine("$t -t mangle -A $CHAIN_OUT -m addrtype --dst-type BROADCAST -j RETURN ${tag("out-broadcast")}")
+            // 5d. DNS 交由 nat chain 处理
+            sb.appendLine("$t -t mangle -A $CHAIN_OUT -p udp --dport 53 -j RETURN ${tag("out-dns-udp")}")
+            sb.appendLine("$t -t mangle -A $CHAIN_OUT -p tcp --dport 53 -j RETURN ${tag("out-dns-tcp")}")
+        }
+        // 5d. 局域网 RETURN
+        appendIntranetReturns(sb, table = "mangle", chain = CHAIN_OUT, tagLabel = "out-intranet", ipv6Enabled = ipv6Enabled)
+
+        // 5d. 按 AppProxyMode 打 mark
+        sb.appendLine("# --- AppProxyMode: $mode ---")
+        when (mode) {
+            AppProxyMode.AllowAll -> {
+                // 全局代理，appUid 上面已经 RETURN
+                for (t in tables) {
+                    for (proto in listOf("tcp", "udp")) {
+                        sb.appendLine("$t -t mangle -A $CHAIN_OUT -p $proto -j MARK --set-xmark $MARK/$MASK ${tag("out-mark-$proto")}")
+                    }
+                }
+            }
+
+            AppProxyMode.AllowSelected -> {
+                // 仅白名单 UID 打 mark，其他默认 RETURN
+                for (uid in selectedUids) {
+                    if (uid == appUid) continue // 避免覆盖 5a 的自绕
+                    for (t in tables) {
+                        for (proto in listOf("tcp", "udp")) {
+                            sb.appendLine(
+                                "$t -t mangle -A $CHAIN_OUT -p $proto -m owner --uid-owner $uid -j MARK --set-xmark $MARK/$MASK ${
+                                    tag(
+                                        "out-mark-uid-$proto"
+                                    )
+                                }"
+                            )
+                        }
+                    }
+                }
+            }
+
+            AppProxyMode.DenySelected -> {
+                // 黑名单 UID RETURN，其余全代理
+                for (uid in selectedUids) {
+                    for (t in tables) {
+                        sb.appendLine("$t -t mangle -A $CHAIN_OUT -m owner --uid-owner $uid -j RETURN ${tag("out-deny-uid")}")
+                    }
+                }
+                for (t in tables) {
+                    for (proto in listOf("tcp", "udp")) {
+                        sb.appendLine("$t -t mangle -A $CHAIN_OUT -p $proto -j MARK --set-xmark $MARK/$MASK ${tag("out-mark-$proto")}")
+                    }
+                }
+            }
+        }
+
+        sb.appendLine()
+        sb.appendLine("# === 6. DNS 劫持 (nat REDIRECT to mihomo dns.listen) ===")
+        // PREROUTING 仅对 tether 转发流量生效；本机流量不经 PREROUTING nat，不会循环
+        sb.appendLine("$IPT4 -t nat -A $CHAIN_DNS_PRE -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT ${tag("dns-pre-udp")}")
+        sb.appendLine("$IPT4 -t nat -A $CHAIN_DNS_PRE -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT ${tag("dns-pre-tcp")}")
+        if (ipv6Enabled) {
+            sb.appendLine("$IPT6 -t nat -A $CHAIN_DNS_PRE -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT ${tag("dns-pre-udp-v6")} 2>/dev/null")
+            sb.appendLine("$IPT6 -t nat -A $CHAIN_DNS_PRE -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT ${tag("dns-pre-tcp-v6")} 2>/dev/null")
+        }
+
+        // OUTPUT 自绕顺序：root 进程（mihomo via su）优先 RETURN，mishka app uid 兜底；
+        // 不放行会导致 mihomo 自己解析代理服务器域名时被重定向回自己 → 死循环 → 全网无法解析
+        sb.appendLine("$IPT4 -t nat -A $CHAIN_DNS_OUT -m owner --uid-owner $MIHOMO_BYPASS_UID -j RETURN ${tag("dns-out-bypass-root")}")
+        if (appUid != MIHOMO_BYPASS_UID) {
+            sb.appendLine("$IPT4 -t nat -A $CHAIN_DNS_OUT -m owner --uid-owner $appUid -j RETURN ${tag("dns-out-bypass-self")}")
+        }
+        sb.appendLine("$IPT4 -t nat -A $CHAIN_DNS_OUT -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT ${tag("dns-out-udp")}")
+        sb.appendLine("$IPT4 -t nat -A $CHAIN_DNS_OUT -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT ${tag("dns-out-tcp")}")
+        if (ipv6Enabled) {
+            sb.appendLine("$IPT6 -t nat -A $CHAIN_DNS_OUT -m owner --uid-owner $MIHOMO_BYPASS_UID -j RETURN ${tag("dns-out-bypass-root-v6")} 2>/dev/null")
+            if (appUid != MIHOMO_BYPASS_UID) {
+                sb.appendLine("$IPT6 -t nat -A $CHAIN_DNS_OUT -m owner --uid-owner $appUid -j RETURN ${tag("dns-out-bypass-self-v6")} 2>/dev/null")
+            }
+            sb.appendLine("$IPT6 -t nat -A $CHAIN_DNS_OUT -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT ${tag("dns-out-udp-v6")} 2>/dev/null")
+            sb.appendLine("$IPT6 -t nat -A $CHAIN_DNS_OUT -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT ${tag("dns-out-tcp-v6")} 2>/dev/null")
+        }
+
+        sb.appendLine()
+        sb.appendLine("# === 7. 挂主链 ===")
+        // DIVERT 已在 CHAIN_PRE 内部（intranet RETURN 之后、TPROXY 之前），外层只挂 CHAIN_PRE
+        // 顶层 jump 不打 comment：teardown 的 `-D PREROUTING -j <chain>` 必须与 apply 时的
+        // 规则逐参数精确匹配，一旦带上 comment，`-D` 也得原样带同一条 comment 才删得掉
+        for (t in tables) {
+            sb.appendLine("$t -t mangle -I PREROUTING -j $CHAIN_PRE")
+            sb.appendLine("$t -t mangle -I OUTPUT -j $CHAIN_OUT")
+        }
+        sb.appendLine("$IPT4 -t nat -I PREROUTING -j $CHAIN_DNS_PRE")
+        sb.appendLine("$IPT4 -t nat -I OUTPUT     -j $CHAIN_DNS_OUT")
+        if (ipv6Enabled) {
+            sb.appendLine("$IPT6 -t nat -I PREROUTING -j $CHAIN_DNS_PRE 2>/dev/null")
+            sb.appendLine("$IPT6 -t nat -I OUTPUT     -j $CHAIN_DNS_OUT 2>/dev/null")
+        }
+
+        sb.appendLine()
+        sb.appendLine("exit 0")
+        return sb.toString()
+    }
+
+    private fun buildTeardownScript(includeShebang: Boolean = true): String {
+        val sb = StringBuilder()
+        if (includeShebang) {
+            sb.appendLine("#!/system/bin/sh")
+            sb.appendLine("set +e")
+        }
+        sb.appendLine("# === 卸主链 (没挂过 -D 返回非零，忽略) ===")
+        for (t in TABLES) {
+            // 兜底：DIVERT 若被单独挂在 PREROUTING（不是本实现的挂法）也一并卸掉，没挂过只返回非零
+            sb.appendLine("$t -t mangle -D PREROUTING -p tcp -m socket -j $CHAIN_DIVERT 2>/dev/null")
+            sb.appendLine("$t -t mangle -D PREROUTING -j $CHAIN_PRE 2>/dev/null")
+            sb.appendLine("$t -t mangle -D OUTPUT -j $CHAIN_OUT 2>/dev/null")
+            sb.appendLine("$t -t nat -D PREROUTING -j $CHAIN_DNS_PRE 2>/dev/null")
+            sb.appendLine("$t -t nat -D OUTPUT -j $CHAIN_DNS_OUT 2>/dev/null")
+        }
+        sb.appendLine()
+        sb.appendLine("# === flush + delete 自建链 ===")
+        for (t in TABLES) {
+            for (c in listOf(CHAIN_DIVERT, CHAIN_PRE, CHAIN_OUT)) {
+                sb.appendLine("$t -t mangle -F $c 2>/dev/null")
+                sb.appendLine("$t -t mangle -X $c 2>/dev/null")
+            }
+            for (c in listOf(CHAIN_DNS_PRE, CHAIN_DNS_OUT)) {
+                sb.appendLine("$t -t nat -F $c 2>/dev/null")
+                sb.appendLine("$t -t nat -X $c 2>/dev/null")
+            }
+        }
+        sb.appendLine()
+        sb.appendLine("# === ip rule + route ===")
+        sb.appendLine("i=0; while [ \$i -lt 32 ] && ip rule del priority $PRIORITY 2>/dev/null; do i=\$((i+1)); done")
+        sb.appendLine("i=0; while [ \$i -lt 32 ] && ip -6 rule del priority $PRIORITY 2>/dev/null; do i=\$((i+1)); done")
+        sb.appendLine("ip  route flush table $TABLE 2>/dev/null")
+        sb.appendLine("ip -6 route flush table $TABLE 2>/dev/null")
+        if (includeShebang) {
+            sb.appendLine()
+            sb.appendLine("exit 0")
+        }
+        return sb.toString()
+    }
+
+    /**
+     * 往 [chain] 追加局域网/保留网段的 RETURN 规则：
+     * 除 UDP/53 外，所有到 intranet 的流量跳出本链，让 DNS (udp/53) 继续走 nat REDIRECT 劫持。
+     *
+     * v4 严格（失败即 bug），v6 best-effort（部分 ROM v6 mangle 可能受限，失败静默）；
+     * [ipv6Enabled]=false 时跳过 v6 行发射。
+     */
+    private fun appendIntranetReturns(
+        sb: StringBuilder,
+        table: String,
+        chain: String,
+        tagLabel: String,
+        ipv6Enabled: Boolean,
+    ) {
+        for (net in IptablesIntranet.V4) {
+            sb.appendLine("$IPT4 -t $table -A $chain -d $net -p udp ! --dport 53 -j RETURN ${tag(tagLabel)}")
+            sb.appendLine("$IPT4 -t $table -A $chain -d $net ! -p udp -j RETURN ${tag(tagLabel)}")
+        }
+        if (ipv6Enabled) {
+            for (net in IptablesIntranet.V6) {
+                sb.appendLine("$IPT6 -t $table -A $chain -d $net -p udp ! --dport 53 -j RETURN ${tag("$tagLabel-v6")} 2>/dev/null")
+                sb.appendLine("$IPT6 -t $table -A $chain -d $net ! -p udp -j RETURN ${tag("$tagLabel-v6")} 2>/dev/null")
+            }
+        }
+    }
+
+    // 秒数并进令牌，脚本里不再单独写 -w（理由见 RootTetherHijacker.IPT4）
+    private val IPT4 = "iptables -w ${RootTetherHijacker.IPT_WAIT_SECONDS}"
+    private val IPT6 = "ip6tables -w ${RootTetherHijacker.IPT_WAIT_SECONDS}"
+
+    private val TABLES = listOf(IPT4, IPT6)
+    private val V4_ONLY_TABLES = listOf(IPT4)
+}

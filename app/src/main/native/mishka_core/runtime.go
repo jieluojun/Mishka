@@ -1,0 +1,225 @@
+package main
+
+/*
+#include <stdlib.h>
+*/
+import "C"
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"unsafe"
+
+	"github.com/metacubex/mihomo/component/age"
+	"github.com/metacubex/mihomo/component/updater"
+	"github.com/metacubex/mihomo/config"
+	Const "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/hub"
+	"github.com/metacubex/mihomo/hub/executor"
+	"github.com/metacubex/mihomo/log"
+	"go.yaml.in/yaml/v3"
+)
+
+// dlopen + dlsym 进入点：解析 -d / -f / --override-json / --secret / --ext-ctl，启动 hub 后阻塞等信号。
+// argv[0] 透传 binary 路径作占位；返回值即进程退出码。
+//
+//export mihomoEntry
+func mihomoEntry(argc C.int, argv **C.char) C.int {
+	args := make([]string, int(argc))
+	if argc > 0 && argv != nil {
+		arr := unsafe.Slice(argv, int(argc))
+		for i, p := range arr {
+			args[i] = C.GoString(p)
+		}
+	}
+	os.Args = args
+	return C.int(runMihomo())
+}
+
+func runMihomo() int {
+	// 独立 FlagSet 避开 mishka_core 其他文件可能注册到 flag.CommandLine 的 flag。
+	fs := flag.NewFlagSet("mihomo", flag.ExitOnError)
+	var (
+		homeDir             string
+		configFile          string
+		secret              string
+		externalController  string
+		overrideJSON        string
+		transformPath       string
+		preferTransformPort bool
+		ageSecretKey        string
+	)
+	fs.StringVar(&homeDir, "d", "", "set configuration directory")
+	fs.StringVar(&configFile, "f", "", "specify configuration file")
+	fs.StringVar(&overrideJSON, "override-json", "", "path to a JSON file whose fields override the parsed RawConfig")
+	fs.StringVar(&transformPath, "transform", "", "path to a JSON subscription transform applied before parsing")
+	fs.BoolVar(&preferTransformPort, "prefer-transform-mixed-port", false, "let the transformed configuration's mixed-port override the runtime fallback")
+	fs.StringVar(&secret, "secret", "", "override RESTful API secret")
+	fs.StringVar(&externalController, "ext-ctl", "", "override external controller address")
+	fs.StringVar(&ageSecretKey, "age-secret-key", "", "age secret key to decrypt age-armor encrypted configuration")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		return 2
+	}
+
+	// 任何意外走系统 resolver 的代码路径立刻自爆，方便定位（mihomo 应当全程用自己的 DNS 栈）。
+	net.DefaultResolver.PreferGo = true
+	net.DefaultResolver.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+		fmt.Fprintln(os.Stderr, "panic: net.DefaultResolver.Dial should never be called")
+		os.Exit(2)
+		return nil, nil
+	}
+
+	if overrideJSON != "" {
+		config.OverrideJSONPath = overrideJSON
+	}
+
+	// age armor 加密的订阅配置在磁盘上保持加密，运行时用此密钥解密（hub.Parse 内部调
+	// config.UnmarshalRawConfig → age.DecryptBytes 读全局密钥）；SIGHUP reload 也持续生效。
+	if ageSecretKey != "" {
+		age.SetGlobalSecretKeys(ageSecretKey)
+	}
+
+	if homeDir != "" {
+		if !filepath.IsAbs(homeDir) {
+			cwd, _ := os.Getwd()
+			homeDir = filepath.Join(cwd, homeDir)
+		}
+		Const.SetHomeDir(homeDir)
+	}
+
+	if configFile == "" {
+		configFile = filepath.Join(Const.Path.HomeDir(), Const.Path.Config())
+	} else if !filepath.IsAbs(configFile) {
+		cwd, _ := os.Getwd()
+		configFile = filepath.Join(cwd, configFile)
+	}
+	Const.SetConfig(configFile)
+
+	if err := config.Init(Const.Path.HomeDir()); err != nil {
+		log.Fatalln("init config dir: %s", err.Error())
+	}
+
+	configBytes, err := os.ReadFile(configFile)
+	if err != nil {
+		log.Fatalln("read config: %s", err.Error())
+	}
+
+	var options []hub.Option
+	if externalController != "" {
+		options = append(options, hub.WithExternalController(externalController))
+	}
+	if secret != "" {
+		options = append(options, hub.WithSecret(secret))
+	}
+
+	if transformPath != "" {
+		if configBytes, err = applyTransformFile(configBytes, transformPath, ageSecretKey); err != nil {
+			log.Fatalln("apply transform: %s", err.Error())
+		}
+		if preferTransformPort {
+			// override.run.json 的默认端口只负责兜底；脚本若显式设置端口，
+			// 在 Parse 完成后、listener 创建前恢复它，且不重复执行脚本。
+			port, portErr := transformedMixedPort(configBytes)
+			if portErr != nil {
+				log.Fatalln("inspect transformed mixed-port: %s", portErr.Error())
+			}
+			if port > 0 {
+				options = append(options, func(cfg *config.Config) { cfg.General.MixedPort = port })
+			}
+		}
+	}
+	// 最终 YAML（含脚本变换）和用户覆写都未选栈时，才覆盖 mihomo 内建默认值。
+	defaultStack, err := shouldDefaultTunStack(configBytes, overrideJSON, ageSecretKey)
+	if err != nil {
+		log.Fatalln("inspect tun stack: %s", err.Error())
+	}
+	if defaultStack {
+		options = append(options, func(cfg *config.Config) {
+			if cfg.General.Tun.Enable {
+				cfg.General.Tun.Stack = Const.TunMips
+			}
+		})
+	}
+
+	if err := hub.Parse(configBytes, options...); err != nil {
+		log.Fatalln("Parse config: %s", err.Error())
+	}
+
+	if updater.GeoAutoUpdate() {
+		updater.RegisterGeoUpdater()
+	}
+
+	defer executor.Shutdown()
+
+	termSig := make(chan os.Signal, 1)
+	hupSig := make(chan os.Signal, 1)
+	signal.Notify(termSig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(hupSig, syscall.SIGHUP)
+
+	for {
+		select {
+		case <-termSig:
+			return 0
+		case <-hupSig:
+			if err := hub.Parse(configBytes, options...); err != nil {
+				log.Errorln("Reload config: %s", err.Error())
+			}
+		}
+	}
+}
+
+func shouldDefaultTunStack(configBytes []byte, overrideJSON, ageSecretKey string) (bool, error) {
+	plain, err := decryptConfig(configBytes, ageSecretKey)
+	if err != nil {
+		return false, err
+	}
+	var subscription struct {
+		Tun struct {
+			Stack *string `yaml:"stack"`
+		} `yaml:"tun"`
+	}
+	if err := yaml.Unmarshal(plain, &subscription); err != nil {
+		return false, err
+	}
+	if subscription.Tun.Stack != nil {
+		return false, nil
+	}
+	if overrideJSON != "" {
+		data, err := os.ReadFile(overrideJSON)
+		if err != nil {
+			return false, err
+		}
+		var user struct {
+			Tun struct {
+				Stack *string `json:"stack"`
+			} `json:"tun"`
+		}
+		if err := json.Unmarshal(data, &user); err != nil {
+			return false, err
+		}
+		if user.Tun.Stack != nil {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func transformedMixedPort(configBytes []byte) (int, error) {
+	var config struct {
+		MixedPort int `yaml:"mixed-port"`
+	}
+	if err := yaml.Unmarshal(configBytes, &config); err != nil {
+		return 0, err
+	}
+	if config.MixedPort < 1 || config.MixedPort > 65535 {
+		return 0, nil
+	}
+	return config.MixedPort, nil
+}

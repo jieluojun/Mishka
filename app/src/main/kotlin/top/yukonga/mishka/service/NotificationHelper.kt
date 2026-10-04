@@ -1,0 +1,281 @@
+package top.yukonga.mishka.service
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import top.yukonga.mishka.MainActivity
+import top.yukonga.mishka.R
+import top.yukonga.mishka.service.NotificationHelper.PROFILE_PROGRESS_ID_BASE
+import java.util.concurrent.atomic.AtomicInteger
+
+/**
+ * 通知 id 分区（同一 NotificationManager 命名空间，撞号即互相覆盖/取消）：
+ * - 1..99      前台服务等固定通知
+ * - 100..999   更新结果，环形复用
+ * - 0x10000+   per 订阅的更新进度，uuid 低 16 位散列，与上面两段天然不相交
+ */
+object NotificationHelper {
+
+    // VPN 服务通知
+    private const val CHANNEL_VPN = "mishka_vpn"
+    const val NOTIFICATION_ID_VPN = 1
+
+    // 配置更新进度通知
+    private const val CHANNEL_PROFILE_STATUS = "mishka_profile_status"
+    const val NOTIFICATION_ID_PROFILE_WORKER = 2
+    private const val PROFILE_PROGRESS_ID_BASE = 0x10000
+
+    // 配置更新结果通知
+    private const val CHANNEL_PROFILE_RESULT = "mishka_profile_result"
+    private const val RESULT_ID_BASE = 100
+    private const val RESULT_ID_RANGE = 900
+    private val nextResultId = AtomicInteger(0)
+
+    // Wi-Fi 自动切换内部服务通知与状态切换事件通知
+    private const val CHANNEL_WIFI_POLICY_SERVICE = "mishka_wifi_policy_service"
+    private const val CHANNEL_WIFI_POLICY_EVENT = "mishka_wifi_policy_event"
+    const val NOTIFICATION_ID_WIFI_POLICY = 3
+
+    // 事件通知用固定 id 互相覆盖，只保留最新一条，避免在通知栏堆积历史事件
+    private const val NOTIFICATION_ID_WIFI_POLICY_EVENT = 4
+
+    /** per 订阅的更新进度通知 id。落在 [PROFILE_PROGRESS_ID_BASE] 之上的独立区间。 */
+    fun profileProgressId(uuid: String): Int =
+        PROFILE_PROGRESS_ID_BASE + (uuid.hashCode() and 0xFFFF)
+
+    private fun nextResultId(): Int =
+        RESULT_ID_BASE + (nextResultId.getAndIncrement() % RESULT_ID_RANGE)
+
+    fun createChannels(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannels(
+            listOf(
+                NotificationChannel(
+                    CHANNEL_VPN,
+                    context.getString(R.string.channel_vpn_name),
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = context.getString(R.string.channel_vpn_desc)
+                    setShowBadge(false)
+                },
+                NotificationChannel(
+                    CHANNEL_PROFILE_STATUS,
+                    context.getString(R.string.channel_profile_status_name),
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = context.getString(R.string.channel_profile_status_desc)
+                    setShowBadge(false)
+                },
+                NotificationChannel(
+                    CHANNEL_PROFILE_RESULT,
+                    context.getString(R.string.channel_profile_result_name),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    description = context.getString(R.string.channel_profile_result_desc)
+                },
+                NotificationChannel(
+                    CHANNEL_WIFI_POLICY_SERVICE,
+                    context.getString(R.string.channel_wifi_policy_service_name),
+                    NotificationManager.IMPORTANCE_MIN,
+                ).apply {
+                    description = context.getString(R.string.channel_wifi_policy_service_desc)
+                    setShowBadge(false)
+                },
+                NotificationChannel(
+                    CHANNEL_WIFI_POLICY_EVENT,
+                    context.getString(R.string.channel_wifi_policy_event_name),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    description = context.getString(R.string.channel_wifi_policy_event_desc)
+                },
+            )
+        )
+    }
+
+    // === VPN 通知 ===
+
+    fun buildNotification(context: Context, title: String, content: String): Notification {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        return Notification.Builder(context, CHANNEL_VPN)
+            .setContentTitle(title)
+            .setContentText(content)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+    }
+
+    fun buildLoadingNotification(context: Context): Notification {
+        return buildNotification(
+            context,
+            context.getString(R.string.app_name),
+            context.getString(R.string.notification_loading),
+        )
+    }
+
+    fun buildRunningNotification(context: Context, mode: String = "VpnService"): Notification {
+        return buildNotification(
+            context,
+            context.getString(R.string.notification_running_title),
+            context.getString(R.string.notification_running_content, mode)
+        )
+    }
+
+    fun buildDynamicNotification(
+        context: Context,
+        profileName: String,
+        uploadTotal: String,
+        downloadTotal: String,
+        uploadSpeed: String,
+        downloadSpeed: String,
+    ): Notification {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        return Notification.Builder(context, CHANNEL_VPN)
+            .setContentTitle("$profileName • $uploadTotal↑ $downloadTotal↓")
+            .setContentText("$uploadSpeed↑ $downloadSpeed↓")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+    }
+
+    fun buildWifiPolicyServiceNotification(context: Context): Notification {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, NOTIFICATION_ID_WIFI_POLICY, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        return Notification.Builder(context, CHANNEL_WIFI_POLICY_SERVICE)
+            .setContentTitle(context.getString(R.string.notification_wifi_policy_title))
+            .setContentText(context.getString(R.string.notification_wifi_policy_service_content))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+    }
+
+    fun notifyWifiPolicyEvent(context: Context, contentResId: Int) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, NOTIFICATION_ID_WIFI_POLICY_EVENT, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val notification = Notification.Builder(context, CHANNEL_WIFI_POLICY_EVENT)
+            .setContentTitle(context.getString(R.string.notification_wifi_policy_title))
+            .setContentText(context.getString(contentResId))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_STATUS)
+            .build()
+
+        context.getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID_WIFI_POLICY_EVENT, notification)
+    }
+
+    // === 配置更新进度通知 ===
+
+    fun buildProfileWorkerNotification(context: Context): Notification {
+        return Notification.Builder(context, CHANNEL_PROFILE_STATUS)
+            .setContentTitle(context.getString(R.string.notification_profile_update))
+            .setContentText(context.getString(R.string.notification_profile_running))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+    }
+
+    fun buildProfileUpdatingNotification(context: Context, name: String): Notification {
+        return Notification.Builder(context, CHANNEL_PROFILE_STATUS)
+            .setContentTitle(context.getString(R.string.notification_profile_updating))
+            .setContentText(name)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setGroup(CHANNEL_PROFILE_STATUS)
+            .build()
+    }
+
+    // === 配置更新结果通知 ===
+
+    fun notifyProfileUpdateSuccess(context: Context, name: String): Int {
+        val id = nextResultId()
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, id, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val notification = Notification.Builder(context, CHANNEL_PROFILE_RESULT)
+            .setContentTitle(context.getString(R.string.notification_update_success))
+            .setContentText(context.getString(R.string.notification_update_success_content, name))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setGroup(CHANNEL_PROFILE_RESULT)
+            .build()
+
+        context.getSystemService(NotificationManager::class.java).notify(id, notification)
+        return id
+    }
+
+    fun notifyProfileUpdateFailed(context: Context, name: String, reason: String): Int {
+        val id = nextResultId()
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, id, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val text = "$name: $reason"
+        val notification = Notification.Builder(context, CHANNEL_PROFILE_RESULT)
+            .setContentTitle(context.getString(R.string.notification_update_failed))
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setGroup(CHANNEL_PROFILE_RESULT)
+            .setStyle(Notification.BigTextStyle().bigText(text))
+            .build()
+
+        context.getSystemService(NotificationManager::class.java).notify(id, notification)
+        return id
+    }
+}
