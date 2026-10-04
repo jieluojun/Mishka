@@ -2376,7 +2376,7 @@ index 0000000..44c2097
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 new file mode 100644
-index 0000000..5d8e127
+index 0000000..fd65e1f
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 @@ -0,0 +1,752 @@
@@ -2843,7 +2843,7 @@ index 0000000..5d8e127
 +            Spacer(Modifier.width(8.dp))
 +            if (anchor.defs.size > 1) {
 +                Badge(text = "定义 ×${anchor.defs.size}", color = StatusColors.warning)
-+                Spacer(Modifier.width(6.dp))
++                Spacer(Modifier.width(8.dp))
 +            }
 +            if (anchor.refs.isEmpty()) {
 +                Badge(text = "无人引用", color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
@@ -4359,7 +4359,7 @@ index 0000000..42d1495
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..a490b91
+index 0000000..5573e3f
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 @@ -0,0 +1,1415 @@
@@ -4992,7 +4992,7 @@ index 0000000..a490b91
 +    val type = listenerType(doc, index)
 +    val listenerNode = doc.get(base)
 +    if (listenerNode == null || listenerNode.kind != YamlNode.Kind.MAP) {
-+        Column(modifier = Modifier.fillMaxWidth()) {
++        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 +            DialogNote("监听器 #${index + 1} 已不存在或不是映射。")
 +            TextButton(text = "返回", onClick = { nav.pop() })
 +        }
@@ -8836,10 +8836,10 @@ index 0000000..033bcf3
 +    (name.trim().ifEmpty { fallback }).replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 new file mode 100644
-index 0000000..529b11c
+index 0000000..5aa67fe
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
-@@ -0,0 +1,661 @@
+@@ -0,0 +1,664 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -9115,13 +9115,14 @@ index 0000000..529b11c
 +                            overflow = TextOverflow.Ellipsis,
 +                            modifier = Modifier.weight(1f),
 +                        )
++                        Spacer(Modifier.width(8.dp))
 +                        TextButton(text = "上移", minWidth = 0.dp, minHeight = 0.dp, onClick = {
 +                            if (index > 0) {
 +                                val v = items.removeAt(index)
 +                                items.add(index - 1, v)
 +                            }
 +                        })
-+                        Spacer(Modifier.width(6.dp))
++                        Spacer(Modifier.width(8.dp))
 +                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { items.removeAt(index) })
 +                    }
 +                }
@@ -9233,7 +9234,7 @@ index 0000000..529b11c
 +                            label = field.keyPlaceholder ?: "键",
 +                            singleLine = true,
 +                        )
-+                        Spacer(Modifier.width(6.dp))
++                        Spacer(Modifier.width(8.dp))
 +                        TextField(
 +                            value = values[index],
 +                            onValueChange = { values[index] = it },
@@ -9241,6 +9242,7 @@ index 0000000..529b11c
 +                            label = if (field.arrayValues) "值（逗号分隔多个）" else "值",
 +                            singleLine = true,
 +                        )
++                        Spacer(Modifier.width(8.dp))
 +                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = {
 +                            keys.removeAt(index)
 +                            values.removeAt(index)
@@ -9302,7 +9304,7 @@ index 0000000..529b11c
 +                        verticalAlignment = Alignment.CenterVertically,
 +                    ) {
 +                        for ((ci, col) in columns.withIndex()) {
-+                            if (ci > 0) Spacer(Modifier.width(6.dp))
++                            if (ci > 0) Spacer(Modifier.width(8.dp))
 +                            TextField(
 +                                value = rows[index][ci],
 +                                onValueChange = { v -> rows[index] = rows[index].mapIndexed { j, s -> if (j == ci) v else s } },
@@ -9311,6 +9313,7 @@ index 0000000..529b11c
 +                                singleLine = true,
 +                            )
 +                        }
++                        Spacer(Modifier.width(8.dp))
 +                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { rows.removeAt(index) })
 +                    }
 +                }
@@ -13680,10 +13683,10 @@ index 0000000..1704d85
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
 new file mode 100644
-index 0000000..9b2a925
+index 0000000..b24e4c4
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
-@@ -0,0 +1,1033 @@
+@@ -0,0 +1,1037 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import android.content.pm.ApplicationInfo
@@ -13783,8 +13786,9 @@ index 0000000..9b2a925
 +                                    servers.add(index - 1, item)
 +                                }
 +                            })
++                            Spacer(Modifier.width(8.dp))
 +                            TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
-+                            Spacer(Modifier.width(6.dp))
++                            Spacer(Modifier.width(8.dp))
 +                            TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { servers.removeAt(index) })
 +                        },
 +                    )
@@ -14267,8 +14271,9 @@ index 0000000..9b2a925
 +                                    rules.add(index - 1, item)
 +                                }
 +                            })
++                            Spacer(Modifier.width(8.dp))
 +                            TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
-+                            Spacer(Modifier.width(6.dp))
++                            Spacer(Modifier.width(8.dp))
 +                            TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { rules.removeAt(index) })
 +                        },
 +                    )
@@ -14544,7 +14549,7 @@ index 0000000..9b2a925
 +                            label = "请求头名",
 +                            singleLine = true,
 +                        )
-+                        Spacer(Modifier.width(6.dp))
++                        Spacer(Modifier.width(8.dp))
 +                        TextField(
 +                            value = values[index],
 +                            onValueChange = { values[index] = it },
@@ -14552,6 +14557,7 @@ index 0000000..9b2a925
 +                            label = if (field.arrayValues) "候选值" else "值",
 +                            singleLine = true,
 +                        )
++                        Spacer(Modifier.width(8.dp))
 +                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { keys.removeAt(index); values.removeAt(index) })
 +                    }
 +                }
@@ -14632,7 +14638,7 @@ index 0000000..9b2a925
 +                        summary = row.values.joinToString(", ").ifBlank { "（空）" },
 +                        endActions = {
 +                            TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
-+                            Spacer(Modifier.width(6.dp))
++                            Spacer(Modifier.width(8.dp))
 +                            TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { rows.removeAt(index) })
 +                        },
 +                    )
@@ -14669,8 +14675,8 @@ index 0000000..9b2a925
 +        )
 +        return
 +    }
-+    WindowDialog(show = true, title = if (initial == null) "添加映射条目" else "编辑映射条目", onDismissRequest = onDismiss) {
-+        Column(modifier = Modifier.fillMaxWidth()) {
++        WindowDialog(show = true, title = if (initial == null) "添加映射条目" else "编辑映射条目", onDismissRequest = onDismiss) {
++        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 +            TextField(key, { key = it }, modifier = Modifier.fillMaxWidth(), label = field.keyPlaceholder ?: "键", singleLine = true)
 +            if (field.dns) {
 +                DialogNote("值为 DNS 服务器列表；可使用可视化构建器添加、编辑和排序。")
@@ -14685,6 +14691,7 @@ index 0000000..9b2a925
 +                                        values = values.toMutableList().also { it.removeAt(index); it.add(index - 1, item) }
 +                                    }
 +                                })
++                                Spacer(Modifier.width(8.dp))
 +                                TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { values = values.toMutableList().also { it.removeAt(index) } })
 +                            },
 +                        )
