@@ -16960,10 +16960,18 @@ index 0000000..8e92a0f
 +    }
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-index 33aa9cc..72ef97b 100644
+index 33aa9cc..0fdd5de 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-@@ -90,13 +90,16 @@ class MihomoApiClient(
+@@ -29,6 +29,7 @@ import top.yukonga.mishka.domain.model.ProvidersResponse
+ import top.yukonga.mishka.domain.model.ProxiesResponse
+ import top.yukonga.mishka.domain.model.RuleProvidersResponse
+ import top.yukonga.mishka.domain.model.RulesResponse
++import java.net.URLEncoder
+ 
+ class MihomoApiClient(
+     private val baseUrl: String = "http://127.0.0.1:9090",
+@@ -90,13 +91,16 @@ class MihomoApiClient(
          ensureSuccess(response, "proxy group '$group'")
      }
  
@@ -16976,7 +16984,7 @@ index 33aa9cc..72ef97b 100644
 -        }.body()
 +    suspend fun getProxyDelay(name: String, testUrl: String = DEFAULT_DELAY_TEST_URL, timeout: Int = 8000): DelayResult =
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/proxies/$name/delay") {
++            client.get("$baseUrl/proxies/${pathSeg(name)}/delay") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -16987,7 +16995,7 @@ index 33aa9cc..72ef97b 100644
  
      /**
       * 测试 proxy-provider 内单节点延迟。provider 节点不在 /proxies 命名空间，
-@@ -105,15 +108,38 @@ class MihomoApiClient(
+@@ -105,15 +109,46 @@ class MihomoApiClient(
      suspend fun getProviderProxyDelay(
          provider: String,
          name: String,
@@ -17002,7 +17010,7 @@ index 33aa9cc..72ef97b 100644
 -            }
 -        }.body()
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
++            client.get("$baseUrl/providers/proxies/${pathSeg(provider)}/${pathSeg(name)}/healthcheck") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -17026,6 +17034,14 @@ index 33aa9cc..72ef97b 100644
 +        return response.body()
 +    }
 +
++    /**
++     * 路径段 URL 编码：节点名 / provider 名会含 `/`、空格与 emoji（如 `免流订阅/🇺🇸 美国-17`），
++     * 裸拼进 URL 会被 chi 路由拆成多层路径直接 404（整组测速全失败的根因）。
++     * URLEncoder 是表单编码：`+` 要还原成 `%20`；`/` 编成 `%2F` 正是路径段需要的，
++     * 内核侧 `getEscapeParam` 会解码回原名。
++     */
++    private fun pathSeg(raw: String): String = URLEncoder.encode(raw, "UTF-8").replace("+", "%20")
++
 +    companion object {
 +        /** 测速地址与 mihomo_box 参考实现对齐（https：免流/直连节点上 http 明文探测更易被重置）。 */
 +        const val DEFAULT_DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
@@ -17033,7 +17049,7 @@ index 33aa9cc..72ef97b 100644
  
      suspend fun getRules(): RulesResponse =
          client.get("$baseUrl/rules").body()
-@@ -219,4 +245,8 @@ class MihomoApiClient(
+@@ -219,4 +254,8 @@ class MihomoApiClient(
      }
  }
  
@@ -17083,7 +17099,7 @@ index bdb96f7..c5f8970 100644
      @Serializable
      data object AppProxy : Route
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
-index d3f9631..8469359 100644
+index d3f9631..0aad602 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 @@ -5,10 +5,12 @@ import androidx.compose.animation.core.animateDpAsState
@@ -17180,16 +17196,6 @@ index d3f9631..8469359 100644
                  }
              )
              .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp),
-@@ -847,7 +883,8 @@ private fun ProxyNodeCard(
-                 Spacer(Modifier.width(6.dp))
-                 Box(
-                     modifier = Modifier
--                        .sizeIn(minWidth = 28.dp)
-+                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-+                        // 48dp 触控区；角标自身字号/图标不变
-                         .clickable(
-                             enabled = !isTesting,
-                             interactionSource = null,
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 index b1b2479..7da18ac 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt

@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=22a1352adb008cc4560335232fecf318c39bb0a7a71d99ed3eba51fc99aba2a8
+patch_sha256=3ba2a756e00c64b6f070736e8c971beb6c4afc37e21a7091bb13beb9abad4bc8
 blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 blob_new=48b879f20a3cb57945e783d12c8ec262f42a401b app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 blob_new=44c20972a2ecb1d97174a1979fef1df11f1f6a63 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
@@ -24,10 +24,10 @@ blob_new=b24e4c4aae90e72f4abfb977c3b33163ebe9d1a3 app/src/main/kotlin/top/yukong
 blob_new=f496eb56bd2f2b9dab2dfda23661243366fc5a88 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
 blob_new=1796296a18858516030ff9bbe5fbe596a2a46e5e app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
-blob_after=72ef97b0327b2f4b128fb81175161001b0d9fc37 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+blob_after=0fdd5de0f18e4b946aa2f9f97a1e6e71f4f4f535 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 blob_after=334bcdc4314418edafdf9ca2d1795f2897534dd7 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 blob_after=c5f897059a3970523105e2b323cb757a2f641a09 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
-blob_after=8469359996be98f3ba877d9c7b070d2aadb07030 app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
+blob_after=0aad602b3aaa281d374e0d4bedcd0b3125d01ad0 app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 blob_after=7da18acdd4ed9794d6e6ce9ad5a858a4aba9a9fd app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 blob_after=eeb582a1cd60330ca660e31a25ee0ad2ef9ab6a9 app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
 blob_after=2fa980604aa52c173c838707481ee0598ef0dde5 app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
