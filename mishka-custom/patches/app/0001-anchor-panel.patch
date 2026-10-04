@@ -1,9 +1,9 @@
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 new file mode 100644
-index 0000000..65442de
+index 0000000..a47ce98
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
-@@ -0,0 +1,510 @@
+@@ -0,0 +1,753 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.runtime.Immutable
@@ -68,6 +68,8 @@ index 0000000..65442de
 +    val key: String,
 +    val value: String,
 +    val items: List<SeqItemEdit>? = null,
++    /** 非 null 表示这一行的值是嵌套块映射，按展开面板的键值编辑逐支写回（flow 来源在对话框里直接合成 [value]）。 */
++    val mapItems: List<FlowSubEdit>? = null,
 +)
 +
 +/** 嵌套块序列的一行（如 override-expr 下的每条表达式）：块内行号 + 行正文原文。 */
@@ -87,9 +89,38 @@ index 0000000..65442de
 +@Immutable
 +data class FlowSubItem(val keyRaw: String, val value: String, val rawSeg: String)
 +
++/** 嵌套块映射的一支（如 `health-check:` 下的 `enable`）：块内行号 + 值可视化文本 + 缩进/注释。 */
++@Immutable
++data class NestedMapItem(
++    val keyRaw: String,
++    val lineIdx: Int,
++    val indent: String,
++    val comment: String,
++    /** 对话框值框里的初值：单行支=行内值原文；子块支=整支的 flow dump。 */
++    val viz: String,
++)
++
 +/** flow 映射值里一对键值的写回意图：[keyRaw] 为 null 表示新增键（由对话框规范化后填入）。 */
 +@Immutable
 +data class FlowSubEdit(val keyRaw: String?, val value: String)
++
++/** flow 序列值里一项的写回意图：[idx] 为 null 表示新增项。 */
++@Immutable
++data class FlowSeqEdit(val idx: Int?, val value: String)
++
++/** 值树节点（对照 mihomo_box 的「展开值编辑器」：值框 + 展开一层）：map / seq / scalar。 */
++@Immutable
++data class ValNode(val kind: String, val entries: List<ValEntry>, val scalar: String = "") {
++    companion object {
++        const val MAP = "map"
++        const val SEQ = "seq"
++        const val SCALAR = "scalar"
++    }
++}
++
++/** 值树的一支：[key] 为 null 表示序列项。 */
++@Immutable
++data class ValEntry(val key: String?, val node: ValNode)
 +
 +object AnchorBlock {
 +
@@ -265,6 +296,14 @@ index 0000000..65442de
 +        return sb.toString()
 +    }
 +
++    /** 嵌套映射的支被删空：键行收成空映射（映射 `key: {}` / 序列项 `- {}`），不留悬空 null 值。 */
++    fun renderEmptyMapLine(block: DefBlock, seed: DefEntrySeed): String {
++        val sb = StringBuilder(seed.indent)
++        if (block.kind == DefKind.Seq) sb.append("- {}") else sb.append(seed.keyRaw).append(": {}")
++        if (seed.comment.isNotEmpty()) sb.append(' ').append(seed.comment)
++        return sb.toString()
++    }
++
 +    /**
 +     * 把单行行内 flow 映射的值（如 `health-check: { enable: true, url: … }` 的值）再拆一层键值。
 +     * 序列、非 flow、段拆不动返回 null——对话框维持单个值框。
@@ -273,6 +312,13 @@ index 0000000..65442de
 +        val flow = parseFlow(value.trim()) ?: return null
 +        if (flow.seq) return null
 +        return flow.segments.mapIndexed { i, raw -> FlowSubItem(flow.kv[i].first, flow.kv[i].second, raw) }
++    }
++
++    /** 把单行行内 flow 序列的值拆成各项原文；映射、非 flow、段拆不动返回 null。 */
++    fun flowSeqItems(value: String): List<String>? {
++        val flow = parseFlow(value.trim()) ?: return null
++        if (!flow.seq) return null
++        return flow.segments
 +    }
 +
 +    /**
@@ -296,6 +342,192 @@ index 0000000..65442de
 +            }
 +        }
 +        return "{" + flow.padOpen + parts.joinToString(flow.sep) + flow.padClose + "}"
++    }
++
++    /**
++     * 把一段值文本解析成值树（对照 mihomo_box 的 yValText/jsyaml.load）：flow 映射/序列递归展开，
++     * 其余按标量保留原文。空文本 = null 标量。
++     */
++    fun parseValueText(text: String): ValNode {
++        val t = text.trim()
++        val flow = parseFlow(t)
++        if (flow != null) {
++            val entries = flow.kv.map { (k, v) -> ValEntry(if (flow.seq) null else k, parseValueText(v)) }
++            return ValNode(if (flow.seq) ValNode.SEQ else ValNode.MAP, entries)
++        }
++        return ValNode(ValNode.SCALAR, emptyList(), t)
++    }
++
++    /**
++     * 把一个定义条目的值解析成值树：嵌套块按行递归展开；单行值走 [parseValueText]。
++     * 嵌套行形态不齐（缩进漂移、项套项、块里夹 flow 根之外的怪行）返回 null——对话框维持「请切文本」。
++     */
++    fun parseValueTree(block: DefBlock, seed: DefEntrySeed): ValNode? {
++        if (!seed.nested) return parseValueText(seed.value)
++        return parseLines(block.lines, seed.startIdx + 1, seed.endIdx)
++    }
++
++    /** 递归解析块行区间 [from..to] 为值树；拆不动返回 null。 */
++    private fun parseLines(lines: List<String>, from: Int, to: Int): ValNode? {
++        var i = from
++        while (i <= to && lines[i].isBlank()) i++
++        if (i > to) return null
++        val seq = SeqItemRegex.find(lines[i]) != null
++        val map = if (seq) false else MapEntryRegex.find(lines[i]) != null
++        if (!seq && !map) return null
++        val entries = parseEntries(lines, i, to, seq) ?: return null
++        return ValNode(if (seq) ValNode.SEQ else ValNode.MAP, entries)
++    }
++
++    /** 解析同层条目（seq 项 / map 支），子块递归；层缩进漂移或形态不齐返回 null。 */
++    private fun parseEntries(lines: List<String>, from: Int, to: Int, seq: Boolean): List<ValEntry>? {
++        val out = mutableListOf<ValEntry>()
++        var i = from
++        var level = -1
++        while (i <= to) {
++            val line = lines[i]
++            if (line.isBlank()) return null
++            val indent = AnchorScan.indentOf(line)
++            if (level < 0) level = indent
++            if (indent != level) return null
++            val m = (if (seq) SeqItemRegex.find(line) else MapEntryRegex.find(line)) ?: return null
++            var end = i
++            var j = i + 1
++            while (j <= to) {
++                val next = lines[j]
++                if (next.isBlank()) return null
++                val ni = AnchorScan.indentOf(next)
++                if (ni > level) { end = j; j++ } else break
++            }
++            val raw = AnchorScan.withoutComment(if (seq) m.groupValues[2] else m.groupValues[3]).trim()
++            val node = if (end > i) {
++                if (raw.isNotEmpty()) return null // `- k: v` 又带子块 / `k: v` 又带子块：形态不猜
++                parseLines(lines, i + 1, end) ?: return null
++            } else {
++                if (seq && raw.isEmpty()) return null
++                parseValueText(raw)
++            }
++            out += ValEntry(if (seq) null else m.groupValues[2].trim(), node)
++            i = end + 1
++        }
++        if (out.isEmpty()) return null
++        return out
++    }
++
++    /** 值树 → 单行 flow 文本（对照 mihomo_box 的 yValText：lineWidth:-1 + flowLevel:0）。 */
++    fun dumpFlow(node: ValNode): String = when (node.kind) {
++        ValNode.MAP ->
++            if (node.entries.isEmpty()) "{}"
++            else node.entries.joinToString(", ", "{", "}") { (k, v) -> "$k: ${dumpFlow(v)}" }
++        ValNode.SEQ ->
++            if (node.entries.isEmpty()) "[]"
++            else node.entries.joinToString(", ", "[", "]") { (_, v) -> dumpFlow(v) }
++        else -> {
++            val s = node.scalar
++            YamlValue.normalize(s) ?: "'" + s.replace("'", "''") + "'"
++        }
++    }
++
++    /**
++     * 尝试把嵌套行的值解析成「块映射 · 单层支」（典型：health-check 的块式子映射）。
++     * 拆不动（缩进不齐、空行、非映射行、支带子块以外的怪形态）返回 null。
++     */
++    fun parseNestedMapEntries(block: DefBlock, seed: DefEntrySeed): List<NestedMapItem>? {
++        if (!seed.nested) return null
++        val items = mutableListOf<NestedMapItem>()
++        var entryIndent = -1
++        var i = seed.startIdx + 1
++        while (i <= seed.endIdx) {
++            val line = block.lines[i]
++            if (line.isBlank()) return null
++            val m = MapEntryRegex.find(line) ?: return null
++            val indent = m.groupValues[1]
++            if (entryIndent < 0) entryIndent = indent.length
++            if (indent.length != entryIndent) return null
++            var end = i
++            var j = i + 1
++            while (j <= seed.endIdx) {
++                val next = block.lines[j]
++                if (next.isBlank()) return null
++                if (AnchorScan.indentOf(next) > entryIndent) { end = j; j++ } else break
++            }
++            val valueRaw = AnchorScan.withoutComment(m.groupValues[3]).trim()
++            val viz = if (end > i) {
++                if (valueRaw.isNotEmpty()) return null
++                val sub = parseLines(block.lines, i + 1, end) ?: return null
++                dumpFlow(sub)
++            } else {
++                valueRaw
++            }
++            items += NestedMapItem(m.groupValues[2].trim(), i, indent, AnchorScan.trailingComment(line), viz)
++            i = end + 1
++        }
++        if (items.isEmpty()) return null
++        return items
++    }
++
++    /**
++     * 按 [edits] 写回嵌套块映射：未改动的支逐字保留（含缩进与行尾注释），改过的按
++     * `键: 规范化值` 重写（子块支被改成单行文本时整支收成一行），新增支按原缩进追加。
++     * 任一值规范化失败或键对不上返回 null，调用方回落。
++     */
++    fun renderNestedMapEntries(block: DefBlock, seed: DefEntrySeed, edits: List<FlowSubEdit>): List<String>? {
++        val items = parseNestedMapEntries(block, seed) ?: return null
++        val indent = items.first().indent
++        val out = mutableListOf<String>()
++        val used = HashSet<Int>()
++        for (edit in edits) {
++            val key = edit.keyRaw ?: return null
++            val idx = items.indexOfFirst { it.keyRaw == key }
++            if (idx >= 0 && !used.add(idx)) return null
++            if (idx < 0) {
++                // 新增支：按原缩进追加
++                val value = YamlValue.normalize(edit.value) ?: return null
++                val sb = StringBuilder(indent).append(key).append(':')
++                if (value.isNotEmpty()) sb.append(' ').append(value)
++                out += sb.toString()
++                continue
++            }
++            val orig = items[idx]
++            if (edit.value == orig.viz) {
++                var end = orig.lineIdx
++                var j = orig.lineIdx + 1
++                while (j <= seed.endIdx) {
++                    val next = block.lines[j]
++                    if (next.isBlank()) break
++                    if (AnchorScan.indentOf(next) > indent.length) { end = j; j++ } else break
++                }
++                for (k in orig.lineIdx..end) out += block.lines[k]
++                continue
++            }
++            val value = YamlValue.normalize(edit.value) ?: return null
++            val sb = StringBuilder(indent).append(key).append(':')
++            if (value.isNotEmpty()) sb.append(' ').append(value)
++            if (orig.comment.isNotEmpty()) sb.append(' ').append(orig.comment)
++            out += sb.toString()
++        }
++        if (out.isEmpty()) return emptyList()
++        return out
++    }
++
++    /**
++     * 按 [edits] 把 flow 序列值重组成一行：未改动的项用原文段逐字回写，改过的按规范化值重写，
++     * 新增项追加在末尾；括号留白与项间分隔符沿用原文风格。任一值规范化失败返回 null。
++     */
++    fun renderFlowSeq(original: String, edits: List<FlowSeqEdit>): String? {
++        val flow = parseFlow(original.trim()) ?: return null
++        if (!flow.seq) return null
++        if (edits.isEmpty() && flow.segments.isEmpty()) return original
++        val parts = ArrayList<String>(edits.size)
++        for (edit in edits) {
++            val idx = edit.idx
++            if (idx != null && idx < flow.segments.size && edit.value == flow.segments[idx]) {
++                parts += flow.segments[idx]
++            } else {
++                parts += YamlValue.normalize(edit.value) ?: return null
++            }
++        }
++        return "[" + flow.padOpen + parts.joinToString(flow.sep) + flow.padClose + "]"
 +    }
 +
 +    /**
@@ -348,6 +580,17 @@ index 0000000..65442de
 +                        } else {
 +                            out += block.lines[seed.startIdx]
 +                            out += renderedItems
++                        }
++                    }
++                }
++                row.mapItems != null -> {
++                    val renderedMap = renderNestedMapEntries(block, seed, row.mapItems)
++                    when {
++                        renderedMap == null -> out.addAll(block.lines.subList(seed.startIdx, seed.endIdx + 1))
++                        renderedMap.isEmpty() -> out += renderEmptyMapLine(block, seed)
++                        else -> {
++                            out += block.lines[seed.startIdx]
++                            out += renderedMap
 +                        }
 +                    }
 +                }
@@ -516,10 +759,10 @@ index 0000000..65442de
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 new file mode 100644
-index 0000000..412273c
+index 0000000..cea2dfc
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
-@@ -0,0 +1,994 @@
+@@ -0,0 +1,1117 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.foundation.background
@@ -587,36 +830,189 @@ index 0000000..412273c
 +/**
 + * 可视化表单的一行草稿：[seed] 为 null 表示这一行是新加的。
 + * key/value 是 Compose state——输入即触发重组，校验与预览跟着一起更新。
-+ * [itemDrafts] 非 null 表示该行的值是「块序列 · 单行项」（如 override-expr 表达式列表），逐行编辑。
++ * [seedValue] 是值框文本的初值（嵌套块 = 整值的单行 flow dump）；[ve] 非 null 表示这一行的值
++ * 是复合结构，按 mihomo_box 的样式给「展开 ▾」编辑器。
 + */
 +private class RowDraft(
 +    val seed: DefEntrySeed?,
 +    key: String,
 +    value: String,
-+    val itemDrafts: MutableList<ItemDraft>? = null,
-+    val subDrafts: MutableList<SubDraft>? = null,
++    val seedValue: String,
++    val ve: VeDraft? = null,
 +) {
 +    var key by mutableStateOf(key)
 +    var value by mutableStateOf(value)
 +}
 +
-+/** 嵌套块序列里的一条表达式草稿：[lineIdx] 为 null 表示新加的行。 */
-+private class ItemDraft(val lineIdx: Int?, raw: String) {
-+    var value by mutableStateOf(raw)
-+}
++/** 值的来源（决定展开面板合成后的写回通道）：块式序列 / 块式映射 / 行内 flow 映射 / 行内 flow 序列。 */
++private enum class ValOrigin { BlockSeq, BlockMap, FlowMap, FlowSeq }
 +
-+/** 行内 flow 映射值里的一对键值草稿：[keyRaw] 为 null 表示新加的键（键名可输入）。 */
-+private class SubDraft(val keyRaw: String?, keyInput: String, raw: String) {
++/**
++ * 展开面板里的一行草稿（对照 mihomo_box attachValueExpander 的子行）：
++ * [keyRaw] 非 null = 已有键（键名只读）；[originIdx] = 块序列的原行号 / flow 序列的原位置（null = 新增）。
++ */
++private class ChildDraft(val keyRaw: String?, val originIdx: Int?, keyInput: String, raw: String) {
 +    var key by mutableStateOf(keyInput)
 +    var value by mutableStateOf(raw)
 +}
 +
++/**
++ * 值展开编辑器（对照 mihomo_box 的 attachValueExpander，VALUE_DEPTH_MAX=1）：
++ * 值框放整值的单行 flow 文本，「展开 ▾」拆一层键值 / 逐值行，更深层在子值框里直接写 `{..}` / `[..]`。
++ */
++private class VeDraft(val origin: ValOrigin, initial: List<ChildDraft>) {
++    val children = mutableStateListOf<ChildDraft>().apply { addAll(initial) }
++    var opened by mutableStateOf(false)
++    var seedSnapshot: List<Pair<String?, String>> = initial.map { (it.keyRaw ?: it.key) to it.value }
++        private set
++    fun changed(): Boolean = children.map { (it.keyRaw ?: it.key) to it.value } != seedSnapshot
++    fun reseed(next: List<ChildDraft>) {
++        children.clear()
++        children.addAll(next)
++        seedSnapshot = next.map { (it.keyRaw ?: it.key) to it.value }
++    }
++}
++
++private data class RowValue(val value: String, val items: List<SeqItemEdit>?, val mapItems: List<FlowSubEdit>?)
++
 +private data class RowsResult(val rows: List<DefRow>?, val error: String)
++
++/** 子值框文本：标量保留原文，复合结构给单行 flow dump（对照 mihomo_box 的 yValText）。 */
++private fun childText(node: ValNode): String =
++    if (node.kind == ValNode.SCALAR) node.scalar else AnchorBlock.dumpFlow(node)
++
++/** 值框里键入新文本后按 mihomo_box 的 refresh 语义重播子行（结构与来源不符 → 子行清空，写回按整值合成）。 */
++private fun reseedFromBox(ve: VeDraft, text: String) {
++    val node = AnchorBlock.parseValueText(text)
++    val wantMap = ve.origin == ValOrigin.BlockMap || ve.origin == ValOrigin.FlowMap
++    val kids = when {
++        node.kind == ValNode.MAP && wantMap -> node.entries.map { ChildDraft(it.key, null, it.key ?: "", childText(it.node)) }
++        node.kind == ValNode.SEQ && !wantMap -> node.entries.map { ChildDraft(null, null, "", childText(it.node)) }
++        else -> emptyList()
++    }
++    ve.reseed(kids)
++}
++
++/** 按 mihomo_box seedRows 语义给一个定义条目建行草稿：嵌套块的值框显示整值 flow dump，复合值挂展开编辑器。 */
++private fun buildRowDraft(block: DefBlock, seed: DefEntrySeed): RowDraft {
++    if (seed.nested) {
++        val seqItems = AnchorBlock.parseNestedSeqItems(block, seed)
++        val mapItems = if (seqItems == null) AnchorBlock.parseNestedMapEntries(block, seed) else null
++        val tree = AnchorBlock.parseValueTree(block, seed)
++        val ve = when {
++            seqItems != null && tree != null ->
++                VeDraft(ValOrigin.BlockSeq, seqItems.map { ChildDraft(null, it.lineIdx, "", it.raw) })
++            mapItems != null && tree != null ->
++                VeDraft(ValOrigin.BlockMap, mapItems.map { ChildDraft(it.keyRaw, null, it.keyRaw, it.viz) })
++            else -> null
++        }
++        val box = if (ve != null && tree != null) AnchorBlock.dumpFlow(tree) else seed.value
++        return RowDraft(seed, seed.keyRaw, box, seed.value, ve)
++    }
++    val flowMap = AnchorBlock.flowMapEntries(seed.value)
++    val flowSeq = if (flowMap == null) AnchorBlock.flowSeqItems(seed.value) else null
++    val ve = when {
++        flowMap != null -> VeDraft(ValOrigin.FlowMap, flowMap.map { ChildDraft(it.keyRaw, null, it.keyRaw, it.value) })
++        flowSeq != null -> VeDraft(ValOrigin.FlowSeq, flowSeq.mapIndexed { i, s -> ChildDraft(null, i, "", s) })
++        else -> null
++    }
++    return RowDraft(seed, seed.keyRaw, seed.value, seed.value, ve)
++}
++
++/**
++ * 把一行的值按 mihomo_box read()/patchAnchorDefBlock 语义合成：
++ * 子行与框文本都没动 → 原文逐字；子行动过 → 按来源逐支 / 逐项写回（块式保持块式、flow 保持 flow，
++ * 未改动的支逐字）；只动了框文本 → 重新解析框文本合成（框文本即整值）。
++ */
++private fun composeValue(draft: RowDraft, ve: VeDraft, label: String): Pair<RowValue?, String> {
++    val seed = draft.seed ?: return null to "内部错误：展开编辑器挂在了新增行上"
++    if (!ve.changed() && draft.value == draft.seedValue) return RowValue(seed.value, null, null) to ""
++    val isMap = ve.origin == ValOrigin.BlockMap || ve.origin == ValOrigin.FlowMap
++    if (ve.changed()) {
++        val seen = mutableSetOf<String>()
++        val keys = ArrayList<String>()
++        val edits = ArrayList<Pair<Int?, String>>()
++        for ((i, child) in ve.children.withIndex()) {
++            // 对照 mihomo_box emptyNewRow：新加的行完全没填 → 忽略不提交
++            if (child.keyRaw == null && child.originIdx == null && child.key.isBlank() && child.value.isBlank()) continue
++            val key = if (isMap) {
++                child.keyRaw ?: (YamlValue.normalizeKey(child.key)
++                    ?: return null to "「$label」第 ${i + 1} 行的键名「${child.key}」不合法：不能为空，也不能含 : # & * ! | >")
++            } else {
++                ""
++            }
++            if (isMap && !seen.add(key)) return null to "「$label」里的键「$key」出现两次"
++            keys += key
++            edits += (child.originIdx to child.value)
++            if (child.value.isBlank()) {
++                return null to if (isMap) {
++                    "「$label」里「$key」的值是空的：填内容或删掉这对键值"
++                } else {
++                    "「$label」第 ${i + 1} 个值是空的：填内容或用行尾按钮删掉"
++                }
++            }
++            if (YamlValue.normalize(child.value) == null) {
++                return null to if (isMap) {
++                    "「$label」里「$key」的值不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `"
++                } else {
++                    "「$label」第 ${i + 1} 个值不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `"
++                }
++            }
++        }
++        return when (ve.origin) {
++            ValOrigin.BlockSeq -> RowValue(seed.value, edits.map { SeqItemEdit(it.first, it.second) }, null) to ""
++            ValOrigin.BlockMap ->
++                RowValue(seed.value, null, edits.mapIndexed { i, e -> FlowSubEdit(keys[i], e.second) }) to ""
++            ValOrigin.FlowMap -> {
++                val rendered = AnchorBlock.renderFlowMap(seed.value, edits.mapIndexed { i, e -> FlowSubEdit(keys[i], e.second) })
++                    ?: return null to "「$label」里有值不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `"
++                RowValue(rendered, null, null) to ""
++            }
++            ValOrigin.FlowSeq -> {
++                val rendered = AnchorBlock.renderFlowSeq(seed.value, edits.map { FlowSeqEdit(it.first, it.second) })
++                    ?: return null to "「$label」里有值不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `"
++                RowValue(rendered, null, null) to ""
++            }
++        }
++    }
++    // 只动了框文本：框文本即整值（对照 mihomo_box newValue），重新解析后按来源通道合成
++    val node = AnchorBlock.parseValueText(draft.value)
++    val wantMap = ve.origin == ValOrigin.BlockMap || ve.origin == ValOrigin.FlowMap
++    if (node.kind == ValNode.MAP && wantMap) {
++        val edits = mutableListOf<FlowSubEdit>()
++        val seen = mutableSetOf<String>()
++        for (entry in node.entries) {
++            val key = entry.key ?: return null to "「$label」的框文本里键名不合法"
++            if (!seen.add(key)) return null to "「$label」里的键「$key」出现两次"
++            edits += FlowSubEdit(key, childText(entry.node))
++        }
++        return if (ve.origin == ValOrigin.BlockMap) {
++            RowValue(seed.value, null, edits) to ""
++        } else {
++            val rendered = AnchorBlock.renderFlowMap(seed.value, edits)
++                ?: return null to "「$label」的框文本不是合法 YAML"
++            RowValue(rendered, null, null) to ""
++        }
++    }
++    if (node.kind == ValNode.SEQ && !wantMap) {
++        return if (ve.origin == ValOrigin.BlockSeq) {
++            RowValue(seed.value, node.entries.map { SeqItemEdit(null, childText(it.node)) }, null) to ""
++        } else {
++            val rendered = AnchorBlock.renderFlowSeq(seed.value, node.entries.map { FlowSeqEdit(null, childText(it.node)) })
++                ?: return null to "「$label」的框文本不是合法 YAML"
++            RowValue(rendered, null, null) to ""
++        }
++    }
++    // 标量、或结构与来源不符：整值替换（嵌套块收成一行，等价于 mihomo_box 的整节点重写）
++    val v = YamlValue.normalize(draft.value)
++        ?: return null to "「$label」的值不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `"
++    return RowValue(v, null, null) to ""
++}
 +
 +/**
 + * 把表单草稿校验成可渲染的行。规则与参考实现一致：
 + * 值按「单行标量或行内 flow」规范化（[YamlValue.normalize]），键名沿用原文（已有行不改名），
-+ * 嵌套多行的值不在这里改、原样回写（要改请切「文本」），空表直接拒绝（删整块请用卡片上的「删除」）。
++ * 拆不动的嵌套值原样回写（要改请切「文本」），空表直接拒绝（删整块请用卡片上的「删除」）。
 + */
 +private fun resolveBlock(block: DefBlock, drafts: List<RowDraft>, scalar: String): RowsResult {
 +    if (block.kind == DefKind.Scalar) {
@@ -628,44 +1024,26 @@ index 0000000..412273c
 +    val seen = mutableSetOf<String>()
 +    for (draft in drafts) {
 +        val seed = draft.seed
-+        if (seed != null && seed.nested) {
-+            val items = draft.itemDrafts
-+            if (items == null) {
-+                out += DefRow(seed, seed.keyRaw, seed.value)
-+                continue
++        val label = if (seed != null) seed.keyRaw.ifEmpty { "列表项" } else draft.key.ifBlank { NewParamLabel }
++        val value: String
++        var items: List<SeqItemEdit>? = null
++        var mapItems: List<FlowSubEdit>? = null
++        val ve = draft.ve
++        when {
++            ve != null -> {
++                val (rv, err) = composeValue(draft, ve, label)
++                if (err.isNotEmpty()) return RowsResult(null, err)
++                if (rv == null) return RowsResult(null, "「$label」的值不是合法 YAML")
++                value = rv.value
++                items = rv.items
++                mapItems = rv.mapItems
 +            }
-+            val label = if (seed.keyRaw.isNotEmpty()) seed.keyRaw else "嵌套序列"
-+            val edits = mutableListOf<SeqItemEdit>()
-+            for ((i, it) in items.withIndex()) {
-+                if (it.value.isBlank()) return RowsResult(null, "「$label」第 ${i + 1} 行是空的：填内容或用行尾按钮删掉")
-+                if (YamlValue.normalize(it.value) == null) {
-+                    return RowsResult(null, "「$label」第 ${i + 1} 行不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `")
-+                }
-+                edits += SeqItemEdit(it.lineIdx, it.value)
-+            }
-+            out += DefRow(seed, seed.keyRaw, seed.value, items = edits)
-+            continue
-+        }
-+        val label = if (seed != null) seed.keyRaw else draft.key.ifBlank { NewParamLabel }
-+        val subs = draft.subDrafts
-+        val value = if (subs != null) {
-+            val edits = mutableListOf<FlowSubEdit>()
-+            val seenSub = mutableSetOf<String>()
-+            for ((i, sub) in subs.withIndex()) {
-+                val keyRaw = sub.keyRaw ?: (YamlValue.normalizeKey(sub.key)
-+                    ?: return RowsResult(null, "「$label」第 ${i + 1} 行的键名「${sub.key}」不合法：不能为空，也不能含 : # & * ! | >"))
-+                if (!seenSub.add(keyRaw)) return RowsResult(null, "「$label」里的键「$keyRaw」出现两次")
-+                if (sub.value.isBlank()) return RowsResult(null, "「$label」里「$keyRaw」的值是空的：填内容或删掉这对键值")
-+                edits += FlowSubEdit(keyRaw, sub.value)
-+            }
-+            AnchorBlock.renderFlowMap(draft.value, edits)
-+                ?: return RowsResult(null, "「$label」里有值不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `")
-+        } else {
-+            YamlValue.normalize(draft.value)
-+                ?: return RowsResult(null, "「$label」的值不是合法 YAML")
++            seed != null && seed.nested -> value = seed.value // 拆不动的嵌套值：逐字回写，要改请切「文本」
++            else -> value = YamlValue.normalize(draft.value)
++                ?: return RowsResult(null, "「$label」的值不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `")
 +        }
 +        if (block.kind == DefKind.Seq) {
-+            out += DefRow(seed, "", value)
++            out += DefRow(seed, "", value, items, mapItems)
 +            continue
 +        }
 +        val key = if (seed != null) {
@@ -675,7 +1053,7 @@ index 0000000..412273c
 +                ?: return RowsResult(null, "参数名「${draft.key}」不合法：不能为空，也不能含 : # & * ! | >")
 +        }
 +        if (!seen.add(key)) return RowsResult(null, "参数「$key」出现两次，YAML 会以后一个为准")
-+        out += DefRow(seed, key, value)
++        out += DefRow(seed, key, value, items, mapItems)
 +    }
 +    if (out.isEmpty()) return RowsResult(null, "至少保留一个参数；要整块删掉请用卡片上的「删除」")
 +    return RowsResult(out, "")
@@ -695,18 +1073,7 @@ index 0000000..412273c
 +    var textDraft by remember(block) { mutableStateOf(original) }
 +    val drafts = remember(block) {
 +        mutableStateListOf<RowDraft>().apply {
-+            block.entries.forEach { seed ->
-+                val parsed = if (seed.nested) AnchorBlock.parseNestedSeqItems(block, seed) else null
-+                val items = parsed?.let { list ->
-+                    mutableStateListOf<ItemDraft>().apply { list.forEach { add(ItemDraft(it.lineIdx, it.raw)) } }
-+                }
-+                val subs = if (!seed.nested) AnchorBlock.flowMapEntries(seed.value)?.let { list ->
-+                    mutableStateListOf<SubDraft>().apply { list.forEach { add(SubDraft(it.keyRaw, it.keyRaw, it.value)) } }
-+                } else {
-+                    null
-+                }
-+                add(RowDraft(seed, seed.keyRaw, seed.value, items, subs))
-+            }
++            block.entries.forEach { seed -> add(buildRowDraft(block, seed)) }
 +        }
 +    }
 +
@@ -773,14 +1140,15 @@ index 0000000..412273c
 +                else -> {
 +                    DialogHint(
 +                        if (block.kind == DefKind.Map) {
-+                            "键名沿用原文（要改键名用卡片上的「改名」）；值支持单行标量与 `[..]` / `{..}`；块序列的值（如 override-expr 表达式列表）逐行编辑、增删；行内 flow 映射的值会把里面的键 / 值拆行编辑。"
++                            "键名沿用原文（要改键名用卡片上的「改名」）；复合值（子映射 / 列表 / 行内 flow）在值框里显示单行 flow 文本，点「展开 ▾」拆成键值 / 逐值行编辑（展开一层，更深层在子值框里直接写 {..} / [..]）。"
 +                        } else {
-+                            "每行一个列表项；值支持单行标量与 `[..]` / `{..}`。"
++                            "每行一个列表项；复合值同样在值框里显示单行 flow 文本，点「展开 ▾」拆开一层编辑。"
 +                        },
 +                    )
 +                    Spacer(Modifier.height(6.dp))
 +                    drafts.forEach { draft ->
-+                        val nested = draft.seed?.nested == true
++                        val ve = draft.ve
++                        val fallback = draft.seed?.nested == true && ve == null
 +                        Row(
 +                            modifier = Modifier
 +                                .fillMaxWidth()
@@ -788,66 +1156,13 @@ index 0000000..412273c
 +                            verticalAlignment = Alignment.CenterVertically,
 +                            horizontalArrangement = Arrangement.spacedBy(8.dp),
 +                        ) {
-+                            if (nested) {
-+                                val items = draft.itemDrafts
-+                                if (items == null) {
-+                                    Text(
-+                                        text = "嵌套块（${(draft.seed?.endIdx ?: 0) - (draft.seed?.startIdx ?: 0) + 1} 行）· 请切「文本」编辑",
-+                                        modifier = Modifier.weight(1f),
-+                                        fontSize = 12.sp,
-+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                                    )
-+                                } else {
-+                                    Column(modifier = Modifier.weight(1f)) {
-+                                        Text(
-+                                            text = if (draft.key.isNotEmpty()) draft.key + ":" else "嵌套序列 · 每行一个值",
-+                                            fontFamily = FontFamily.Monospace,
-+                                            fontSize = 13.sp,
-+                                            color = MiuixTheme.colorScheme.onSurfaceSecondary,
-+                                            maxLines = 1,
-+                                            overflow = TextOverflow.Ellipsis,
-+                                        )
-+                                        Spacer(Modifier.height(4.dp))
-+                                        items.forEachIndexed { i, item ->
-+                                            Row(
-+                                                modifier = Modifier
-+                                                    .fillMaxWidth()
-+                                                    .padding(bottom = 6.dp),
-+                                                verticalAlignment = Alignment.CenterVertically,
-+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-+                                            ) {
-+                                                TextField(
-+                                                    value = item.value,
-+                                                    onValueChange = { nv -> item.value = nv },
-+                                                    modifier = Modifier.weight(1f),
-+                                                    label = "表达式 ${i + 1}",
-+                                                    insideMargin = CompactInsideMargin,
-+                                                    textStyle = MonoTextStyle,
-+                                                    singleLine = true,
-+                                                )
-+                                                IconButton(
-+                                                    onClick = { items.remove(item) },
-+                                                    minWidth = 32.dp,
-+                                                    minHeight = 32.dp,
-+                                                ) {
-+                                                    Icon(
-+                                                        imageVector = MiuixIcons.Delete,
-+                                                        contentDescription = "删除这一行",
-+                                                        tint = StatusColors.danger,
-+                                                    )
-+                                                }
-+                                            }
-+                                        }
-+                                        TextButton(
-+                                            text = "＋ 添加一行",
-+                                            onClick = { items.add(ItemDraft(null, "")) },
-+                                            minWidth = 0.dp,
-+                                            minHeight = 32.dp,
-+                                            insideMargin = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-+                                            textStyle = MiuixTheme.textStyles.button.copy(fontSize = 13.sp),
-+                                        )
-+                                    }
-+                                }
++                            if (fallback) {
++                                Text(
++                                    text = "嵌套块（${(draft.seed?.endIdx ?: 0) - (draft.seed?.startIdx ?: 0) + 1} 行）· 请切「文本」编辑",
++                                    modifier = Modifier.weight(1f),
++                                    fontSize = 12.sp,
++                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                                )
 +                            } else {
 +                                if (draft.seed == null) {
 +                                    TextField(
@@ -870,8 +1185,7 @@ index 0000000..412273c
 +                                        overflow = TextOverflow.Ellipsis,
 +                                    )
 +                                }
-+                                val subs = draft.subDrafts
-+                                if (subs == null) {
++                                if (ve == null) {
 +                                    TextField(
 +                                        value = draft.value,
 +                                        onValueChange = { draft.value = it },
@@ -883,65 +1197,117 @@ index 0000000..412273c
 +                                    )
 +                                } else {
 +                                    Column(modifier = Modifier.weight(1.4f)) {
-+                                        subs.forEachIndexed { i, sub ->
-+                                            Row(
-+                                                modifier = Modifier
-+                                                    .fillMaxWidth()
-+                                                    .padding(bottom = 6.dp),
-+                                                verticalAlignment = Alignment.CenterVertically,
-+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-+                                            ) {
-+                                                if (sub.keyRaw == null) {
++                                        TextField(
++                                            value = draft.value,
++                                            onValueChange = { nv ->
++                                                draft.value = nv
++                                                reseedFromBox(ve, nv)
++                                            },
++                                            modifier = Modifier.fillMaxWidth(),
++                                            label = "YAML 值",
++                                            insideMargin = CompactInsideMargin,
++                                            textStyle = MonoTextStyle,
++                                            singleLine = true,
++                                        )
++                                        Row(
++                                            verticalAlignment = Alignment.CenterVertically,
++                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
++                                        ) {
++                                            TextButton(
++                                                text = if (ve.opened) "收起 ▴" else "展开 ▾",
++                                                onClick = { ve.opened = !ve.opened },
++                                                minWidth = 0.dp,
++                                                minHeight = 28.dp,
++                                                insideMargin = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
++                                                textStyle = MiuixTheme.textStyles.button.copy(fontSize = 12.sp),
++                                            )
++                                            Text(
++                                                text = if (ve.origin == ValOrigin.BlockSeq || ve.origin == ValOrigin.FlowSeq) {
++                                                    "${ve.children.size} 个值"
++                                                } else {
++                                                    "${ve.children.size} 键值对"
++                                                },
++                                                fontSize = 11.sp,
++                                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                                            )
++                                        }
++                                        if (ve.opened) {
++                                            val isMap = ve.origin == ValOrigin.BlockMap || ve.origin == ValOrigin.FlowMap
++                                            ve.children.forEachIndexed { i, child ->
++                                                Row(
++                                                    modifier = Modifier
++                                                        .fillMaxWidth()
++                                                        .padding(bottom = 6.dp),
++                                                    verticalAlignment = Alignment.CenterVertically,
++                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
++                                                ) {
++                                                    if (isMap) {
++                                                        if (child.keyRaw == null) {
++                                                            TextField(
++                                                                value = child.key,
++                                                                onValueChange = { nk -> child.key = nk },
++                                                                modifier = Modifier.weight(0.8f),
++                                                                label = "键名 ${i + 1}",
++                                                                insideMargin = CompactInsideMargin,
++                                                                textStyle = MonoTextStyle,
++                                                                singleLine = true,
++                                                            )
++                                                        } else {
++                                                            Text(
++                                                                text = child.keyRaw,
++                                                                modifier = Modifier.weight(0.8f),
++                                                                fontFamily = FontFamily.Monospace,
++                                                                fontSize = 13.sp,
++                                                                color = MiuixTheme.colorScheme.onSurfaceSecondary,
++                                                                maxLines = 1,
++                                                                overflow = TextOverflow.Ellipsis,
++                                                            )
++                                                        }
++                                                    } else {
++                                                        Text(
++                                                            text = "值 ${i + 1}",
++                                                            modifier = Modifier.weight(0.8f),
++                                                            fontSize = 12.sp,
++                                                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                                                        )
++                                                    }
 +                                                    TextField(
-+                                                        value = sub.key,
-+                                                        onValueChange = { nk -> sub.key = nk },
-+                                                        modifier = Modifier.weight(0.8f),
-+                                                        label = "键名 ${i + 1}",
++                                                        value = child.value,
++                                                        onValueChange = { nv -> child.value = nv },
++                                                        modifier = Modifier.weight(1f),
++                                                        label = "值",
 +                                                        insideMargin = CompactInsideMargin,
 +                                                        textStyle = MonoTextStyle,
 +                                                        singleLine = true,
 +                                                    )
-+                                                } else {
-+                                                    Text(
-+                                                        text = sub.keyRaw,
-+                                                        modifier = Modifier.weight(0.8f),
-+                                                        fontFamily = FontFamily.Monospace,
-+                                                        fontSize = 13.sp,
-+                                                        color = MiuixTheme.colorScheme.onSurfaceSecondary,
-+                                                        maxLines = 1,
-+                                                        overflow = TextOverflow.Ellipsis,
-+                                                    )
-+                                                }
-+                                                TextField(
-+                                                    value = sub.value,
-+                                                    onValueChange = { nv -> sub.value = nv },
-+                                                    modifier = Modifier.weight(1f),
-+                                                    label = "值",
-+                                                    insideMargin = CompactInsideMargin,
-+                                                    textStyle = MonoTextStyle,
-+                                                    singleLine = true,
-+                                                )
-+                                                IconButton(
-+                                                    onClick = { subs.remove(sub) },
-+                                                    minWidth = 32.dp,
-+                                                    minHeight = 32.dp,
-+                                                ) {
-+                                                    Icon(
-+                                                        imageVector = MiuixIcons.Delete,
-+                                                        contentDescription = "删除这对键值",
-+                                                        tint = StatusColors.danger,
-+                                                    )
++                                                    IconButton(
++                                                        onClick = { ve.children.remove(child) },
++                                                        minWidth = 32.dp,
++                                                        minHeight = 32.dp,
++                                                    ) {
++                                                        Icon(
++                                                            imageVector = MiuixIcons.Delete,
++                                                            contentDescription = if (isMap) "删除这对键值" else "删除这个值",
++                                                            tint = StatusColors.danger,
++                                                        )
++                                                    }
 +                                                }
 +                                            }
++                                            TextButton(
++                                                text = if (isMap) "＋ 新建键值对" else "＋ 新建值",
++                                                onClick = {
++                                                    // 对照 mihomo_box：最后一行还没填时不再追加（先填完再新建）
++                                                    val last = ve.children.lastOrNull()
++                                                    val lastBlank = last != null && last.keyRaw == null &&
++                                                        last.originIdx == null && last.key.isBlank() && last.value.isBlank()
++                                                    if (!lastBlank) ve.children.add(ChildDraft(null, null, "", ""))
++                                                },
++                                                minWidth = 0.dp,
++                                                minHeight = 32.dp,
++                                                insideMargin = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
++                                                textStyle = MiuixTheme.textStyles.button.copy(fontSize = 13.sp),
++                                            )
 +                                        }
-+                                        TextButton(
-+                                            text = "＋ 添加键值",
-+                                            onClick = { subs.add(SubDraft(null, "", "")) },
-+                                            minWidth = 0.dp,
-+                                            minHeight = 32.dp,
-+                                            insideMargin = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-+                                            textStyle = MiuixTheme.textStyles.button.copy(fontSize = 13.sp),
-+                                        )
 +                                    }
 +                                }
 +                            }
@@ -960,7 +1326,7 @@ index 0000000..412273c
 +                    }
 +                    TextButton(
 +                        text = if (block.kind == DefKind.Map) "＋ 添加参数" else "＋ 添加列表项",
-+                        onClick = { drafts.add(RowDraft(seed = null, key = "", value = "")) },
++                        onClick = { drafts.add(RowDraft(seed = null, key = "", value = "", seedValue = "")) },
 +                        minWidth = 0.dp,
 +                        minHeight = 36.dp,
 +                        insideMargin = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
@@ -983,8 +1349,8 @@ index 0000000..412273c
 +}
 +
 +private fun describeKind(block: DefBlock): String = when (block.kind) {
-+    DefKind.Map -> if (block.flowInline) "行内 flow 映射：${block.entries.size} 项（键 / 值分开编辑）" else "映射：${block.entries.size} 项"
-+    DefKind.Seq -> if (block.flowInline) "行内 flow 序列：${block.entries.size} 项" else "序列：${block.entries.size} 项"
++    DefKind.Map -> if (block.flowInline) "行内 flow 映射：${block.entries.size} 项（复合值可「展开 ▾」）" else "映射：${block.entries.size} 项"
++    DefKind.Seq -> if (block.flowInline) "行内 flow 序列：${block.entries.size} 项（复合值可「展开 ▾」）" else "序列：${block.entries.size} 项"
 +    DefKind.Scalar -> "标量值"
 +    DefKind.Unknown -> "复杂形态"
 +}
