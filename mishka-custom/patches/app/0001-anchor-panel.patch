@@ -1,9 +1,9 @@
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 new file mode 100644
-index 0000000..6a7e076
+index 0000000..65442de
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
-@@ -0,0 +1,469 @@
+@@ -0,0 +1,510 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.runtime.Immutable
@@ -82,6 +82,14 @@ index 0000000..6a7e076
 +/** 可视化编辑器对嵌套块序列一行的写回意图：[lineIdx] 为 null 表示新增行。 */
 +@Immutable
 +data class SeqItemEdit(val lineIdx: Int?, val value: String)
++
++/** 行内 flow 映射值里的一对键值（如 `{ enable: true, … }` 的 `enable`）：键原文 / 值原文 / 整段原文。 */
++@Immutable
++data class FlowSubItem(val keyRaw: String, val value: String, val rawSeg: String)
++
++/** flow 映射值里一对键值的写回意图：[keyRaw] 为 null 表示新增键（由对话框规范化后填入）。 */
++@Immutable
++data class FlowSubEdit(val keyRaw: String?, val value: String)
 +
 +object AnchorBlock {
 +
@@ -255,6 +263,39 @@ index 0000000..6a7e076
 +        if (block.kind == DefKind.Seq) sb.append("- []") else sb.append(seed.keyRaw).append(": []")
 +        if (seed.comment.isNotEmpty()) sb.append(' ').append(seed.comment)
 +        return sb.toString()
++    }
++
++    /**
++     * 把单行行内 flow 映射的值（如 `health-check: { enable: true, url: … }` 的值）再拆一层键值。
++     * 序列、非 flow、段拆不动返回 null——对话框维持单个值框。
++     */
++    fun flowMapEntries(value: String): List<FlowSubItem>? {
++        val flow = parseFlow(value.trim()) ?: return null
++        if (flow.seq) return null
++        return flow.segments.mapIndexed { i, raw -> FlowSubItem(flow.kv[i].first, flow.kv[i].second, raw) }
++    }
++
++    /**
++     * 按 [edits] 把 flow 映射值重组成一行：未改动的键值用原文段逐字回写（保住内部排版），
++     * 改过的按 `键: 规范化值` 重写，新键追加在末尾；括号留白与项间分隔符沿用原文风格。
++     * 任一值规范化失败返回 null。
++     */
++    fun renderFlowMap(original: String, edits: List<FlowSubEdit>): String? {
++        val flow = parseFlow(original.trim()) ?: return null
++        if (flow.seq) return null
++        if (edits.isEmpty() && flow.segments.isEmpty()) return original
++        val parts = ArrayList<String>(edits.size)
++        for (edit in edits) {
++            val key = edit.keyRaw ?: return null
++            val idx = flow.kv.indexOfFirst { it.first == key }
++            if (idx >= 0 && edit.value == flow.kv[idx].second) {
++                parts += flow.segments[idx]
++            } else {
++                val v = YamlValue.normalize(edit.value) ?: return null
++                parts += if (v.isEmpty()) "$key:" else "$key: $v"
++            }
++        }
++        return "{" + flow.padOpen + parts.joinToString(flow.sep) + flow.padClose + "}"
 +    }
 +
 +    /**
@@ -475,10 +516,10 @@ index 0000000..6a7e076
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 new file mode 100644
-index 0000000..74d54f4
+index 0000000..412273c
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
-@@ -0,0 +1,902 @@
+@@ -0,0 +1,994 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.foundation.background
@@ -553,6 +594,7 @@ index 0000000..74d54f4
 +    key: String,
 +    value: String,
 +    val itemDrafts: MutableList<ItemDraft>? = null,
++    val subDrafts: MutableList<SubDraft>? = null,
 +) {
 +    var key by mutableStateOf(key)
 +    var value by mutableStateOf(value)
@@ -560,6 +602,12 @@ index 0000000..74d54f4
 +
 +/** 嵌套块序列里的一条表达式草稿：[lineIdx] 为 null 表示新加的行。 */
 +private class ItemDraft(val lineIdx: Int?, raw: String) {
++    var value by mutableStateOf(raw)
++}
++
++/** 行内 flow 映射值里的一对键值草稿：[keyRaw] 为 null 表示新加的键（键名可输入）。 */
++private class SubDraft(val keyRaw: String?, keyInput: String, raw: String) {
++    var key by mutableStateOf(keyInput)
 +    var value by mutableStateOf(raw)
 +}
 +
@@ -599,8 +647,23 @@ index 0000000..74d54f4
 +            continue
 +        }
 +        val label = if (seed != null) seed.keyRaw else draft.key.ifBlank { NewParamLabel }
-+        val value = YamlValue.normalize(draft.value)
-+            ?: return RowsResult(null, "「$label」的值不是合法 YAML")
++        val subs = draft.subDrafts
++        val value = if (subs != null) {
++            val edits = mutableListOf<FlowSubEdit>()
++            val seenSub = mutableSetOf<String>()
++            for ((i, sub) in subs.withIndex()) {
++                val keyRaw = sub.keyRaw ?: (YamlValue.normalizeKey(sub.key)
++                    ?: return RowsResult(null, "「$label」第 ${i + 1} 行的键名「${sub.key}」不合法：不能为空，也不能含 : # & * ! | >"))
++                if (!seenSub.add(keyRaw)) return RowsResult(null, "「$label」里的键「$keyRaw」出现两次")
++                if (sub.value.isBlank()) return RowsResult(null, "「$label」里「$keyRaw」的值是空的：填内容或删掉这对键值")
++                edits += FlowSubEdit(keyRaw, sub.value)
++            }
++            AnchorBlock.renderFlowMap(draft.value, edits)
++                ?: return RowsResult(null, "「$label」里有值不是合法 YAML：引号没闭合，或者裸文本里出现了 `: `")
++        } else {
++            YamlValue.normalize(draft.value)
++                ?: return RowsResult(null, "「$label」的值不是合法 YAML")
++        }
 +        if (block.kind == DefKind.Seq) {
 +            out += DefRow(seed, "", value)
 +            continue
@@ -637,7 +700,12 @@ index 0000000..74d54f4
 +                val items = parsed?.let { list ->
 +                    mutableStateListOf<ItemDraft>().apply { list.forEach { add(ItemDraft(it.lineIdx, it.raw)) } }
 +                }
-+                add(RowDraft(seed, seed.keyRaw, seed.value, items))
++                val subs = if (!seed.nested) AnchorBlock.flowMapEntries(seed.value)?.let { list ->
++                    mutableStateListOf<SubDraft>().apply { list.forEach { add(SubDraft(it.keyRaw, it.keyRaw, it.value)) } }
++                } else {
++                    null
++                }
++                add(RowDraft(seed, seed.keyRaw, seed.value, items, subs))
 +            }
 +        }
 +    }
@@ -705,7 +773,7 @@ index 0000000..74d54f4
 +                else -> {
 +                    DialogHint(
 +                        if (block.kind == DefKind.Map) {
-+                            "键名沿用原文（要改键名用卡片上的「改名」）；值支持单行标量与 `[..]` / `{..}`；块序列的值（如 override-expr 表达式列表）逐行编辑、增删。"
++                            "键名沿用原文（要改键名用卡片上的「改名」）；值支持单行标量与 `[..]` / `{..}`；块序列的值（如 override-expr 表达式列表）逐行编辑、增删；行内 flow 映射的值会把里面的键 / 值拆行编辑。"
 +                        } else {
 +                            "每行一个列表项；值支持单行标量与 `[..]` / `{..}`。"
 +                        },
@@ -802,15 +870,80 @@ index 0000000..74d54f4
 +                                        overflow = TextOverflow.Ellipsis,
 +                                    )
 +                                }
-+                                TextField(
-+                                    value = draft.value,
-+                                    onValueChange = { draft.value = it },
-+                                    modifier = Modifier.weight(1.4f),
-+                                    label = if (block.kind == DefKind.Seq) "值" else "YAML 值",
-+                                    insideMargin = CompactInsideMargin,
-+                                    textStyle = MonoTextStyle,
-+                                    singleLine = true,
-+                                )
++                                val subs = draft.subDrafts
++                                if (subs == null) {
++                                    TextField(
++                                        value = draft.value,
++                                        onValueChange = { draft.value = it },
++                                        modifier = Modifier.weight(1.4f),
++                                        label = if (block.kind == DefKind.Seq) "值" else "YAML 值",
++                                        insideMargin = CompactInsideMargin,
++                                        textStyle = MonoTextStyle,
++                                        singleLine = true,
++                                    )
++                                } else {
++                                    Column(modifier = Modifier.weight(1.4f)) {
++                                        subs.forEachIndexed { i, sub ->
++                                            Row(
++                                                modifier = Modifier
++                                                    .fillMaxWidth()
++                                                    .padding(bottom = 6.dp),
++                                                verticalAlignment = Alignment.CenterVertically,
++                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
++                                            ) {
++                                                if (sub.keyRaw == null) {
++                                                    TextField(
++                                                        value = sub.key,
++                                                        onValueChange = { nk -> sub.key = nk },
++                                                        modifier = Modifier.weight(0.8f),
++                                                        label = "键名 ${i + 1}",
++                                                        insideMargin = CompactInsideMargin,
++                                                        textStyle = MonoTextStyle,
++                                                        singleLine = true,
++                                                    )
++                                                } else {
++                                                    Text(
++                                                        text = sub.keyRaw,
++                                                        modifier = Modifier.weight(0.8f),
++                                                        fontFamily = FontFamily.Monospace,
++                                                        fontSize = 13.sp,
++                                                        color = MiuixTheme.colorScheme.onSurfaceSecondary,
++                                                        maxLines = 1,
++                                                        overflow = TextOverflow.Ellipsis,
++                                                    )
++                                                }
++                                                TextField(
++                                                    value = sub.value,
++                                                    onValueChange = { nv -> sub.value = nv },
++                                                    modifier = Modifier.weight(1f),
++                                                    label = "值",
++                                                    insideMargin = CompactInsideMargin,
++                                                    textStyle = MonoTextStyle,
++                                                    singleLine = true,
++                                                )
++                                                IconButton(
++                                                    onClick = { subs.remove(sub) },
++                                                    minWidth = 32.dp,
++                                                    minHeight = 32.dp,
++                                                ) {
++                                                    Icon(
++                                                        imageVector = MiuixIcons.Delete,
++                                                        contentDescription = "删除这对键值",
++                                                        tint = StatusColors.danger,
++                                                    )
++                                                }
++                                            }
++                                        }
++                                        TextButton(
++                                            text = "＋ 添加键值",
++                                            onClick = { subs.add(SubDraft(null, "", "")) },
++                                            minWidth = 0.dp,
++                                            minHeight = 32.dp,
++                                            insideMargin = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
++                                            textStyle = MiuixTheme.textStyles.button.copy(fontSize = 13.sp),
++                                        )
++                                    }
++                                }
 +                            }
 +                            IconButton(
 +                                onClick = { drafts.remove(draft) },
