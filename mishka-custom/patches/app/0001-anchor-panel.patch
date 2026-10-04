@@ -3336,10 +3336,10 @@ index 0000000..9fb5450
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
 new file mode 100644
-index 0000000..2ba1558
+index 0000000..9d96e65
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
-@@ -0,0 +1,606 @@
+@@ -0,0 +1,628 @@
 +package top.yukonga.mishka.custom.forms
 +
 +/**
@@ -3690,9 +3690,12 @@ index 0000000..2ba1558
 +
 +    /**
 +     * 在**单行 flow 映射**里写入一个「字符串列表」字段（如 `override.override-expr`）：引擎拒绝把
-+     * 装不下一行的集合塞进 flow（[YamlPatch.flowSet] 返回原文），这里先把 flow 展开成块式映射——
-+     * 每个既有键值段与 `<<: *别名` 的原文逐字保留——再按块式序列写入目标字段（已存在则整段替换，
-+     * [items] 为空则删除该字段）。行尾注释挪到 `键:` 行尾；跨多行 flow / 解析不动的返回 null 交回编辑器。
++     * 装不下一行的集合塞进 flow（[YamlPatch.flowSet] 返回原文），这里做**行内原位替换**（r19，
++     * 对齐 mihomo_box `patchAnchorDefBlock` 的范围替换语义：单行 flow 只换目标键值段，形态不变，
++     * 不再像 r5 那样展开成块式）——其它键值段与 `<<: *别名` 的原文逐字保留，目标键改写成
++     * `键: ['…', '…']`（[items] 为空则删掉该段，即删除字段；键不存在则追加一段），括号留白与
++     * 段间分隔符沿用原行风格，行尾注释原样留在行尾。字段不存在且列表为空时原样返回全文；
++     * 跨多行 flow / 解析不动的返回 null 交回编辑器。
 +     */
 +    fun setFlowMapListField(doc: YamlDoc, mapPath: YPath, key: String, items: List<String>): String? {
 +        val node = doc.get(mapPath) ?: return null
@@ -3703,34 +3706,53 @@ index 0000000..2ba1558
 +        val open = node.flowStart
 +        val close = node.flowEnd - 1
 +        if (close < open || raw.getOrNull(close) != '}' || raw.getOrNull(open) != '{') return null
-+        val keyIndent = indentOf(raw)
-+        val head = raw.substring(0, open).trimEnd()      // `    override:`（含可能的 &锚点）
-+        val tail = raw.substring(close + 1)              // 行尾注释等，挪到 head 行尾
-+        val segments = splitFlowSegments(raw.substring(open + 1, close))
-+        val out = ArrayList<String>()
-+        out.add(if (tail.isBlank()) head else head + " " + tail.trim())
++        val body = raw.substring(open + 1, close)
++        val padOpen = if (body.startsWith(" ")) " " else ""
++        val padClose = if (body.length > 1 && body.endsWith(" ")) " " else ""
++        val sep = flowSepOf(body)
++        val newList = if (items.isEmpty()) null else "[" + items.joinToString(", ") { quoteSingle(it) } + "]"
++        val parts = ArrayList<String>()
 +        var replaced = false
-+        for (seg in segments) {
++        for (seg in splitFlowSegments(body)) {
 +            val t = seg.trim()
 +            if (t.isEmpty()) continue
 +            if (flowSegmentKey(t) == key) {
 +                replaced = true
-+                if (items.isNotEmpty()) {
-+                    out.add(" ".repeat(keyIndent + 2) + key + ":")
-+                    for (it in items) out.add(" ".repeat(keyIndent + 4) + "- " + quoteSingle(it))
-+                }
++                if (newList != null) parts.add(key + ": " + newList) // 空列表 = 删掉该段
 +            } else {
-+                out.add(" ".repeat(keyIndent + 2) + t)
++                parts.add(t)
 +            }
 +        }
-+        if (!replaced && items.isNotEmpty()) {
-+            out.add(" ".repeat(keyIndent + 2) + key + ":")
-+            for (it in items) out.add(" ".repeat(keyIndent + 4) + "- " + quoteSingle(it))
++        if (!replaced) {
++            if (newList == null) return doc.lines.joinToString("\n") // 无字段可删也无值可写：原样
++            parts.add(key + ": " + newList)
 +        }
++        val flowBody = if (parts.isEmpty()) "{}" else "{" + padOpen + parts.joinToString(sep) + padClose + "}"
 +        val lines = ArrayList(doc.lines)
-+        lines.removeAt(li)
-+        lines.addAll(li, out)
++        lines[li] = raw.substring(0, open) + flowBody + raw.substring(close + 1)
 +        return lines.joinToString("\n")
++    }
++
++    /** flow 体里第一个顶层逗号的分隔符原文（`, ` / `,`，跳过引号内与嵌套括号）；无逗号给默认 `", "`。 */
++    private fun flowSepOf(body: String): String {
++        var depth = 0
++        var quote: Char? = null
++        var i = 0
++        while (i < body.length) {
++            val c = body[i]
++            if (quote != null) {
++                if (c == quote) {
++                    if (i + 1 < body.length && body[i + 1] == quote) i++ else quote = null
++                }
++            } else when (c) {
++                '"', '\'' -> quote = c
++                '{', '[' -> depth++
++                '}', ']' -> depth--
++                ',' -> if (depth == 0) return if (body.getOrNull(i + 1) == ' ') ", " else ","
++            }
++            i++
++        }
++        return ", "
 +    }
 +
 +    /** 全篇锚点引用计数：`<<: *x` / `键: *x` / 序列项 `- *x` 都算一次（可视化「谁在用这个锚点」）。 */
@@ -3916,8 +3938,8 @@ index 0000000..2ba1558
 +                if (out !== doc) return AnchorAwareWrite(out, wt.path, wt.anchor)
 +            }
 +            // 锚点侧是单行 flow 映射 + 写入值是字符串列表：引擎 flowSet 不肯把集合塞进
-+            // 一行、会返回原文（旧行为一路退到「这个位置不能这样写」）——这里把 flow 映射
-+            // 展开成块式（其余键与 `<<: *别名` 逐字保留）再写穿，绝不静默丢改动
++            // 一行、会返回原文（旧行为一路退到「这个位置不能这样写」）——r19 起行内原位替换：
++            // 单行 flow 保持单行（其余键与 `<<: *别名` 逐字保留），绝不静默丢改动
 +            if (value is List<*> && wt.path.isNotEmpty()) {
 +                val items = value.filterIsInstance<String>()
 +                if (items.size == value.size) {
@@ -6315,7 +6337,7 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..af10a08
+index 0000000..d7fa6fb
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 @@ -0,0 +1,2305 @@
@@ -7286,9 +7308,9 @@ index 0000000..af10a08
 +/**
 + * 写 override-expr。存量配置里 `override` 常是单行 flow 映射（如
 + * `override: { additional-prefix: ..., <<: *host }`），引擎不会把装不下一行的列表塞进 flow
-+ * （[YamlPatch.flowSet] 直接拒绝，旧代码只会弹「这个位置不能这样写」）——先展开成块式映射
-+ * （`<<: *锚点` 与其它键逐字保留）再写；块式 / 缺失则直接交引擎。清空且值是纯继承时没有本地行
-+ * 可删，提示去「YAML 锚点」区解除继承。
++ * （[YamlPatch.flowSet] 直接拒绝，旧代码只会弹「这个位置不能这样写」）——r19 起做行内原位替换：
++ * **单行 flow 保持单行**（对照 mihomo_box 的范围替换语义），其它键与 `<<: *锚点` 逐字保留；
++ * 块式 / 缺失则直接交引擎。清空且值是纯继承时没有本地行可删，提示去「YAML 锚点」区解除继承。
 + */
 +private fun commitExprList(host: FormHost, doc: YamlDoc, base: YPath, list: List<String>): Boolean {
 +    val path = base + "override" + "override-expr"
