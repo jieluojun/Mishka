@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=3ba2a756e00c64b6f070736e8c971beb6c4afc37e21a7091bb13beb9abad4bc8
+patch_sha256=85d566e415a54b56fed6484d9ae933b2f2be922a707f4da4a58a936b05c69f07
 blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 blob_new=48b879f20a3cb57945e783d12c8ec262f42a401b app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 blob_new=44c20972a2ecb1d97174a1979fef1df11f1f6a63 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
@@ -27,11 +27,12 @@ blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukong
 blob_after=0fdd5de0f18e4b946aa2f9f97a1e6e71f4f4f535 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 blob_after=334bcdc4314418edafdf9ca2d1795f2897534dd7 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 blob_after=c5f897059a3970523105e2b323cb757a2f641a09 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
+blob_after=2b8028177c997f09473fd0db0f7434a54ece1341 app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
 blob_after=0aad602b3aaa281d374e0d4bedcd0b3125d01ad0 app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 blob_after=7da18acdd4ed9794d6e6ce9ad5a858a4aba9a9fd app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 blob_after=eeb582a1cd60330ca660e31a25ee0ad2ef9ab6a9 app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
 blob_after=2fa980604aa52c173c838707481ee0598ef0dde5 app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
-blob_after=37df28b043e236e4739b7866fbfb466311bc1319 app/src/main/res/values-ru/strings.xml
-blob_after=68cb99a60e0b794d42198512515af1fd9b598b7e app/src/main/res/values-zh-rCN/strings.xml
-blob_after=c5d9130b263a5bab4ad3aa8f657d3d039d15076c app/src/main/res/values-zh-rTW/strings.xml
-blob_after=c7a8537f1758a48ad7906e226e03d5506d329f97 app/src/main/res/values/strings.xml
+blob_after=27d26d29d6b87900b596a52ab8d634d4cb81c0b5 app/src/main/res/values-ru/strings.xml
+blob_after=c06c36d9490542c2a18305604d29676e638aca2d app/src/main/res/values-zh-rCN/strings.xml
+blob_after=5db9932332c9e22c3d442e367999fdd558450d9d app/src/main/res/values-zh-rTW/strings.xml
+blob_after=4566d1410f58f545e8e702b9ba62cfe35ea15b1c app/src/main/res/values/strings.xml

@@ -17098,6 +17098,46 @@ index bdb96f7..c5f8970 100644
  
      @Serializable
      data object AppProxy : Route
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
+index 018c54d..2b80281 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
+@@ -209,7 +209,7 @@ private fun StatusContent(
+     OptionSelectDialog(
+         show = showModeDialog,
+         title = stringResource(R.string.home_switch_mode),
+-        options = MODE_OPTIONS,
++        options = modeOptions(),
+         current = state.mode,
+         onSelect = onSwitchMode,
+         onDismiss = { showModeDialog = false },
+@@ -228,13 +228,22 @@ private fun StatusContent(
+ // ROOT TPROXY 模式 mihomo tproxy-port（与 RootTproxyApplier.TPROXY_PORT 对齐，UI 仅展示用）
+ private const val TPROXY_INBOUND_PORT: Int = 7895
+ 
+-// value（mihomo 侧小写标识）to label（展示名），同时供卡片取值与选择弹窗列举
+-private val MODE_OPTIONS = listOf("rule" to "Rule", "global" to "Global", "direct" to "Direct")
++// value（mihomo 侧小写标识）to label（展示名），同时供卡片取值与选择弹窗列举。
++// r23：展示名改字符串资源——中文语言环境下 Rule / Global / Direct 显示为 规则 / 全局 / 直连。
++@Composable
++private fun modeOptions(): List<Pair<String, String>> = listOf(
++    "rule" to stringResource(R.string.home_mode_rule),
++    "global" to stringResource(R.string.home_mode_global),
++    "direct" to stringResource(R.string.home_mode_direct),
++)
+ 
+ private val TUN_STACK_OPTIONS = listOf("mixed" to "Mixed", "gvisor" to "gVisor", "system" to "System", "mips" to "MIPS")
+ 
+-private fun modeLabel(mode: String): String =
+-    MODE_OPTIONS.firstOrNull { it.first == mode.lowercase() }?.second ?: mode.ifEmpty { "--" }
++@Composable
++private fun modeLabel(mode: String): String {
++    val options = modeOptions()
++    return options.firstOrNull { it.first == mode.lowercase() }?.second ?: mode.ifEmpty { "--" }
++}
+ 
+ private fun tunStackLabel(stack: String): String =
+     TUN_STACK_OPTIONS.firstOrNull { it.first == stack.lowercase() }?.second ?: stack.ifEmpty { "--" }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 index d3f9631..0aad602 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
@@ -17498,10 +17538,20 @@ index f684c37..2fa9806 100644
          val uuid = getActiveUuid() ?: return
          val dao = selectionDao ?: return
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..37df28b 100644
+index 78fcd87..27d26d2 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
-@@ -179,6 +179,11 @@
+@@ -105,6 +105,9 @@
+     <string name="home_inbound">Входящие</string>
+     <string name="home_inbound_tproxy">TPROXY:%1$d</string>
+     <string name="home_switch_mode">Сменить режим прокси</string>
++    <string name="home_mode_rule">Правила</string>
++    <string name="home_mode_global">Глобальный</string>
++    <string name="home_mode_direct">Прямой</string>
+     <string name="home_switch_tun_stack">Сменить стек TUN</string>
+     <string name="home_uptime_seconds">%1$d с</string>
+     <string name="home_uptime_minutes">%1$d мин</string>
+@@ -179,6 +182,11 @@
      <string name="proxy_sort_reverse">В обратном порядке</string>
      <string name="proxy_test_group_delay">Проверить задержку</string>
      <string name="proxy_test_node_delay">Проверить задержку узла</string>
@@ -17513,7 +17563,7 @@ index 78fcd87..37df28b 100644
      <string name="proxy_fixed">Зафиксировано на этом узле</string>
      <string name="proxy_unfix">Открепить, вернуть автовыбор</string>
  
-@@ -615,4 +620,6 @@
+@@ -615,4 +623,6 @@
          <item quantity="other">Выбрано %1$d переопределения</item>
      </plurals>
      <string name="subscription_overrides">Переопределения</string>
@@ -17521,10 +17571,20 @@ index 78fcd87..37df28b 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..68cb99a 100644
+index cba1bbb..c06c36d 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
-@@ -177,6 +177,11 @@
+@@ -103,6 +103,9 @@
+     <string name="home_inbound">入站</string>
+     <string name="home_inbound_tproxy">TPROXY:%1$d</string>
+     <string name="home_switch_mode">切换代理模式</string>
++    <string name="home_mode_rule">规则</string>
++    <string name="home_mode_global">全局</string>
++    <string name="home_mode_direct">直连</string>
+     <string name="home_switch_tun_stack">切换 TUN Stack</string>
+     <string name="home_uptime_seconds">%1$d 秒</string>
+     <string name="home_uptime_minutes">%1$d 分钟</string>
+@@ -177,6 +180,11 @@
      <string name="proxy_sort_reverse">倒序</string>
      <string name="proxy_test_group_delay">测试延迟</string>
      <string name="proxy_test_node_delay">测试节点延迟</string>
@@ -17536,7 +17596,7 @@ index cba1bbb..68cb99a 100644
      <string name="proxy_fixed">已固定到此节点</string>
      <string name="proxy_unfix">解除固定，恢复自动选择</string>
  
-@@ -610,4 +615,6 @@
+@@ -610,4 +618,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -17544,10 +17604,20 @@ index cba1bbb..68cb99a 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..c5d9130 100644
+index f6895e0..5db9932 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
-@@ -177,6 +177,11 @@
+@@ -103,6 +103,9 @@
+     <string name="home_inbound">入站</string>
+     <string name="home_inbound_tproxy">TPROXY:%1$d</string>
+     <string name="home_switch_mode">切換代理模式</string>
++    <string name="home_mode_rule">規則</string>
++    <string name="home_mode_global">全域</string>
++    <string name="home_mode_direct">直連</string>
+     <string name="home_switch_tun_stack">切換 TUN Stack</string>
+     <string name="home_uptime_seconds">%1$d 秒</string>
+     <string name="home_uptime_minutes">%1$d 分鐘</string>
+@@ -177,6 +180,11 @@
      <string name="proxy_sort_reverse">反向</string>
      <string name="proxy_test_group_delay">測試延遲</string>
      <string name="proxy_test_node_delay">測試節點延遲</string>
@@ -17559,7 +17629,7 @@ index f6895e0..c5d9130 100644
      <string name="proxy_fixed">已固定至此節點</string>
      <string name="proxy_unfix">解除固定，恢復自動選擇</string>
  
-@@ -610,4 +615,6 @@
+@@ -610,4 +618,6 @@
          <item quantity="other">已選擇 %1$d 項覆寫</item>
      </plurals>
      <string name="subscription_overrides">覆寫</string>
@@ -17567,10 +17637,20 @@ index f6895e0..c5d9130 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..c7a8537 100644
+index d1acc59..4566d14 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -179,6 +179,11 @@
+@@ -105,6 +105,9 @@
+     <string name="home_inbound">Inbound</string>
+     <string name="home_inbound_tproxy">TPROXY:%1$d</string>
+     <string name="home_switch_mode">Switch Proxy Mode</string>
++    <string name="home_mode_rule">Rule</string>
++    <string name="home_mode_global">Global</string>
++    <string name="home_mode_direct">Direct</string>
+     <string name="home_switch_tun_stack">Switch TUN Stack</string>
+     <string name="home_uptime_seconds">%1$ds</string>
+     <string name="home_uptime_minutes">%1$dm</string>
+@@ -179,6 +182,11 @@
      <string name="proxy_sort_reverse">Reverse</string>
      <string name="proxy_test_group_delay">Test latency</string>
      <string name="proxy_test_node_delay">Test node delay</string>
@@ -17582,7 +17662,7 @@ index d1acc59..c7a8537 100644
      <string name="proxy_fixed">Fixed to this node</string>
      <string name="proxy_unfix">Unfix, restore automatic selection</string>
  
-@@ -613,4 +618,6 @@
+@@ -613,4 +621,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>
