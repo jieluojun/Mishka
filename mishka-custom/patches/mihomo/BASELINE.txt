@@ -1,0 +1,17 @@
+# mihomo 内核补丁基线（由 YuKongA/Mishka 移植）
+kernel_repo=https://github.com/jieluojun/mihomo
+branch=Alpha
+base_commit=fc45379ef1bdbe358c63cc9eb6134e3691cbb113
+patched_tree=52a1fc0ebd7445a0955cbf65feb63b84472ce642
+patched_commit=fef76374  # 仅本地移植分支的提交号，上游不存在
+# --- 补丁文件 sha256 ---
+patch f1af0565ce74a95dab79df07393076d5b39855cd751da2e0d4a105f8c1d0166d 0001-config-override-json.patch
+patch 5d829bfa258a2c5310e183701857b416c8386353098e330e9d6d01b6e675cbbb 0002-sing-tun-mishka-build-tag.patch
+patch 15e56e4a566e0fcd4a09f47b2c02e7e53a9e338af2885abee7b1190f94f8f7b5 0003-config-mishka-tun-dns-patch.patch
+patch b6cc5d1b649683db5c343908afecaf1fb388c53b0897b13bca1722f05c988741 0004-sing-tun-forwarder-bind-interface.patch
+# --- 打补丁后各文件 blob ---
+blob ba86b9e1656a9d8fcd5368cd692d6e496b66dfd2 config/config.go
+blob 7a42efd56f8496c618cc6a04b13f0af5d9343898 config/patch_mishka.go
+blob f1d683848582ae7080610c81cbd98444dbe5fbb3 listener/sing_tun/server.go
+blob a629a80f30a41071313ce80296233a915d79e9dd listener/sing_tun/server_android.go
+blob 6cf9023b8a4046cbad09c0435324887427e999ba listener/sing_tun/server_notandroid.go

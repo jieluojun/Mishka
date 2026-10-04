@@ -5,9 +5,9 @@
 #   cp mishka-custom/ci/build-release.yml .github/workflows/build-release.yml
 #   git add .github/workflows/build-release.yml mishka-custom && git commit -m "ci: 只构建 release 的自定义工作流" && git push
 #
-# 它做的事：拉代码 → 备好子模块/scripta → 装 JDK 21 / Go / Gradle → 用 mishka-custom/scripts/setup.sh
-# 应用 app 补丁（锚点面板 + 可视化配置；r14 起不换内核，内核用上游子模块原样构建）→
-# 只跑 :app:assembleRelease → 上传 APK；打 tag（v*）时再附到 Release 上。**全程不碰 debug 变体。**
+# 它做的事：拉代码 → 备好 scripta → 装 JDK 21 / Go / Gradle → 用 mishka-custom/scripts/setup.sh
+# 换上 jieluojun/mihomo(Alpha) 内核并打好补丁 → 只跑 :app:assembleRelease → 上传 APK；
+# 打 tag（v*）时再附到 Release 上。**全程不碰 debug 变体。**
 #
 # 签名：仓库 secrets 里有 KEYSTORE_BASE64 / KEYSTORE_PASS / KEY_ALIAS / KEY_PASSWORD 就用你的 keystore；
 #       没有则用固定参数的 Android debug 风格 keystore 兜底（能直接装、能覆盖升级，但密钥是公开的，
@@ -17,7 +17,7 @@
 #   1. mishka-custom/ 必须**作为普通目录**提交（不能是空的/子模块指针）；
 #   2. scripta 子模块或源码必须可得 —— fork 里丢了子模块条目时，用工作流内置逻辑按上游 pin 直接 clone。
 # =============================================================================
-name: Release APK (anchor panel + visual config)
+name: Release APK (custom kernel + anchor panel)
 
 on:
   workflow_dispatch:
@@ -41,8 +41,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # 不在 checkout 阶段自动拉子模块：mihomo 与 scripta 各自在下面用带兜底的步骤准备，
-          # 避免 fork 里某个子模块 gitlink 损坏时整个 checkout 直接失败。
+          # 子模块稍后单独处理：上游 mihomo 用不到（setup.sh 会换成 jieluojun 内核），
+          # scripta 需要但 fork 里可能没有子模块条目，见下一步。
           submodules: false
 
       - name: 检查 mishka-custom 是否齐全
@@ -67,44 +67,22 @@ jobs:
             exit 1
           fi
           missing=""
-          for f in scripts/lib.sh init/no-debug.init.gradle \
-                   patches/app/0001-anchor-panel.patch patches/app/BASELINE.txt; do
+          for f in scripts/lib.sh init/no-debug.init.gradle kernel/go.work.sum \
+                   patches/app/0001-anchor-panel.patch patches/app/BASELINE.txt \
+                   patches/mihomo/BASELINE.txt; do
             [ -e "mishka-custom/$f" ] || missing="${missing}
             - mishka-custom/$f"
           done
+          if ! ls mishka-custom/patches/mihomo/[0-9]*.patch >/dev/null 2>&1; then
+            missing="${missing}
+            - mishka-custom/patches/mihomo/000*.patch"
+          fi
           if [ -n "$missing" ]; then
             echo "::error::mishka-custom/ 里缺下面这些文件（CI 构建需要，重新上传整个目录即可）：$missing"
             exit 1
           fi
           echo "mishka-custom/ 齐全 ✓"
           find mishka-custom -maxdepth 2 -type d | sort
-
-      - name: 准备 mihomo 内核源码（上游子模块，go.mod replace 需要）
-        run: |
-          set -uo pipefail
-          # mishka_core/go.mod 里有 replace github.com/metacubex/mihomo => ../../../../../mihomo，
-          # 顶层 mihomo/ 必须有内核源码，否则 :app 的 Go 交叉编译直接失败。r14 起不换内核，
-          # 就用上游 pin 的 YuKongA/mihomo(Mishka 分支)。
-          ok=0
-          if git ls-files -s mihomo | grep -q '^160000'; then
-            echo "走子模块检出 mihomo"
-            if git submodule update --init mihomo; then ok=1; fi
-          fi
-          if [ "$ok" != "1" ]; then
-            echo "::warning::mihomo 子模块条目缺失或检出失败，按上游 pin 兜底 clone"
-            git fetch --depth=1 --no-tags https://github.com/YuKongA/Mishka.git main
-            pin="$(git ls-tree FETCH_HEAD mihomo | awk '{print $3}')"
-            echo "mihomo pin = $pin"
-            rm -rf mihomo
-            git clone --no-checkout https://github.com/YuKongA/mihomo.git mihomo
-            git -C mihomo checkout "$pin"
-          fi
-          if [ -n "$(ls -A mihomo 2>/dev/null)" ]; then
-            echo "mihomo 源码就位 ✓（$(git -C mihomo rev-parse --short HEAD 2>/dev/null || echo '?')）"
-          else
-            echo "::error::mihomo 源码没准备好，Go 编译会失败"
-            exit 1
-          fi
 
       - name: 准备 scripta 源码
         run: |
@@ -157,11 +135,12 @@ jobs:
           go-version-file: app/src/main/native/mishka_core/go.mod
           cache-dependency-path: |
             app/src/main/native/mishka_core/go.sum
+            mishka-custom/kernel/go.work.sum
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: 应用 app 补丁（锚点面板 + 可视化配置）
+      - name: 换内核 + 打补丁 + 生成 go.work
         run: bash mishka-custom/scripts/setup.sh --ci --repo .
 
       - name: 准备签名
@@ -206,8 +185,16 @@ jobs:
       - name: Build Release APK（release only）
         run: |
           set -euo pipefail
-          # r14 起内核走上游子模块，不再注入 -Pmihomo.version（上游版本串即真实内核版本）。
-          ./gradlew -I mishka-custom/init/no-debug.init.gradle :app:assembleRelease
+          # 内核版本串：对齐 jieluojun/mihomo CI 的 alpha-smart-<short>-with-at。
+          # 不注入 -Pmihomo.version 会沿用上游 gradle.properties 的 v1.19.31+（metacubex 的版本号），
+          # 主页「内核版本」就会显示错。sha 优先取内核目录实际 HEAD，无 .git 时退回补丁基线。
+          sha="$(git -C mihomo rev-parse --short=8 HEAD 2>/dev/null || true)"
+          if [ -z "$sha" ]; then
+            sha="$(sed -n 's/^base_commit=//p' mishka-custom/patches/mihomo/BASELINE.txt | head -1 | cut -c1-8)"
+          fi
+          ver="${MIHOMO_VERSION:-alpha-smart-${sha}-with-at}"
+          echo "注入内核版本串：$ver"
+          ./gradlew -I mishka-custom/init/no-debug.init.gradle "-Pmihomo.version=$ver" :app:assembleRelease
 
       - name: 收集产物
         id: apk

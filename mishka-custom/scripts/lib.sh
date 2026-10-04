@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 脚本共用部分：日志、路径探测、常量。被其它脚本 source，不单独执行。
 
-CORE_MODULE_REL="app/src/main/native/mishka_core"   # 仓库标志（上游目录，r14 后不再涉及 go.work）
+KERNEL_URL_DEFAULT="https://github.com/jieluojun/mihomo"
+KERNEL_BRANCH_DEFAULT="Alpha"
+CORE_MODULE_REL="app/src/main/native/mishka_core"
 FMES_REL="app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt"
 CUSTOM_REL="app/src/main/kotlin/top/yukonga/mishka/custom"
 CUSTOM_DIR_NAME="mishka-custom"
@@ -45,6 +47,32 @@ find_repo_root() {
   die "找不到 Mishka 仓库：请在仓库内运行，或用 --repo <路径> 指定"
 }
 
+# 内核基线 commit（从补丁基线里读，避免脚本里再写一遍）
+kernel_base_commit() {
+  local root="$1"
+  sed -n 's/^base_commit=//p' "$root/patches/mihomo/BASELINE.txt" | head -1
+}
+
+# 内核版本串：对齐 jieluojun/mihomo 自己 CI（sync-and-build.yml）的
+#   VERSION="alpha-smart-$(git rev-parse --short HEAD)-with-at"（发布 tag：with-at-latest）。
+# app 主页「内核版本」直接显示内核 /version 的返回：构建时必须用 -Pmihomo.version 注入，
+# 否则沿用上游 gradle.properties 里 pin 的 v1.19.31+（那是 metacubex/mihomo 的版本号，
+# 与本定制内核无关——这正是「主页版本显示 1.19.31+」的根因）。
+kernel_version_string() {
+  local repo="$1" sha
+  sha="$(git -C "$repo/mihomo" rev-parse --short=8 HEAD 2>/dev/null || true)"
+  if [[ -z "$sha" ]]; then
+    # 内核目录没有 .git（源码包 / 浅缓存）：退回补丁基线 commit 的前 8 位
+    sha="$(kernel_base_commit "$(deliver_root)" | cut -c1-8)"
+  fi
+  printf 'alpha-smart-%s-with-at' "$sha"
+}
+
+kernel_patched() {
+  local dir="$1"
+  [[ -f "$dir/config/patch_mishka.go" ]] && grep -q 'mishkaPatch = patchMishka' "$dir/config/patch_mishka.go" 2>/dev/null
+}
+
 app_patch_applied() {
   local repo="$1"
   [[ -f "$repo/$CUSTOM_REL/anchor/AnchorPanel.kt" ]] && grep -q 'MishkaAnchorPanel' "$repo/$FMES_REL" 2>/dev/null
@@ -75,6 +103,23 @@ trap cleanup_tmp EXIT
 is_tracked() {
   local repo="$1" path="$2"
   [[ -n "$(git -C "$repo" ls-files -- "$path" | head -1)" ]]
+}
+
+# 内核补丁「累积」校验：把 patches/mihomo/*.patch 依次应用到临时索引上（不动工作区）。
+# 用临时索引而不是逐个 git apply --check，是因为补丁之间有依赖（0003 的上下文来自 0001），
+# 单独 --check 会假失败。tools/verify_mihomo_patches.sh 做的是同一件事（外加逐文件哈希比对），
+# 这里内联一份是为了让 setup.sh 在没有 tools/ 目录时也能工作。
+kernel_patches_check() {
+  local deliver="$1" kernel_dir="$2" tmp_index
+  tmp_index="$(mktemp -u)"
+  rm -f "$tmp_index"
+  GIT_INDEX_FILE="$tmp_index" git -C "$kernel_dir" read-tree HEAD || return 1
+  local p
+  for p in "$deliver"/patches/mihomo/[0-9]*.patch; do
+    GIT_INDEX_FILE="$tmp_index" git -C "$kernel_dir" apply --cached "$p" || { rm -f "$tmp_index"; return 1; }
+  done
+  rm -f "$tmp_index"
+  return 0
 }
 
 # 在 .git/info/exclude 里登记（保证自定义文件不脏 git status，又不动 .gitignore）
