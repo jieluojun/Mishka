@@ -76,7 +76,25 @@ assert_contains 'RuntimeConfigValues.selectExternalController(' \
 assert_contains 'RuntimeConfigValues.selectTunDevice(' \
   app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt \
   'ROOT TUN device profile priority is wired'
-assert_contains 'subscriptionViewModel?.readProfileTunDevice(id)' \
+assert_contains 'forceTunEnabled = submode == Submode.Tun' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt \
+  'ROOT TUN startup forces tun.enable in active mode preparation'
+assert_contains 'if (forceTunEnabled)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt \
+  'plain active profiles persist tun.enable=true for ROOT TUN'
+assert_contains 'if (isAgeEncrypted(source)) return ProfileTunConfigUpdate(encrypted = true, sourceWritable = false)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt \
+  'age-encrypted profile sources remain untouched by tun edits'
+assert_contains 'val outcome = persistActiveTunValues(subscriptionId, mapOf("stack" to stack))' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt \
+  'ROOT TUN stack changes are written to the active profile'
+assert_contains 'ActiveProfileRuntimeConfig.updateTunValues(context, subscriptionId, values)' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt \
+  'ROOT TUN MTU/GSO changes update active profile tun keys'
+assert_contains 'gsoMaxSize = resolve(profileTun?.gsoMaxSize, userTun?.gsoMaxSize, defaultGsoMaxSize)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
+  'ROOT TUN runtime override reads profile tun settings'
+assert_contains 'subscriptionViewModel?.readProfileTunConfig(id)' \
   app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt \
   'ROOT settings inspect transformed or age-encrypted profile values'
 assert_contains 'if (secret.isNotEmpty())' \
