@@ -20456,7 +20456,7 @@ index faef989..af440aa 100644
  //
  //export mishkaValidateTransform
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..3c82af1 100644
+index 78fcd87..1acc05e 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
 @@ -105,6 +105,9 @@
@@ -20503,6 +20503,15 @@ index 78fcd87..3c82af1 100644
      <string name="settings_vpn_settings">Настройки VPN</string>
      <string name="settings_vpn_summary">Обход локальной сети, перехват DNS, IPv6</string>
      <string name="settings_tun_device">Имя устройства TUN</string>
+@@ -333,7 +346,7 @@
+     <string name="settings_theme_blur_style_gaussian_summary">Равномерное матовое размытие по всей верхней панели</string>
+     <string name="settings_theme_blur_style_progressive_summary">Градиентное размытие с усилением к верхнему краю</string>
+     <string name="settings_theme_density_scale">Масштаб интерфейса</string>
+-    <string name="settings_theme_density_scale_summary">Настройка общего масштаба отображения (80% – 110%)</string>
++    <string name="settings_theme_density_scale_summary" formatted="false">Настройка общего масштаба отображения (80% – 110%)</string>
+     <string name="settings_theme_floating_bottom_bar">Плавающая нижняя панель</string>
+     <string name="settings_theme_floating_bottom_bar_summary">Использовать парящую нижнюю панель на смартфонах</string>
+     <string name="settings_theme_floating_bottom_bar_style">Стиль плавающей нижней панели</string>
 @@ -406,8 +419,11 @@
      <string name="root_tether_scan_result_title">Обнаруженные интерфейсы</string>
      <string name="root_tether_tproxy_unavailable_warning">В ядре отсутствует модуль xt_TPROXY. Используется резервный режим (меньшая скорость, но соединения работают). Для максимальной производительности TPROXY используйте ядро с поддержкой xt_TPROXY.</string>
@@ -20537,7 +20546,7 @@ index 78fcd87..3c82af1 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..2e1c6cc 100644
+index cba1bbb..6b9c465 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -20584,6 +20593,15 @@ index cba1bbb..2e1c6cc 100644
      <string name="settings_vpn_settings">VPN 设置</string>
      <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
      <string name="settings_tun_device">TUN 设备名称</string>
+@@ -331,7 +344,7 @@
+     <string name="settings_theme_blur_style_gaussian_summary">顶栏整体均匀模糊</string>
+     <string name="settings_theme_blur_style_progressive_summary">顶部渐强模糊</string>
+     <string name="settings_theme_density_scale">界面缩放</string>
+-    <string name="settings_theme_density_scale_summary">调整全局显示比例（80% - 110%）</string>
++    <string name="settings_theme_density_scale_summary" formatted="false">调整全局显示比例（80% - 110%）</string>
+     <string name="settings_theme_floating_bottom_bar">悬浮底栏</string>
+     <string name="settings_theme_floating_bottom_bar_summary">在手机布局中使用悬浮底部导航栏</string>
+     <string name="settings_theme_floating_bottom_bar_style">悬浮底栏样式</string>
 @@ -404,8 +417,11 @@
      <string name="root_tether_scan_result_title">检测到以下接口</string>
      <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
@@ -20618,7 +20636,7 @@ index cba1bbb..2e1c6cc 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..8f03a83 100644
+index f6895e0..4eec6f6 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
 @@ -103,6 +103,9 @@
@@ -20665,6 +20683,15 @@ index f6895e0..8f03a83 100644
      <string name="settings_vpn_settings">VPN 設定</string>
      <string name="settings_vpn_summary">繞過私人網路、DNS 攔截、IPv6</string>
      <string name="settings_tun_device">TUN 裝置名稱</string>
+@@ -331,7 +344,7 @@
+     <string name="settings_theme_blur_style_gaussian_summary">頂欄整體均勻模糊</string>
+     <string name="settings_theme_blur_style_progressive_summary">頂部漸強模糊</string>
+     <string name="settings_theme_density_scale">介面縮放</string>
+-    <string name="settings_theme_density_scale_summary">調整全域顯示比例（80% - 110%）</string>
++    <string name="settings_theme_density_scale_summary" formatted="false">調整全域顯示比例（80% - 110%）</string>
+     <string name="settings_theme_floating_bottom_bar">懸浮底部列</string>
+     <string name="settings_theme_floating_bottom_bar_summary">在手機版面中使用懸浮底部導覽列</string>
+     <string name="settings_theme_floating_bottom_bar_style">懸浮底部列樣式</string>
 @@ -404,8 +417,11 @@
      <string name="root_tether_scan_result_title">偵測到以下介面</string>
      <string name="root_tether_tproxy_unavailable_warning">目前核心缺少 xt_TPROXY 模組，已降級為相容路徑（吞吐量略低，連線仍可用）。如需原生 TPROXY 效能，請更換支援該模組的核心。</string>
@@ -20699,7 +20726,7 @@ index f6895e0..8f03a83 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..26d374f 100644
+index d1acc59..adaf21c 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
@@ -20746,6 +20773,15 @@ index d1acc59..26d374f 100644
      <string name="settings_vpn_settings">VPN Settings</string>
      <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
      <string name="settings_tun_device">TUN Device Name</string>
+@@ -333,7 +346,7 @@
+     <string name="settings_theme_blur_style_gaussian_summary">Uniform frosted blur across the top bar</string>
+     <string name="settings_theme_blur_style_progressive_summary">Gradient blur, strongest at the top edge</string>
+     <string name="settings_theme_density_scale">Interface Scale</string>
+-    <string name="settings_theme_density_scale_summary">Adjust the global display scale (80% - 110%)</string>
++    <string name="settings_theme_density_scale_summary" formatted="false">Adjust the global display scale (80% - 110%)</string>
+     <string name="settings_theme_floating_bottom_bar">Floating Bottom Bar</string>
+     <string name="settings_theme_floating_bottom_bar_summary">Use a floating bottom navigation bar on phones</string>
+     <string name="settings_theme_floating_bottom_bar_style">Floating Bottom Bar Style</string>
 @@ -406,8 +419,11 @@
      <string name="root_tether_scan_result_title">Detected interfaces</string>
      <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
@@ -20763,11 +20799,11 @@ index d1acc59..26d374f 100644
      <string name="external_control_title">External Controller</string>
      <string name="external_control_ip">API Address</string>
 -    <string name="external_control_controller_hint">Bind address for the HTTP API (e.g. 127.0.0.1:9090). 0.0.0.0 will be automatically overwritten with 127.0.0.1.</string>
-+    <string name="external_control_controller_hint">The active profile's external-controller value takes precedence; this field is a fallback. Profile bind addresses, including 0.0.0.0, are kept as configured and are not forced to loopback.</string>
++    <string name="external_control_controller_hint">The active profile\'s external-controller value takes precedence; this field is a fallback. Profile bind addresses, including 0.0.0.0, are kept as configured and are not forced to loopback.</string>
      <string name="external_control_secret">API Secret</string>
 -    <string name="external_control_secret_hint">Bearer token for the HTTP API. When empty, falls back to the secret defined in the subscription config, or a random one if the subscription does not set it.</string>
 -    <string name="settings_external_control_summary">Overwrite external controller configuration</string>
-+    <string name="external_control_secret_hint">The active profile's secret takes precedence; this value is a fallback. If neither source sets a secret, no key is generated and the API has no password. A wildcard bind such as 0.0.0.0 exposes the control API to devices that can reach it.</string>
++    <string name="external_control_secret_hint">The active profile\'s secret takes precedence; this value is a fallback. If neither source sets a secret, no key is generated and the API has no password. A wildcard bind such as 0.0.0.0 exposes the control API to devices that can reach it.</string>
 +    <string name="settings_external_control_summary">Fallback override; active profile values take priority</string>
  
      <!-- File Manager -->

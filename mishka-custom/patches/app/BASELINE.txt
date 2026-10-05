@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=d8ab597cafa058a98003cf2ee076eee2bdac813af602456d95b3d72f7183f3bc
+patch_sha256=ecd8a7f0cceefb2d4a8ea8d1b08b4e8ab5f5f9d85ec478e2f47c7f274aa0fa7d
 blob_after=0ebf6af7fb0238b52e41188f5bb8897f86dc07a4 app/build.gradle.kts
 blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
 blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -58,7 +58,7 @@ blob_after=d9961a417dacca8065b8d6cb1a6f31f92b0666c1 app/src/main/kotlin/top/yuko
 blob_after=1dbee3a13e767b3a09892e3155a5597720731ab3 app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 blob_after=571d4e74f5736973e36217c4deb21f6122b42519 app/src/main/native/mishka_core/runtime_test.go
 blob_after=af440aa7c5cafc9621d471d0d13aac05f691670c app/src/main/native/mishka_core/transform_bridge.go
-blob_after=3c82af1633b67f92ff0b889d23ae3711bde9682c app/src/main/res/values-ru/strings.xml
-blob_after=2e1c6cc7af18f2b9d7e33ce524a2d17a61985cb4 app/src/main/res/values-zh-rCN/strings.xml
-blob_after=8f03a8338bba922dbee0a638093a7e3752056a84 app/src/main/res/values-zh-rTW/strings.xml
-blob_after=26d374f6a10b6d9ccae3e0c3e51f3a4a65a1efc0 app/src/main/res/values/strings.xml
+blob_after=1acc05e6b81ed2ccf6a4ed0eb86684bb5c61f102 app/src/main/res/values-ru/strings.xml
+blob_after=6b9c465db50b2e35aaa12ba3134564e324533d31 app/src/main/res/values-zh-rCN/strings.xml
+blob_after=4eec6f66e40e3006027a644f467724e0b745ca2e app/src/main/res/values-zh-rTW/strings.xml
+blob_after=adaf21cc829432426327fc4ce8cbe4e5e64ec163 app/src/main/res/values/strings.xml
