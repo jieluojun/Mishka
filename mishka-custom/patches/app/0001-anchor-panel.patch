@@ -11,6 +11,33 @@ index 93a1f15..0ebf6af 100644
  val mihomoVersion = providers.gradleProperty("mihomo.version").orElse("dev").get()
  val mihomoVersionPath = "github.com/metacubex/mihomo/constant.Version"
  val ndkDirectoryProvider = androidComponents.sdkComponents.ndkDirectory
+diff --git a/app/src/main/cpp/mishka_jni.c b/app/src/main/cpp/mishka_jni.c
+index 3a555eb..a059246 100644
+--- a/app/src/main/cpp/mishka_jni.c
++++ b/app/src/main/cpp/mishka_jni.c
+@@ -96,6 +96,22 @@ Java_top_yukonga_mishka_data_bridge_MishkaCoreBridge_nativeGenAgeHybridKeyPair(
+     return go_cstr_to_jstring(env, result);
+ }
+ 
++JNIEXPORT jstring JNICALL
++Java_top_yukonga_mishka_data_bridge_MishkaCoreBridge_nativeReadRuntimeConfigValues(
++        JNIEnv *env, jclass clazz, jstring jWorkDir, jstring jTransform, jstring jKey) {
++    char *workDir = jstring_to_cstr(env, jWorkDir);
++    char *transform = jstring_to_cstr(env, jTransform);
++    char *key = jstring_to_cstr(env, jKey);
++    char *result = mishkaReadRuntimeConfigValues(
++            workDir ? workDir : "",
++            transform ? transform : "",
++            key ? key : "");
++    free(workDir);
++    free(transform);
++    free(key);
++    return go_cstr_to_jstring(env, result);
++}
++
+ JNIEXPORT jstring JNICALL
+ Java_top_yukonga_mishka_data_bridge_MishkaCoreBridge_nativeValidateTransform(
+         JNIEnv *env, jclass clazz, jstring jWorkDir, jstring jTransform, jstring jKey) {
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 index 5c60eb7..7c76159 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -16985,6 +17012,314 @@ index 0000000..8e92a0f
 +        return doc.dump()
 +    }
 +}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
+new file mode 100644
+index 0000000..9bc4c94
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
+@@ -0,0 +1,302 @@
++package top.yukonga.mishka.custom.runtime
++
++/**
++ * Small, dependency-free reader for the scalar config values Mishka needs before starting mihomo.
++ *
++ * This intentionally handles ordinary YAML block scalars plus a flow-style `tun: { ... }` map;
++ * it is not a general YAML parser. Complex values/aliases are left unresolved rather than guessed.
++ */
++object RuntimeConfigValues {
++
++    /** Return a top-level scalar, preserving an explicitly empty/null value as `""`. */
++    fun topLevelScalar(yaml: String, key: String): String? {
++        for (original in yaml.lineSequence()) {
++            val line = original.removePrefix("\uFEFF")
++            if (leadingIndent(line) != 0) continue
++            val content = stripComment(line).trimEnd()
++            if (content.isBlank() || content == "---" || content == "...") continue
++            val colon = findColon(content)
++            if (colon < 0 || parseKey(content.substring(0, colon).trim()) != key) continue
++            return parseScalar(content.substring(colon + 1))
++        }
++        return null
++    }
++
++    /** Return a direct child scalar such as `tun.device`, including a flow-style parent map. */
++    fun nestedScalar(yaml: String, parentKey: String, childKey: String): String? {
++        var inParent = false
++        var childIndent = -1
++
++        for (original in yaml.lineSequence()) {
++            val line = original.removePrefix("\uFEFF")
++            val contentWithIndent = stripComment(line).trimEnd()
++            if (contentWithIndent.isBlank()) continue
++            val indent = leadingIndent(contentWithIndent)
++            val content = contentWithIndent.drop(indent)
++
++            if (indent == 0) {
++                val colon = findColon(content)
++                if (colon < 0) {
++                    inParent = false
++                    childIndent = -1
++                    continue
++                }
++                val key = parseKey(content.substring(0, colon).trim())
++                inParent = key == parentKey
++                childIndent = -1
++                if (inParent) {
++                    val flowValue = parseFlowMapScalar(content.substring(colon + 1), childKey)
++                    if (flowValue != null) return flowValue
++                }
++                continue
++            }
++
++            if (!inParent) continue
++            val colon = findColon(content)
++            if (colon < 0) continue // comments, sequence items, and nested block markers
++            if (childIndent < 0) childIndent = indent
++            if (indent != childIndent) continue
++            if (parseKey(content.substring(0, colon).trim()) == childKey) {
++                return parseScalar(content.substring(colon + 1))
++            }
++        }
++        return null
++    }
++
++    /** Profile > app override > empty/no-auth; explicit empty profile secrets remain authoritative. */
++    fun selectSecret(profileSecret: String?, appSecret: String?): String =
++        profileSecret ?: appSecret?.trim()?.takeIf { it.isNotEmpty() } ?: ""
++
++    /** Profile > app override > default. Blank controller values are treated as unset. */
++    fun selectExternalController(profileValue: String?, appValue: String?, defaultValue: String): String =
++        profileValue?.trim()?.takeIf { it.isNotEmpty() }
++            ?: appValue?.trim()?.takeIf { it.isNotEmpty() }
++            ?: defaultValue
++
++    /** Profile > app override > ROOT setting > historical default. Blank names are treated as unset. */
++    fun selectTunDevice(
++        profileValue: String?,
++        appValue: String?,
++        rootSetting: String?,
++        defaultValue: String,
++    ): String = profileValue?.trim()?.takeIf { it.isNotEmpty() }
++        ?: appValue?.trim()?.takeIf { it.isNotEmpty() }
++        ?: rootSetting?.trim()?.takeIf { it.isNotEmpty() }
++        ?: defaultValue
++
++    /**
++     * Convert a wildcard bind address into a loopback address for requests made by Mishka itself.
++     * This does not alter the address passed to mihomo, so the configured listener remains intact.
++     */
++    fun apiClientAddress(bindAddress: String): String {
++        val address = bindAddress.trim()
++        return when {
++            address == "0.0.0.0" -> "127.0.0.1"
++            address.startsWith("0.0.0.0:") -> "127.0.0.1:${address.substringAfter(':')}"
++            address == "*" -> "127.0.0.1"
++            address.startsWith("*:") -> "127.0.0.1:${address.substringAfter(':')}"
++            address == "[::]" -> "[::1]"
++            address.startsWith("[::]:") -> "[::1]:${address.substringAfter("]:")}"
++            else -> address
++        }
++    }
++
++    private fun parseFlowMapScalar(raw: String, childKey: String): String? {
++        val value = stripComment(raw).trim()
++        val opening = value.indexOf('{')
++        if (opening < 0) return null
++        val prefix = value.substring(0, opening).trim()
++        if (prefix.isNotEmpty() && !prefix.startsWith('&')) return null
++        val closing = findMatchingBrace(value, opening) ?: return null
++        if (value.substring(closing + 1).isNotBlank()) return null
++        val body = value.substring(opening + 1, closing)
++        for (entry in splitFlowEntries(body)) {
++            val colon = findColon(entry)
++            if (colon < 0 || parseKey(entry.substring(0, colon).trim()) != childKey) continue
++            return parseScalar(entry.substring(colon + 1))
++        }
++        return null
++    }
++
++    private fun splitFlowEntries(body: String): List<String> {
++        val entries = mutableListOf<String>()
++        var start = 0
++        var braces = 0
++        var brackets = 0
++        var quote: Char? = null
++        var escaped = false
++        var index = 0
++        while (index < body.length) {
++            val char = body[index]
++            when (quote) {
++                '"' -> {
++                    if (escaped) escaped = false
++                    else if (char == '\\') escaped = true
++                    else if (char == '"') quote = null
++                }
++                '\'' -> {
++                    if (char == '\'') {
++                        if (index + 1 < body.length && body[index + 1] == '\'') index++
++                        else quote = null
++                    }
++                }
++                else -> when (char) {
++                    '"', '\'' -> quote = char
++                    '{' -> braces++
++                    '}' -> braces--
++                    '[' -> brackets++
++                    ']' -> brackets--
++                    ',' -> if (braces == 0 && brackets == 0) {
++                        entries += body.substring(start, index).trim()
++                        start = index + 1
++                    }
++                }
++            }
++            index++
++        }
++        entries += body.substring(start).trim()
++        return entries.filter { it.isNotEmpty() }
++    }
++
++    private fun findMatchingBrace(value: String, opening: Int): Int? {
++        var depth = 0
++        var quote: Char? = null
++        var escaped = false
++        var index = opening
++        while (index < value.length) {
++            val char = value[index]
++            when (quote) {
++                '"' -> {
++                    if (escaped) escaped = false
++                    else if (char == '\\') escaped = true
++                    else if (char == '"') quote = null
++                }
++                '\'' -> {
++                    if (char == '\'') {
++                        if (index + 1 < value.length && value[index + 1] == '\'') index++
++                        else quote = null
++                    }
++                }
++                else -> when (char) {
++                    '"', '\'' -> quote = char
++                    '{' -> depth++
++                    '}' -> {
++                        depth--
++                        if (depth == 0) return index
++                    }
++                }
++            }
++            index++
++        }
++        return null
++    }
++
++    private fun findColon(value: String): Int {
++        var quote: Char? = null
++        var escaped = false
++        var index = 0
++        while (index < value.length) {
++            val char = value[index]
++            when (quote) {
++                '"' -> {
++                    if (escaped) escaped = false
++                    else if (char == '\\') escaped = true
++                    else if (char == '"') quote = null
++                }
++                '\'' -> {
++                    if (char == '\'') {
++                        if (index + 1 < value.length && value[index + 1] == '\'') index++
++                        else quote = null
++                    }
++                }
++                else -> when (char) {
++                    '"', '\'' -> quote = char
++                    ':' -> return index
++                }
++            }
++            index++
++        }
++        return -1
++    }
++
++    private fun parseKey(raw: String): String? {
++        val key = raw.trim()
++        if (key.isEmpty()) return null
++        if (key.startsWith('"') || key.startsWith('\'')) return parseScalar(key)
++        return key
++    }
++
++    /** Return null for non-scalar YAML constructs; empty/null scalars are returned as `""`. */
++    private fun parseScalar(raw: String): String? {
++        val value = stripComment(raw).trim()
++        if (value.isEmpty() || value == "~" || value.equals("null", ignoreCase = true)) return ""
++        if (value.startsWith('"')) return parseDoubleQuoted(value)
++        if (value.startsWith('\'')) return parseSingleQuoted(value)
++        if (value.startsWith('{') || value.startsWith('[') || value == "|" || value == ">") return null
++        return value
++    }
++
++    private fun parseDoubleQuoted(value: String): String? {
++        if (value.length < 2 || value.last() != '"') return null
++        val body = value.substring(1, value.length - 1)
++        val output = StringBuilder(body.length)
++        var index = 0
++        while (index < body.length) {
++            val char = body[index]
++            if (char == '\\' && index + 1 < body.length) {
++                val escaped = body[index + 1]
++                output.append(
++                    when (escaped) {
++                        '"' -> '"'
++                        '\\' -> '\\'
++                        'n' -> '\n'
++                        'r' -> '\r'
++                        't' -> '\t'
++                        else -> escaped
++                    }
++                )
++                index += 2
++            } else {
++                output.append(char)
++                index++
++            }
++        }
++        return output.toString()
++    }
++
++    private fun parseSingleQuoted(value: String): String? {
++        if (value.length < 2 || value.last() != '\'') return null
++        val body = value.substring(1, value.length - 1)
++        return body.replace("''", "'")
++    }
++
++    private fun stripComment(value: String): String {
++        var quote: Char? = null
++        var escaped = false
++        var index = 0
++        while (index < value.length) {
++            val char = value[index]
++            when (quote) {
++                '"' -> {
++                    if (escaped) escaped = false
++                    else if (char == '\\') escaped = true
++                    else if (char == '"') quote = null
++                }
++                '\'' -> {
++                    if (char == '\'') {
++                        if (index + 1 < value.length && value[index + 1] == '\'') index++
++                        else quote = null
++                    }
++                }
++                else -> when {
++                    char == '"' || char == '\'' -> quote = char
++                    char == '#' && (index == 0 || value[index - 1].isWhitespace()) -> return value.substring(0, index)
++                }
++            }
++            index++
++        }
++        return value
++    }
++
++    private fun leadingIndent(value: String): Int = value.takeWhile { it == ' ' }.length
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 index 33aa9cc..0fdd5de 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
@@ -17085,6 +17420,135 @@ index 33aa9cc..0fdd5de 100644
 +/** 延迟测试失败（内核返回非 2xx，通常 503 = 节点连不通测速地址）。[status] 供上层分类提示。 */
 +class DelayTestFailedException(val node: String, val status: Int, val reason: String) :
 +    MihomoApiException("delay test for '$node' failed: HTTP $status $reason")
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
+index 76eb0a2..8e25efc 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
+@@ -37,6 +37,12 @@ data class CoreFetchResult(
+ @Serializable
+ private data class TransformCheck(val valid: Boolean = false)
+ 
++@Serializable
++data class CoreRuntimeConfig(
++    val externalController: String? = null,
++    val secret: String? = null,
++    val tunDevice: String? = null,
++)
+ 
+ class MishkaCoreError(message: String) : RuntimeException(message)
+ 
+@@ -44,6 +50,7 @@ object MishkaCoreBridge {
+ 
+     private val tokenSeq = AtomicInteger(1)
+     private val json = Json { ignoreUnknownKeys = true }
++    private val nativeConfigLock = Any()
+ 
+     init {
+         // mishka_jni 链接依赖 libmihomo.so 的导出符号，必须先加载。
+@@ -79,13 +86,15 @@ object MishkaCoreBridge {
+         val pollerJob = launchProgressPoller(this, token, onProgress)
+         try {
+             val raw = withContext(Dispatchers.IO) {
+-                // age 全局密钥进程级共享：fetchAndValid 由 processLock 串行，fetch 前设置、后清空。
+-                nativeSetAgeSecretKey(ageSecretKey)
+-                try {
+-                    nativeFetchAndValid(workDir, url, force, httpProxy, userAgent, token)
+-                } finally {
+-                    nativeDone.set(true)
+-                    nativeSetAgeSecretKey("")
++                // age 全局密钥进程级共享：与配置检查/读取共用锁，避免密钥交叉污染。
++                synchronized(nativeConfigLock) {
++                    nativeSetAgeSecretKey(ageSecretKey)
++                    try {
++                        nativeFetchAndValid(workDir, url, force, httpProxy, userAgent, token)
++                    } finally {
++                        nativeDone.set(true)
++                        nativeSetAgeSecretKey("")
++                    }
+                 }
+             }
+             interpretResult(raw)
+@@ -122,9 +131,26 @@ object MishkaCoreBridge {
+             .getOrElse { throw MishkaCoreError("invalid native payload: $raw") }
+     }
+ 
++    /**
++     * Read the profile values needed before mihomo starts, using the same age decryption and
++     * optional transform path as the runtime. A missing YAML key is null; an explicit empty value
++     * remains an empty string so callers can distinguish it from a missing key.
++     */
++    fun readRuntimeConfigValues(workDir: String, transformPath: String?, ageSecretKey: String): CoreRuntimeConfig {
++        val raw = synchronized(nativeConfigLock) {
++            nativeReadRuntimeConfigValues(workDir, transformPath.orEmpty(), ageSecretKey)
++        }
++        if (raw.isNullOrEmpty()) throw MishkaCoreError("native returned empty runtime config values")
++        if (raw.startsWith("error:")) throw MishkaCoreError(raw.removePrefix("error:").trim())
++        return runCatching { json.decodeFromString<CoreRuntimeConfig>(raw) }
++            .getOrElse { throw MishkaCoreError("invalid runtime config payload: $raw") }
++    }
++
+     /** 按运行时同一条解密、脚本、Parse 链路校验变换，保存失败时不污染覆写文件。 */
+     fun validateTransform(workDir: java.io.File, transform: java.io.File, ageSecretKey: String) {
+-        val raw = nativeValidateTransform(workDir.path, transform.path, ageSecretKey)
++        val raw = synchronized(nativeConfigLock) {
++            nativeValidateTransform(workDir.path, transform.path, ageSecretKey)
++        }
+         val result = interpretTransformResult(raw)
+         check(result.valid) { "native transform validation returned invalid result" }
+     }
+@@ -136,6 +162,13 @@ object MishkaCoreBridge {
+             .getOrElse { throw MishkaCoreError("invalid native payload: $raw") }
+     }
+ 
++    @JvmStatic
++    private external fun nativeReadRuntimeConfigValues(
++        workDir: String,
++        transform: String,
++        secretKey: String,
++    ): String?
++
+     @JvmStatic
+     private external fun nativeValidateTransform(
+         workDir: String,
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt b/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
+index af3418a..9ad0389 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
+@@ -33,7 +33,7 @@ val viewModelModule = module {
+             onLiveProviderInfo = get<SubscriptionRepository>()::setLiveProviderInfo,
+         )
+     }
+-    single { SubscriptionViewModel(get(), get(), get(), get(), androidContext()) }
++    single { SubscriptionViewModel(get(), get(), get(), get(), get(), androidContext()) }
+     single { OverrideProfileViewModel(get(), get(), get(), androidContext()) }
+     single {
+         ProxyViewModel(
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt
+index 9a996f2..1846a59 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt
+@@ -93,15 +93,16 @@ data class ProfileOverride(
+ )
+ 
+ /**
+- * 解析用户的 external-controller 设置：trim、空字符串视为未设置、默认 `127.0.0.1:9090`，
+- * 并把监听地址 `0.0.0.0` 替换为客户端可连的 `127.0.0.1`。
++ * Resolve the Mishka fallback binding: trim, treat blank as unset, and default to loopback.
++ * Wildcard binds are preserved; callers must use a separate loopback address for their own API
++ * requests without changing the actual mihomo listener.
+  */
+ fun ConfigurationOverride.resolveExternalController(): String =
+-    (externalController?.trim()?.takeIf { it.isNotEmpty() } ?: "127.0.0.1:9090")
+-        .replace("0.0.0.0", "127.0.0.1")
++    externalController?.trim()?.takeIf { it.isNotEmpty() } ?: "127.0.0.1:9090"
+ 
+ /**
+- * 解析用户的 secret：trim、空字符串视为未设置（让调用方 fallback 到 random 生成值）。
++ * Resolve the Mishka secret override: trim and treat a blank value as unset. If no source configures
++ * a secret, the API is intentionally left unauthenticated rather than assigned a random token.
+  */
+ fun ConfigurationOverride.resolveSecretOrNull(): String? =
+     secret?.trim()?.takeIf { it.isNotEmpty() }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
 index 1eaec7e..4219bd9 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
@@ -17106,6 +17570,20 @@ index 1eaec7e..4219bd9 100644
          timeout: Int = 5000,
      ): Result<DelayResult>
  
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
+index bfb7c72..6c57d68 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
+@@ -19,6 +19,9 @@ object StorageKeys {
+     const val ROOT_MIHOMO_SECRET = "root_mihomo_secret"
+     const val ROOT_START_TIME = "root_start_time"
+     const val ROOT_ACTIVE_SUBSCRIPTION_ID = "root_active_subscription_id"
++    // mihomo 实际启动时使用的 tun.device；配置变更/进程重连时用于准确清理旧接口
++    const val ROOT_TUN_DEVICE_ACTIVE = "root_tun_device_active"
++    const val ROOT_CONTROLLER_API_ADDRESS_ACTIVE = "root_controller_api_address_active"
+ 
+     // 启动时刻的 boot session 标记，用于 reopen 重连前识别设备是否重启过（重启会杀死 root
+     // mihomo，不能把过期 PID 误当"仍存活"）。判定逻辑见 [BootSession]
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
 index b4ccbf3..73d5050 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
@@ -17154,6 +17632,201 @@ index b4ccbf3..73d5050 100644
              val hasPid = storage.getString(StorageKeys.ROOT_MIHOMO_PID, "").isNotEmpty()
              val rebooted = BootSession.hasRebootedSince(context, storage)
              if (hasPid && !rebooted) {
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
+index 9652c8e..75fd6b3 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
+@@ -1,30 +1,84 @@
+ package top.yukonga.mishka.service
+ 
+ import android.content.Context
++import top.yukonga.mishka.custom.runtime.RuntimeConfigValues
+ import top.yukonga.mishka.domain.model.ConfigurationOverride
+-import top.yukonga.mishka.domain.model.resolveSecretOrNull
++import top.yukonga.mishka.platform.PlatformStorage
++import top.yukonga.mishka.platform.StorageKeys
+ import java.io.File
+-import java.util.UUID
+ 
+ /**
+- * mihomo 运行时路径与 secret 工具。配置覆写不在此处生成，
+- * 运行时合并逻辑见 [RuntimeOverrideBuilder]，用户持久设置见 OverrideJsonStore。
++ * Runtime profile-value resolution for mihomo. The active profile file has priority over Mishka
++ * overrides; controller credentials are empty when neither source configures a secret.
+  */
+ object ConfigGenerator {
+ 
+-    fun generateSecret(): String = UUID.randomUUID().toString().take(16)
++    private const val DEFAULT_EXTERNAL_CONTROLLER = "127.0.0.1:9090"
+ 
+     /**
+-     * external-controller 的 secret，优先级：用户 override > 订阅 config.yaml 顶层 `secret:` >
+-     * 随机生成。两个 Service 都从这里取，别各写一份——它是「secret 优先级」这条约束的实现单点。
++     * Secret priority: active profile `secret` > Mishka override > no authentication.
++     * An explicitly empty/null profile secret is retained as empty and therefore disables auth.
+      */
+     fun resolveSecret(
+         context: Context,
+         userOverride: ConfigurationOverride,
+         subscriptionId: String?,
+-    ): String = userOverride.resolveSecretOrNull()
+-        ?: subscriptionId?.let { readSubscriptionSecret(context, it) }
+-        ?: generateSecret()
++    ): String = resolveSecret(userOverride, readProfileScalar(context, subscriptionId, "secret"))
++
++    /** Resolve a secret using an already decrypted/transformed profile value. */
++    fun resolveSecret(userOverride: ConfigurationOverride, profileSecret: String?): String =
++        RuntimeConfigValues.selectSecret(profileSecret, userOverride.secret)
++
++    /**
++     * Binding priority: active profile `external-controller` > Mishka override > loopback default.
++     * The configured bind value is returned unchanged; use [apiClientAddress] for requests made by
++     * Mishka itself when that bind is a wildcard.
++     */
++    fun resolveExternalController(
++        context: Context,
++        userOverride: ConfigurationOverride,
++        subscriptionId: String?,
++    ): String = resolveExternalController(
++        userOverride,
++        readSubscriptionExternalController(context, subscriptionId),
++    )
++
++    /** Resolve a binding using an already decrypted/transformed profile value. */
++    fun resolveExternalController(userOverride: ConfigurationOverride, profileController: String?): String =
++        RuntimeConfigValues.selectExternalController(
++            profileController,
++            userOverride.externalController,
++            DEFAULT_EXTERNAL_CONTROLLER,
++        )
++
++    fun apiClientAddress(bindAddress: String): String = RuntimeConfigValues.apiClientAddress(bindAddress)
++
++    /**
++     * ROOT TUN device priority: active profile `tun.device` > Mishka's `tun.device` override >
++     * existing ROOT device setting > the historic default.
++     */
++    fun resolveRootTunDevice(
++        context: Context,
++        userOverride: ConfigurationOverride,
++        subscriptionId: String?,
++        storage: PlatformStorage = PlatformStorage(context),
++    ): String = resolveRootTunDevice(
++        userOverride,
++        readSubscriptionTunDevice(context, subscriptionId),
++        storage,
++    )
++
++    /** Resolve ROOT TUN name using an already decrypted/transformed profile value. */
++    fun resolveRootTunDevice(
++        userOverride: ConfigurationOverride,
++        profileTunDevice: String?,
++        storage: PlatformStorage,
++    ): String = RuntimeConfigValues.selectTunDevice(
++        profileValue = profileTunDevice,
++        appValue = userOverride.tun?.device,
++        rootSetting = storage.getString(StorageKeys.ROOT_TUN_DEVICE, RuntimeOverrideBuilder.DEFAULT_TUN_DEVICE),
++        defaultValue = RuntimeOverrideBuilder.DEFAULT_TUN_DEVICE,
++    )
+ 
+     fun getWorkDir(context: Context): File {
+         val dir = File(context.filesDir, "mihomo")
+@@ -32,57 +86,55 @@ object ConfigGenerator {
+         return dir
+     }
+ 
+-    /**
+-     * 从订阅 config.yaml 中提取顶层 secret 字段。
+-     *
+-     * 仅做行级匹配（行首 `secret:`，不含缩进），支持单/双引号与行尾注释。
+-     *
+-     * @return 去引号后的 secret 值；订阅无该字段或文件不存在则返回 null
+-     */
+-    fun readSubscriptionSecret(context: Context, subscriptionId: String): String? {
+-        val file = ProfileFileOps.getSubscriptionConfigFile(context, subscriptionId)
+-        if (!file.exists()) return null
+-        val regex = Regex("""^secret:\s*(.+?)\s*(?:#.*)?$""")
++    /** Plain-YAML fallback used only if native age/transform inspection is unavailable. */
++    fun readSubscriptionSecret(context: Context, subscriptionId: String): String? =
++        readProfileScalar(context, subscriptionId, "secret")
++
++    /** Read the active profile's top-level `external-controller` scalar, if present. */
++    fun readSubscriptionExternalController(context: Context, subscriptionId: String?): String? =
++        readProfileScalar(context, subscriptionId, "external-controller")
++
++    /** Read the active profile's direct `tun.device` scalar, including flow-style `tun` maps. */
++    fun readSubscriptionTunDevice(context: Context, subscriptionId: String?): String? {
++        val file = configFile(context, subscriptionId)
++        if (!file.isFile) return null
+         return try {
+-            file.useLines { lines ->
+-                for (line in lines) {
+-                    val raw = regex.matchEntire(line)?.groupValues?.get(1) ?: continue
+-                    val unquoted = when {
+-                        raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"') -> raw.substring(1, raw.length - 1)
+-                        raw.length >= 2 && raw.startsWith('\'') && raw.endsWith('\'') -> raw.substring(1, raw.length - 1)
+-                        else -> raw
+-                    }
+-                    return@useLines unquoted.takeIf { it.isNotEmpty() }
+-                }
+-                null
+-            }
++            RuntimeConfigValues.nestedScalar(file.readText(Charsets.UTF_8), "tun", "device")
++                ?.trim()
++                ?.takeIf { it.isNotEmpty() }
+         } catch (_: Exception) {
+             null
+         }
+     }
+ 
+     /**
+-     * 从订阅 config.yaml 中提取顶层 `mixed-port` 字段，用于判断 mihomo 是否
+-     * 已经会监听 HTTP 代理端口（决定 [RuntimeOverrideBuilder] 是否注入兜底默认值）。
+-     *
+-     * 仅做行级匹配（行首 `mixed-port:`，不含缩进），支持行尾注释。值非正整数视为未设置。
+-     *
+-     * @return 解析到的端口（1..65535）；订阅无该字段、值非数字、或文件不存在则返回 null
++     * Read a top-level scalar from the active profile's config.yaml. `""` is intentionally
++     * different from null: it means the key is present but empty (for example `secret:`).
+      */
+-    fun readSubscriptionMixedPort(context: Context, subscriptionId: String): Int? {
+-        val file = ProfileFileOps.getSubscriptionConfigFile(context, subscriptionId)
+-        if (!file.exists()) return null
+-        val regex = Regex("""^mixed-port:\s*(\d+)\s*(?:#.*)?$""")
++    private fun readProfileScalar(context: Context, subscriptionId: String?, key: String): String? {
++        val file = configFile(context, subscriptionId)
++        if (!file.isFile) return null
+         return try {
+-            file.useLines { lines ->
+-                for (line in lines) {
+-                    val raw = regex.matchEntire(line)?.groupValues?.get(1) ?: continue
+-                    return@useLines raw.toIntOrNull()?.takeIf { it in 1..65535 }
+-                }
+-                null
+-            }
++            RuntimeConfigValues.topLevelScalar(file.readText(Charsets.UTF_8), key)
+         } catch (_: Exception) {
+             null
+         }
+     }
++
++    private fun configFile(context: Context, subscriptionId: String?): File =
++        if (!subscriptionId.isNullOrBlank()) {
++            ProfileFileOps.getSubscriptionConfigFile(context, subscriptionId)
++        } else {
++            File(getWorkDir(context), "config.yaml")
++        }
++
++    /**
++     * From the active profile's top-level `mixed-port`, used to decide whether mihomo already
++     * listens for HTTP proxy traffic. Invalid/empty values are treated as unset.
++     */
++    fun readSubscriptionMixedPort(context: Context, subscriptionId: String): Int? =
++        readProfileScalar(context, subscriptionId, "mixed-port")
++            ?.trim()
++            ?.toIntOrNull()
++            ?.takeIf { it in 1..65535 }
+ }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt b/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
 index ecdcdb5..44da071 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
@@ -17175,10 +17848,148 @@ index ecdcdb5..44da071 100644
                      TunMode.Vpn -> R.string.settings_tun_mode_vpn
                  }
              )
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
+index 7529653..e551d93 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
+@@ -16,6 +16,7 @@ class MihomoRunner(private val context: Context) {
+ 
+     private var childPid: Int = -1
+     private var isRootMode = false
++    private var rootTunDeviceName: String? = null
+     val pid: Int get() = childPid
+     var secret: String = ""
+     var externalController: String = "127.0.0.1:9090"
+@@ -36,15 +37,16 @@ class MihomoRunner(private val context: Context) {
+      * 尝试重连已持久化的 mihomo 进程。三重校验任一失败均返回 false：
+      *   1. PID 存活（kill -0）
+      *   2. cmdline 含 libmihomo_runner.so（防 PID 复用撞其他 root 进程）
+-     *   3. stored secret 能通过 /configs 鉴权（防 secret 漂移导致 UI 假 Running）
++     *   3. stored secret（可为空）能通过 /configs 校验；无密码配置不发送 Authorization 头
+      * 校验阶段**不**修改任何 field，三条全过之后才落状态。
+      * 订阅一致性由调用方在此之前校验（persisted subscriptionId vs 请求的 subscriptionId）。
+      */
+     fun attachToExisting(
+         pid: Int,
+         secret: String,
+-        externalController: String,
++        controllerApiAddress: String,
+         subscriptionId: String?,
++        tunDeviceName: String? = null,
+     ): Boolean {
+         if (pid <= 0 || !RootHelper.isAliveAsRoot(pid)) {
+             Log.w(TAG, "Attach failed: pid dead (pid=$pid)")
+@@ -55,14 +57,15 @@ class MihomoRunner(private val context: Context) {
+             Log.w(TAG, "Attach failed: wrong cmdline (pid=$pid, cmdline=${cmdline.take(64)})")
+             return false
+         }
+-        if (!isApiAuthorized(secret, externalController)) {
+-            Log.w(TAG, "Attach failed: auth failed (pid=$pid)")
++        if (!isApiAuthorized(secret, controllerApiAddress)) {
++            Log.w(TAG, "Attach failed: API authorization probe failed (pid=$pid)")
+             return false
+         }
+         childPid = pid
+         isRootMode = true
+         this.secret = secret
+-        this.externalController = externalController
++        this.externalController = controllerApiAddress
++        this.rootTunDeviceName = tunDeviceName
+         activeSubscriptionId = subscriptionId
+         Log.i(TAG, "Attached to existing mihomo process: pid=$pid")
+         return true
+@@ -73,7 +76,8 @@ class MihomoRunner(private val context: Context) {
+         useRoot: Boolean = false,
+         overrideJsonPath: String,
+         secret: String,
+-        externalController: String,
++        externalControllerBindAddress: String,
++        tunDeviceName: String? = null,
+         ageSecretKey: String = "",
+         transformPath: String? = null,
+         preferTransformMixedPort: Boolean = false,
+@@ -92,7 +96,8 @@ class MihomoRunner(private val context: Context) {
+         isRootMode = useRoot
+         activeSubscriptionId = subscriptionId
+         this@MihomoRunner.secret = secret
+-        this@MihomoRunner.externalController = externalController
++        this@MihomoRunner.externalController = ConfigGenerator.apiClientAddress(externalControllerBindAddress)
++        this@MihomoRunner.rootTunDeviceName = tunDeviceName
+ 
+         // ROOT 模式走独立 runtime/{uuid}/ 沙箱（mihomo 会以 uid=0 写 provider 缓存，不能污染 imported/）；
+         // 调用方（MishkaRootService）必须在 start 之前调 ProfileFileOps.prepareRootRuntime 准备好内容。
+@@ -120,8 +125,10 @@ class MihomoRunner(private val context: Context) {
+                     add("--transform"); add(transformPath)
+                     if (preferTransformMixedPort) add("--prefer-transform-mixed-port")
+                 }
+-                add("--secret"); add(secret)
+-                add("--ext-ctl"); add(externalController)
++                if (secret.isNotEmpty()) {
++                    add("--secret"); add(secret)
++                }
++                add("--ext-ctl"); add(externalControllerBindAddress)
+                 if (ageSecretKey.isNotEmpty()) {
+                     add("--age-secret-key"); add(ageSecretKey)
+                 }
+@@ -176,7 +183,12 @@ class MihomoRunner(private val context: Context) {
+         if (childPid > 0) {
+             Log.i(TAG, "Stopping mihomo pid=$childPid (root=$isRootMode)")
+             if (isRootMode) {
+-                val tunDevice = PlatformStorage(context).getString(StorageKeys.ROOT_TUN_DEVICE, "Mishka")
++                val storage = PlatformStorage(context)
++                val tunDevice = rootTunDeviceName?.takeIf { it.isNotBlank() }
++                    ?: storage.getString(
++                        StorageKeys.ROOT_TUN_DEVICE_ACTIVE,
++                        storage.getString(StorageKeys.ROOT_TUN_DEVICE, RuntimeOverrideBuilder.DEFAULT_TUN_DEVICE),
++                    )
+                 val killed = RootHelper.killAsRoot(childPid, tunDevice)
+                 if (!killed) {
+                     RootHelper.killMihomoByName(tunDevice)
+@@ -194,6 +206,7 @@ class MihomoRunner(private val context: Context) {
+         }
+         secret = ""
+         isRootMode = false
++        rootTunDeviceName = null
+     }
+ 
+     /**
+@@ -298,15 +311,17 @@ class MihomoRunner(private val context: Context) {
+     }
+ 
+     /**
+-     * 带 Bearer secret 鉴权地探测 /configs（/configs 在 mihomo 各版本均强制鉴权，
+-     * /version 在部分版本免鉴权不可靠）。仅 2xx 视为鉴权通过。
++     * Probe /configs using Bearer auth when a secret exists; send no Authorization header for
++     * intentionally passwordless profiles. Only 2xx is considered an attach success.
+      */
+     private fun isApiAuthorized(secret: String, externalController: String, timeoutMs: Int = 1500): Boolean {
+         return try {
+             val conn = URL("http://$externalController/configs").openConnection() as HttpURLConnection
+             conn.connectTimeout = timeoutMs
+             conn.readTimeout = timeoutMs
+-            conn.setRequestProperty("Authorization", "Bearer $secret")
++            if (secret.isNotEmpty()) {
++                conn.setRequestProperty("Authorization", "Bearer $secret")
++            }
+             val code = conn.responseCode
+             conn.disconnect()
+             code in 200..299
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 6cf8283..9298c02 100644
+index 6cf8283..54a9387 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+@@ -18,10 +18,10 @@ import kotlinx.coroutines.withContext
+ import org.koin.android.ext.android.inject
+ import top.yukonga.mishka.MishkaApplication
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.data.bridge.MishkaCoreBridge
+ import top.yukonga.mishka.data.repository.OverrideJsonStore
+ import top.yukonga.mishka.data.repository.SubscriptionRepositoryImpl
+ import top.yukonga.mishka.data.store.ProfileTransformWriter
+-import top.yukonga.mishka.domain.model.resolveExternalController
+ import top.yukonga.mishka.platform.AppListProvider
+ import top.yukonga.mishka.platform.BootSession
+ import top.yukonga.mishka.platform.PlatformStorage
 @@ -37,20 +37,23 @@ import java.io.File
  import kotlin.time.Clock
  
@@ -17216,7 +18027,58 @@ index 6cf8283..9298c02 100644
  
      /**
       * 启动代理。**幂等**：已有启动协程在跑时忽略本次请求。唯一例外是 fresh START 抢占
-@@ -251,6 +254,9 @@ class MishkaRootService : Service() {
+@@ -193,11 +196,27 @@ class MishkaRootService : Service() {
+             )
+             val tetherModeActive = storage.getString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, "")
+             val submodeActive = storage.getString(StorageKeys.ROOT_SUBMODE_ACTIVE, "")
++            val userOverride = overrideStore.load()
++            val rootTunDeviceFallback = ConfigGenerator.resolveRootTunDevice(
++                this@MishkaRootService,
++                userOverride,
++                subscriptionId,
++                storage,
++            )
++            val attachControllerApiAddress = storage.getString(
++                StorageKeys.ROOT_CONTROLLER_API_ADDRESS_ACTIVE,
++                "",
++            ).trim().takeIf { it.isNotEmpty() }
++                ?: ConfigGenerator.apiClientAddress(ConfigGenerator.resolveExternalController(userOverride, null))
+ 
+             // 1. 尝试重连已有的 mihomo 进程（app 被杀后 root 进程仍存活）
+             val existingPid = storage.getString(StorageKeys.ROOT_MIHOMO_PID, "").toIntOrNull() ?: -1
+             val existingSecret = storage.getString(StorageKeys.ROOT_MIHOMO_SECRET, "")
+             val existingSubscriptionId = storage.getString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "").ifEmpty { null }
++            val existingTunDevice = storage.getString(StorageKeys.ROOT_TUN_DEVICE_ACTIVE, "")
++                .trim()
++                .takeIf { it.isNotEmpty() }
++                ?: ConfigGenerator.resolveRootTunDevice(userOverride, null, storage)
+             // 请求的订阅与运行中的不一致时拒绝重连，走全新启动加载新 config
+             val subscriptionMismatch = existingPid > 0 && subscriptionId != existingSubscriptionId
+             // 用户在 app 被杀期间改过 tether mode：运行中的 mihomo 的 tproxy-port 配置已锁死，
+@@ -226,11 +245,19 @@ class MishkaRootService : Service() {
+             if (submodeMismatch) {
+                 Log.i(TAG, "Submode changed while app was killed (active=$submodeActive, requested=${submode.storageValue}), restarting")
+             }
+-            if (existingPid > 0 && existingSecret.isNotEmpty() && !subscriptionMismatch && !tetherModeMismatch && !submodeMismatch) {
+-                val ec = overrideStore.load().resolveExternalController()
+-                if (runner.attachToExisting(existingPid, existingSecret, ec, subscriptionId)) {
++            if (existingPid > 0 && !subscriptionMismatch && !tetherModeMismatch && !submodeMismatch) {
++                if (runner.attachToExisting(
++                        existingPid,
++                        existingSecret,
++                        attachControllerApiAddress,
++                        subscriptionId,
++                        tunDeviceName = existingTunDevice,
++                    )
++                ) {
+                     val existingStartTime =
+                         storage.getString(StorageKeys.ROOT_START_TIME, "").toLongOrNull() ?: Clock.System.now().toEpochMilliseconds()
++                    storage.putString(StorageKeys.ROOT_TUN_DEVICE_ACTIVE, existingTunDevice)
++                    storage.putString(StorageKeys.ROOT_CONTROLLER_API_ADDRESS_ACTIVE, attachControllerApiAddress)
+                     Log.i(TAG, "Reconnected to existing mihomo: pid=$existingPid submode=${submode.storageValue}")
+                     // App 进程重启后内存态丢失：规则默认仍在（mihomo 进程一直活着，iptables
+                     // 在内核里也一直活着），无需重建。但系统重启 / 与其他代理模块共存被清过
+@@ -251,12 +278,15 @@ class MishkaRootService : Service() {
                                  applyTproxyRules(storage)
                              }
                          }
@@ -17226,7 +18088,103 @@ index 6cf8283..9298c02 100644
                      }
                      ProxyServiceBridge.updateState(
                          ProxyServiceStatus(
-@@ -428,6 +434,8 @@ class MishkaRootService : Service() {
+                             ProxyState.Running,
+                             secret = existingSecret,
+-                            externalController = ec,
++                            externalController = attachControllerApiAddress,
+                             tunMode = tunMode,
+                             startTime = existingStartTime,
+                             mihomoPid = runner.pid
+@@ -301,7 +331,7 @@ class MishkaRootService : Service() {
+             if (runner.isRunning) {
+                 runner.stop()
+             }
+-            val currentTun = storage.getString(StorageKeys.ROOT_TUN_DEVICE, RuntimeOverrideBuilder.DEFAULT_TUN_DEVICE)
++            val currentTun = if (existingPid > 0) existingTunDevice else rootTunDeviceFallback
+             RootHelper.cleanupOrphanedMihomo(tunDevice = currentTun)
+             // 启动前把上一次残留的 iptables 规则（另一个 submode 可能还没清干净）彻底擦一遍
+             teardownAllRootRules()
+@@ -350,10 +380,7 @@ class MishkaRootService : Service() {
+             }
+ 
+             // 4. 装配 override.run.json
+-            // secret / extCtl 走 CLI flag 不进 JSON
+-            val userOverride = overrideStore.load()
+-            val secret = ConfigGenerator.resolveSecret(this@MishkaRootService, userOverride, subscriptionId)
+-            val extCtl = userOverride.resolveExternalController()
++            // secret / external-controller 走 CLI flag 不进 JSON；配置文件解析值已在启动前优先解析
+             // 仅 TUN submode 且用户选 PROXY 时才探测 xt_TPROXY 为 RootTetherHijacker 开 tproxy-port 入站；
+             // 探测结果同步写入 StorageKeys.ROOT_TPROXY_KERNEL_CAPABLE，UI 据此决定是否显示降级告警
+             val userWantsProxy = submode == Submode.Tun &&
+@@ -385,6 +412,39 @@ class MishkaRootService : Service() {
+                 stopSelf()
+                 return@launch
+             }
++            val profileWorkDir = subscriptionId?.let {
++                ProfileFileOps.getRuntimeDir(this@MishkaRootService, it)
++            } ?: ConfigGenerator.getWorkDir(this@MishkaRootService)
++            val profileParameters = runCatching {
++                MishkaCoreBridge.readRuntimeConfigValues(
++                    profileWorkDir.absolutePath,
++                    transformPlan.transformPath,
++                    transformPlan.ageSecretKey,
++                )
++            }.onFailure { Log.w(TAG, "Unable to inspect active profile runtime values; using plain YAML fallback", it) }
++                .getOrNull()
++            val profileSecret = profileParameters?.secret
++                ?: if (profileParameters == null) subscriptionId?.let {
++                    ConfigGenerator.readSubscriptionSecret(this@MishkaRootService, it)
++                } else null
++            val profileController = profileParameters?.externalController
++                ?: if (profileParameters == null) subscriptionId?.let {
++                    ConfigGenerator.readSubscriptionExternalController(this@MishkaRootService, it)
++                } else null
++            val secret = ConfigGenerator.resolveSecret(userOverride, profileSecret)
++            val controllerBindAddress = ConfigGenerator.resolveExternalController(userOverride, profileController)
++            val controllerApiAddress = ConfigGenerator.apiClientAddress(controllerBindAddress)
++            val rootTunDevice = if (profileParameters != null) {
++                ConfigGenerator.resolveRootTunDevice(userOverride, profileParameters.tunDevice, storage)
++            } else {
++                ConfigGenerator.resolveRootTunDevice(
++                    this@MishkaRootService,
++                    userOverride,
++                    subscriptionId,
++                    storage,
++                )
++            }
++
+             val overrideFile = RuntimeOverrideBuilder.buildAndWriteForRun(
+                 context = this@MishkaRootService,
+                 userOverride = userOverride,
+@@ -392,6 +452,8 @@ class MishkaRootService : Service() {
+                 tunMode = submode.tunMode,
+                 subscriptionUpdateViaProxy = viaProxy,
+                 subscriptionMixedPort = transformPlan.mixedPort,
++                subscriptionId = subscriptionId,
++                effectiveRootTunDevice = rootTunDevice,
+                 tproxyForTether = tproxyForTether,
+             )
+ 
+@@ -402,7 +464,8 @@ class MishkaRootService : Service() {
+                 useRoot = true,
+                 overrideJsonPath = overrideFile.absolutePath,
+                 secret = secret,
+-                externalController = extCtl,
++                externalControllerBindAddress = controllerBindAddress,
++                tunDeviceName = rootTunDevice,
+                 ageSecretKey = transformPlan.ageSecretKey,
+                 transformPath = transformPlan.transformPath,
+                 preferTransformMixedPort = transformPlan.transformPath != null && viaProxy && userOverride.mixedPort == null,
+@@ -419,7 +482,7 @@ class MishkaRootService : Service() {
+ 
+             // 6. 持久化 PID、secret、启动时间、订阅 ID（用于 app 重启后重连 + 订阅一致性校验）
+             val startTime = Clock.System.now().toEpochMilliseconds()
+-            persistState(storage, runner.secret, startTime, subscriptionId)
++            persistState(storage, runner.secret, startTime, subscriptionId, rootTunDevice, controllerApiAddress)
+             // 保存本次启动时生效的 tether mode / submode 快照；attach 路径据此判断用户是否改过设置
+             storage.putString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, tetherModeRequested)
+             storage.putString(StorageKeys.ROOT_SUBMODE_ACTIVE, submode.storageValue)
+@@ -428,6 +491,8 @@ class MishkaRootService : Service() {
              when (submode) {
                  Submode.Tun -> applyTetherRules(storage, tproxyForTether)
                  Submode.Tproxy -> applyTproxyRules(storage)
@@ -17235,8 +18193,159 @@ index 6cf8283..9298c02 100644
              }
  
              // 7. 更新状态和通知
+@@ -435,7 +500,7 @@ class MishkaRootService : Service() {
+                 ProxyServiceStatus(
+                     ProxyState.Running,
+                     secret = runner.secret,
+-                    externalController = extCtl,
++                    externalController = controllerApiAddress,
+                     tunMode = tunMode,
+                     startTime = startTime,
+                     mihomoPid = runner.pid
+@@ -542,11 +607,20 @@ class MishkaRootService : Service() {
+         }
+     }
+ 
+-    private fun persistState(storage: PlatformStorage, secret: String, startTime: Long, subscriptionId: String?) {
++    private fun persistState(
++        storage: PlatformStorage,
++        secret: String,
++        startTime: Long,
++        subscriptionId: String?,
++        tunDevice: String,
++        controllerApiAddress: String,
++    ) {
+         storage.putString(StorageKeys.ROOT_MIHOMO_PID, runner.pid.toString())
+         storage.putString(StorageKeys.ROOT_MIHOMO_SECRET, secret)
+         storage.putString(StorageKeys.ROOT_START_TIME, startTime.toString())
+         storage.putString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, subscriptionId ?: "")
++        storage.putString(StorageKeys.ROOT_TUN_DEVICE_ACTIVE, tunDevice)
++        storage.putString(StorageKeys.ROOT_CONTROLLER_API_ADDRESS_ACTIVE, controllerApiAddress)
+         // reopen 时据此识别设备是否重启过
+         BootSession.mark(this, storage)
+     }
+@@ -556,6 +630,8 @@ class MishkaRootService : Service() {
+         storage.putString(StorageKeys.ROOT_MIHOMO_SECRET, "")
+         storage.putString(StorageKeys.ROOT_START_TIME, "")
+         storage.putString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "")
++        storage.putString(StorageKeys.ROOT_TUN_DEVICE_ACTIVE, "")
++        storage.putString(StorageKeys.ROOT_CONTROLLER_API_ADDRESS_ACTIVE, "")
+         BootSession.clear(storage)
+         storage.putString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, "")
+         storage.putString(StorageKeys.ROOT_SUBMODE_ACTIVE, "")
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+index fa04d69..5cac6c8 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+@@ -19,10 +19,10 @@ import kotlinx.coroutines.withContext
+ import org.koin.android.ext.android.inject
+ import top.yukonga.mishka.MishkaApplication
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.data.bridge.MishkaCoreBridge
+ import top.yukonga.mishka.data.repository.OverrideJsonStore
+ import top.yukonga.mishka.data.repository.SubscriptionRepositoryImpl
+ import top.yukonga.mishka.data.store.ProfileTransformWriter
+-import top.yukonga.mishka.domain.model.resolveExternalController
+ import top.yukonga.mishka.platform.PlatformStorage
+ import top.yukonga.mishka.platform.ProxyServiceBridge
+ import top.yukonga.mishka.platform.ProxyServiceController
+@@ -140,21 +140,26 @@ class MishkaTunService : VpnService() {
+             // 条件 hadRootPid || hasRoot：后者覆盖"ROOT 崩溃后 storage 被清但进程仍活"的冷启动；
+             // 无 root 设备两者均为 false，不触发 su。
+             val storage = PlatformStorage(this@MishkaTunService)
++            val userOverride = overrideStore.load()
++            val residualTun = storage.getString(StorageKeys.ROOT_TUN_DEVICE_ACTIVE, "")
++                .trim()
++                .takeIf { it.isNotEmpty() }
++                ?: ConfigGenerator.resolveRootTunDevice(userOverride, null, storage)
+             val hadRootPid = storage.getString(StorageKeys.ROOT_MIHOMO_PID, "").isNotEmpty()
+             val hasRoot = storage.getString(StorageKeys.HAS_ROOT, "false") == "true"
+             if (hadRootPid || hasRoot) {
+                 // 同时清理 TUN 接口防止下次启动 sing-tun EEXIST（silent failure 源头）
+-                val residualTun = storage.getString(StorageKeys.ROOT_TUN_DEVICE, RuntimeOverrideBuilder.DEFAULT_TUN_DEVICE)
+                 RootHelper.cleanupOrphanedMihomo(tunDevice = residualTun)
+                 // 清掉上一轮 ROOT 运行时沙箱（里面可能有 root:root 的 provider 缓存遗孤）
+                 ProfileFileOps.cleanupAllRootRuntime(this@MishkaTunService)
+                 storage.putString(StorageKeys.ROOT_MIHOMO_PID, "")
+                 storage.putString(StorageKeys.ROOT_MIHOMO_SECRET, "")
+                 storage.putString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "")
++                storage.putString(StorageKeys.ROOT_TUN_DEVICE_ACTIVE, "")
++                storage.putString(StorageKeys.ROOT_CONTROLLER_API_ADDRESS_ACTIVE, "")
+             }
+ 
+-            // 加载用户 override（后续 VpnService.Builder 和 mihomo 启动共用同一份）
+-            val userOverride = overrideStore.load()
++            // 复用清理孤儿进程前加载的同一份用户 override，供 VPN Builder 与 mihomo 启动使用。
+ 
+             // 1. 建立 VPN 接口，获取 fd
+             val fd = try {
+@@ -307,8 +312,6 @@ class MishkaTunService : VpnService() {
+ 
+             // 2. 装配 override.run.json（用户设置 + 运行时字段 tun.file-descriptor 等）
+             // secret / extCtl 走 CLI flag 不进 JSON
+-            val secret = ConfigGenerator.resolveSecret(this@MishkaTunService, userOverride, subscriptionId)
+-            val extCtl = userOverride.resolveExternalController()
+             val viaProxy = storage.getString(StorageKeys.SUBSCRIPTION_UPDATE_VIA_PROXY, "true") == "true"
+             val transformPlan = try {
+                 prepareRuntimeTransform(this@MishkaTunService, subscriptionId, subscriptionRepository, transformWriter)
+@@ -325,6 +328,29 @@ class MishkaTunService : VpnService() {
+                 stopSelf()
+                 return@launch
+             }
++            val profileWorkDir = subscriptionId?.let {
++                ProfileFileOps.getSubscriptionDir(this@MishkaTunService, it)
++            } ?: ConfigGenerator.getWorkDir(this@MishkaTunService)
++            val profileParameters = runCatching {
++                MishkaCoreBridge.readRuntimeConfigValues(
++                    profileWorkDir.absolutePath,
++                    transformPlan.transformPath,
++                    transformPlan.ageSecretKey,
++                )
++            }.onFailure { Log.w(TAG, "Unable to inspect active profile runtime values; using plain YAML fallback", it) }
++                .getOrNull()
++            val profileSecret = profileParameters?.secret
++                ?: if (profileParameters == null) subscriptionId?.let {
++                    ConfigGenerator.readSubscriptionSecret(this@MishkaTunService, it)
++                } else null
++            val profileController = profileParameters?.externalController
++                ?: if (profileParameters == null) subscriptionId?.let {
++                    ConfigGenerator.readSubscriptionExternalController(this@MishkaTunService, it)
++                } else null
++            val secret = ConfigGenerator.resolveSecret(userOverride, profileSecret)
++            val controllerBindAddress = ConfigGenerator.resolveExternalController(userOverride, profileController)
++            val controllerApiAddress = ConfigGenerator.apiClientAddress(controllerBindAddress)
++
+             val overrideFile = RuntimeOverrideBuilder.buildAndWriteForRun(
+                 context = this@MishkaTunService,
+                 userOverride = userOverride,
+@@ -332,6 +358,7 @@ class MishkaTunService : VpnService() {
+                 tunMode = TunMode.Vpn,
+                 subscriptionUpdateViaProxy = viaProxy,
+                 subscriptionMixedPort = transformPlan.mixedPort,
++                subscriptionId = subscriptionId,
+             )
+ 
+             // 3. 启动 mihomo 核心
+@@ -341,7 +368,7 @@ class MishkaTunService : VpnService() {
+                 useRoot = false,
+                 overrideJsonPath = overrideFile.absolutePath,
+                 secret = secret,
+-                externalController = extCtl,
++                externalControllerBindAddress = controllerBindAddress,
+                 ageSecretKey = transformPlan.ageSecretKey,
+                 transformPath = transformPlan.transformPath,
+                 preferTransformMixedPort = transformPlan.transformPath != null && viaProxy && userOverride.mixedPort == null,
+@@ -362,7 +389,7 @@ class MishkaTunService : VpnService() {
+                 ProxyServiceStatus(
+                     ProxyState.Running,
+                     secret = runner.secret,
+-                    externalController = extCtl,
++                    externalController = controllerApiAddress,
+                     tunMode = TunMode.Vpn,
+                     startTime = Clock.System.now().toEpochMilliseconds(),
+                     mihomoPid = runner.pid
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
-index b57d687..e23f0f7 100644
+index b57d687..a46fe43 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 @@ -54,6 +54,7 @@ object RuntimeOverrideBuilder {
@@ -17247,7 +18356,16 @@ index b57d687..e23f0f7 100644
       *
       * mixed-port 决策（决定 mihomo 是否监听 HTTP 代理端口，[SubscriptionProxyResolver] 据此走代理）：
       * 1. 用户 override 显式设置 → 用用户值（覆盖订阅 yaml）
-@@ -91,6 +92,8 @@ object RuntimeOverrideBuilder {
+@@ -69,6 +70,8 @@ object RuntimeOverrideBuilder {
+         tunMode: TunMode,
+         subscriptionUpdateViaProxy: Boolean,
+         subscriptionMixedPort: Int?,
++        subscriptionId: String? = null,
++        effectiveRootTunDevice: String? = null,
+         tproxyForTether: Boolean = false,
+     ): File {
+         val storage = PlatformStorage(context)
+@@ -91,6 +94,8 @@ object RuntimeOverrideBuilder {
                  TunMode.RootTun -> if (tproxyForTether) RootTetherHijacker.TPROXY_PORT else userOverride.tproxyPort
                  // Vpn：透传用户 override
                  TunMode.Vpn -> userOverride.tproxyPort
@@ -17256,9 +18374,30 @@ index b57d687..e23f0f7 100644
              },
              // RootTproxy 下**不**注入 routing-mark：Android Netd 用 fwmark 低 16 位编码 netId，
              // mihomo 若带 SO_MARK 会被解释为不存在的 netId，命中 legacy_system 表（无默认路由）
-@@ -133,8 +136,9 @@ object RuntimeOverrideBuilder {
+@@ -104,7 +109,15 @@ object RuntimeOverrideBuilder {
+             tcpConcurrent = userOverride.tcpConcurrent ?: true,
+             findProcessMode = userOverride.findProcessMode ?: "off",
+             dns = buildDnsOverride(tunMode, userOverride.dns),
+-            tun = buildTunOverride(context, tunMode, tunFd, userOverride.tun),
++            tun = buildTunOverride(
++                context,
++                tunMode,
++                tunFd,
++                userOverride.tun,
++                subscriptionId,
++                userOverride,
++                effectiveRootTunDevice,
++            ),
+             profile = ProfileOverride(storeSelected = false, storeFakeIp = true),
+         )
+         // 原子写：mihomo 紧接着就以 --override-json 读它，半个 JSON 会让启动失败且难以定位
+@@ -132,9 +145,13 @@ object RuntimeOverrideBuilder {
+         tunMode: TunMode,
          tunFd: Int,
          userTun: TunOverride?,
++        subscriptionId: String?,
++        userOverride: ConfigurationOverride,
++        effectiveRootTunDevice: String?,
      ): TunOverride {
 -        // RootTproxy：TUN 完全关闭，sing-tun 不初始化
 -        if (tunMode == TunMode.RootTproxy) {
@@ -17268,8 +18407,23 @@ index b57d687..e23f0f7 100644
              return TunOverride(enable = false)
          }
  
+@@ -193,8 +210,12 @@ object RuntimeOverrideBuilder {
+             }
+         }
+ 
+-        val device = userTun?.device
+-            ?: if (isRootTun) storage.getString(StorageKeys.ROOT_TUN_DEVICE, DEFAULT_TUN_DEVICE) else null
++        val device = if (isRootTun) {
++            effectiveRootTunDevice?.takeIf { it.isNotBlank() }
++                ?: ConfigGenerator.resolveRootTunDevice(context, userOverride, subscriptionId, storage)
++        } else {
++            userTun?.device
++        }
+ 
+         // sing-tun userspace TUN 性能：mtu=9000 + gso + gso-max-size=65535 让大包聚合，
+         // 减少每包 read syscall；仅 ROOT TUN 注入 GSO（VPN fd 由 VpnService 创建无 vnet header）。
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 2341aa9..334bcdc 100644
+index 2341aa9..73d0f70 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 @@ -335,6 +335,9 @@ fun AppNavigation(
@@ -17282,7 +18436,16 @@ index 2341aa9..334bcdc 100644
                      )
                  }
              }
-@@ -509,6 +512,7 @@ fun AppNavigation(
+@@ -422,6 +425,8 @@ fun AppNavigation(
+                     RootSettingsScreen(
+                         storage = it,
+                         isProxyRunning = homeState?.isRunning == true || homeState?.isStarting == true,
++                        userTunDeviceOverride = homeViewModel?.rootTunDeviceOverride,
++                        subscriptionViewModel = subscriptionViewModel,
+                         onBack = { navigator.pop() },
+                     )
+                 }
+@@ -509,6 +514,7 @@ fun AppNavigation(
                      uuid = route.uuid,
                      relativePath = route.relativePath,
                      subscriptionViewModel = subscriptionViewModel,
@@ -17586,10 +18749,78 @@ index b1b2479..7da18ac 100644
      }
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
-index 4084ef6..2a0b774 100644
+index 4084ef6..094ad0c 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
-@@ -102,9 +102,11 @@ fun RootSettingsScreen(
+@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.lazy.LazyColumn
+ import androidx.compose.foundation.text.input.rememberTextFieldState
+ import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
+@@ -20,14 +21,18 @@ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.graphics.graphicsLayer
+ import androidx.compose.ui.input.nestedscroll.nestedScroll
++import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.platform.LocalLayoutDirection
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.unit.LayoutDirection
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.withContext
+ import top.yukonga.mishka.R
+ import top.yukonga.mishka.platform.PlatformStorage
+ import top.yukonga.mishka.platform.StorageKeys
++import top.yukonga.mishka.service.ConfigGenerator
+ import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
+ import top.yukonga.mishka.ui.component.CardItem
+ import top.yukonga.mishka.ui.component.RestartRequiredHint
+@@ -37,6 +42,7 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
+ import top.yukonga.mishka.ui.component.groupedCardItems
+ import top.yukonga.mishka.ui.component.tetherInterfaceSummary
+ import top.yukonga.mishka.ui.util.horizontalCutoutPadding
++import top.yukonga.mishka.viewmodel.SubscriptionViewModel
+ import top.yukonga.miuix.kmp.basic.ButtonDefaults
+ import top.yukonga.miuix.kmp.basic.Card
+ import top.yukonga.miuix.kmp.basic.CardDefaults
+@@ -71,13 +77,32 @@ import top.yukonga.miuix.kmp.window.WindowDialog
+ fun RootSettingsScreen(
+     storage: PlatformStorage,
+     isProxyRunning: Boolean,
++    userTunDeviceOverride: String? = null,
++    subscriptionViewModel: SubscriptionViewModel? = null,
+     onBack: () -> Unit = {},
+ ) {
+     val scrollBehavior = MiuixScrollBehavior()
++    val context = LocalContext.current
++    val activeProfileId = storage.getString(StorageKeys.ACTIVE_PROFILE_UUID, "").takeIf { it.isNotEmpty() }
++    var profileTunDevice by remember(activeProfileId) { mutableStateOf<String?>(null) }
++    var profileTunDeviceLoaded by remember(activeProfileId) { mutableStateOf(activeProfileId == null) }
++    LaunchedEffect(activeProfileId, subscriptionViewModel) {
++        profileTunDeviceLoaded = activeProfileId == null
++        profileTunDevice = withContext(Dispatchers.IO) {
++            val runtimeValue = activeProfileId?.let { id ->
++                subscriptionViewModel?.readProfileTunDevice(id)
++            }
++            runtimeValue ?: ConfigGenerator.readSubscriptionTunDevice(context, activeProfileId)
++        }
++        profileTunDeviceLoaded = true
++    }
+ 
+     var tunDevice by remember {
+         mutableStateOf(storage.getString(StorageKeys.ROOT_TUN_DEVICE, DEFAULT_TUN_DEVICE))
+     }
++    val appTunDeviceOverride = userTunDeviceOverride?.trim()?.takeIf { it.isNotEmpty() }
++    val effectiveTunDevice = profileTunDevice ?: appTunDeviceOverride ?: tunDevice
++    val canEditTunDevice = !isProxyRunning && profileTunDeviceLoaded && profileTunDevice == null && appTunDeviceOverride == null
+     var showTunDeviceDialog by remember { mutableStateOf(false) }
+     val tunDeviceTextState = rememberTextFieldState()
+ 
+@@ -102,9 +127,11 @@ fun RootSettingsScreen(
      }
      var showTetherDialog by remember { mutableStateOf(false) }
  
@@ -17603,7 +18834,27 @@ index 4084ef6..2a0b774 100644
  
      // xt_TPROXY 内核能力探测结果，仅在 TPROXY submode 或 PROXY 热点模式下显示告警
      val tproxyCapable = storage.getString(StorageKeys.ROOT_TPROXY_KERNEL_CAPABLE, "")
-@@ -217,10 +219,17 @@ fun RootSettingsScreen(
+@@ -159,12 +186,16 @@ fun RootSettingsScreen(
+                     CardItem("tunDevice") {
+                         ArrowPreference(
+                             title = stringResource(R.string.settings_tun_device),
+-                            summary = tunDevice,
++                            summary = profileTunDevice?.let {
++                                stringResource(R.string.root_tun_device_profile_summary, it)
++                            } ?: appTunDeviceOverride?.let {
++                                stringResource(R.string.root_tun_device_override_summary, it)
++                            } ?: effectiveTunDevice,
+                             onClick = {
+-                                tunDeviceTextState.edit { replace(0, length, tunDevice) }
++                                tunDeviceTextState.edit { replace(0, length, effectiveTunDevice) }
+                                 showTunDeviceDialog = true
+                             },
+-                            enabled = !isProxyRunning,
++                            enabled = canEditTunDevice,
+                         )
+                     },
+                     CardItem("jumboMtu") {
+@@ -217,10 +248,17 @@ fun RootSettingsScreen(
                  outerBottomPadding = 12.dp,
                  items = listOf(
                      CardItem("mode") {
@@ -17725,12 +18976,17 @@ index cef7fbf..eeb582a 100644
                  TextButton(
                      text = stringResource(R.string.common_save),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
-index b112741..11fe15b 100644
+index b112741..b0c5c95 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
-@@ -695,8 +695,12 @@ class HomeViewModel(
+@@ -694,9 +694,17 @@ class HomeViewModel(
+         serviceController.restartWhenReady(getActiveSubscriptionId())
      }
  
++    /** Current app-level TUN device override, used by ROOT settings to show the effective source. */
++    val rootTunDeviceOverride: String?
++        get() = overrideStore.load().tun?.device?.trim()?.takeIf { it.isNotEmpty() }
++
      fun switchTunStack(stack: String) {
 -        // TPROXY 模式 tun.enable=false，切 stack 无意义（且不应触发 restart）
 -        if (_uiState.value.tunMode == TunMode.RootTproxy) return
@@ -17888,8 +19144,255 @@ index f684c37..2fa9806 100644
      private suspend fun saveSelection(group: String, proxy: String) {
          val uuid = getActiveUuid() ?: return
          val dao = selectionDao ?: return
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
+index ef9b641..1dbee3a 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
+@@ -8,12 +8,16 @@ import androidx.lifecycle.viewModelScope
+ import kotlinx.collections.immutable.ImmutableList
+ import kotlinx.collections.immutable.persistentListOf
+ import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.Job
+ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.StateFlow
+ import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.data.bridge.MishkaCoreBridge
++import top.yukonga.mishka.data.store.ProfileTransformWriter
+ import top.yukonga.mishka.data.repository.ConfigValidationException
+ import top.yukonga.mishka.data.repository.ImportError
+ import top.yukonga.mishka.data.repository.ImportProgress
+@@ -23,6 +27,7 @@ import top.yukonga.mishka.domain.model.Subscription
+ import top.yukonga.mishka.domain.repository.SubscriptionRepository
+ import top.yukonga.mishka.platform.ProfileFileManager
+ import top.yukonga.mishka.platform.ProxyServiceController
++import top.yukonga.mishka.service.ProfileFileOps
+ import top.yukonga.mishka.util.describe
+ 
+ /**
+@@ -59,6 +64,7 @@ class SubscriptionViewModel(
+     val fileManager: ProfileFileManager,
+     private val processor: ProfileProcessor,
+     private val serviceController: ProxyServiceController,
++    private val transformWriter: ProfileTransformWriter,
+     private val context: Context,
+ ) : ViewModel() {
+ 
+@@ -91,6 +97,23 @@ class SubscriptionViewModel(
+         _uiState.value = _uiState.value.copy(error = "")
+     }
+ 
++    /** Read the active profile's effective tun.device, including age decryption and transforms. */
++    suspend fun readProfileTunDevice(subscriptionId: String): String? = withContext(Dispatchers.IO) {
++        val subscription = repository.subscriptions.value.firstOrNull { it.id == subscriptionId }
++            ?: repository.getActive()?.takeIf { it.id == subscriptionId }
++            ?: return@withContext null
++        runCatching {
++            val transformPath = transformWriter.write(subscription, ProfileTransformWriter.RUNTIME_PATH)
++            MishkaCoreBridge.readRuntimeConfigValues(
++                ProfileFileOps.getSubscriptionDir(context, subscriptionId).absolutePath,
++                transformPath,
++                subscription.ageSecretKey,
++            ).tunDevice
++                ?.trim()
++                ?.takeIf { it.isNotEmpty() }
++        }.getOrNull()
++    }
++
+     /**
+      * 取消当前正在进行的订阅 Pipeline（导入 / 更新 / 编辑 / 复制）。
+      *
+diff --git a/app/src/main/native/mishka_core/runtime_test.go b/app/src/main/native/mishka_core/runtime_test.go
+index df86317..d2f01d4 100644
+--- a/app/src/main/native/mishka_core/runtime_test.go
++++ b/app/src/main/native/mishka_core/runtime_test.go
+@@ -54,3 +54,97 @@ func TestShouldDefaultTunStackWithEncryptedSubscription(t *testing.T) {
+ 		t.Fatal("encrypted subscription's explicit stack was ignored")
+ 	}
+ }
++
++func TestExtractRuntimeConfigValues(t *testing.T) {
++	got, err := extractRuntimeConfigValues([]byte(`external-controller: 0.0.0.0:9090
++secret: "s#ecret" # trailing comment
++tun:
++  enable: true
++  device: mihomo0
++`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got.ExternalController == nil || *got.ExternalController != "0.0.0.0:9090" {
++		t.Fatalf("external controller = %v, want 0.0.0.0:9090", got.ExternalController)
++	}
++	if got.Secret == nil || *got.Secret != "s#ecret" {
++		t.Fatalf("secret = %v, want s#ecret", got.Secret)
++	}
++	if got.TunDevice == nil || *got.TunDevice != "mihomo0" {
++		t.Fatalf("tun device = %v, want mihomo0", got.TunDevice)
++	}
++}
++
++func TestExtractRuntimeConfigValuesPreservesExplicitEmptySecret(t *testing.T) {
++	got, err := extractRuntimeConfigValues([]byte("secret: ''\n"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got.Secret == nil || *got.Secret != "" {
++		t.Fatalf("secret = %v, want an explicitly empty value", got.Secret)
++	}
++	if got.ExternalController != nil {
++		t.Fatalf("missing external controller = %v, want nil", got.ExternalController)
++	}
++}
++
++func TestReadRuntimeConfigValuesAfterYAMLTransform(t *testing.T) {
++	workDir := t.TempDir()
++	config := []byte("external-controller: 10.0.0.1:9090\nsecret: profile-secret\ntun:\n  device: original-tun\n")
++	if err := os.WriteFile(filepath.Join(workDir, "config.yaml"), config, 0600); err != nil {
++		t.Fatal(err)
++	}
++	overridePath := filepath.Join(workDir, "runtime-override.yaml")
++	override := []byte("secret: transformed-secret\ntun:\n  device: transformed-tun\n")
++	if err := os.WriteFile(overridePath, override, 0600); err != nil {
++		t.Fatal(err)
++	}
++	transformPath := filepath.Join(workDir, "transform.json")
++	transform := []byte(`{"overrides":[{"name":"runtime-test","format":"yaml","path":"` + overridePath + `"}]}`)
++	if err := os.WriteFile(transformPath, transform, 0600); err != nil {
++		t.Fatal(err)
++	}
++	transformed, err := readTransformedConfig(workDir, transformPath, "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	got, err := extractRuntimeConfigValues(transformed)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got.ExternalController == nil || *got.ExternalController != "10.0.0.1:9090" ||
++		got.Secret == nil || *got.Secret != "transformed-secret" ||
++		got.TunDevice == nil || *got.TunDevice != "transformed-tun" {
++		t.Fatalf("unexpected transformed profile values: %+v", got)
++	}
++}
++
++func TestReadRuntimeConfigValuesFromEncryptedProfile(t *testing.T) {
++	secretKey, publicKey, err := age.GenX25519KeyPair()
++	if err != nil {
++		t.Fatal(err)
++	}
++	plain := []byte("external-controller: 192.168.1.20:9090\nsecret: profile-secret\ntun:\n  device: tun-from-profile\n")
++	ciphertext, err := age.EncryptBytes(plain, publicKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	workDir := t.TempDir()
++	if err := os.WriteFile(filepath.Join(workDir, "config.yaml"), ciphertext, 0600); err != nil {
++		t.Fatal(err)
++	}
++	decrypted, err := readTransformedConfig(workDir, "", secretKey)
++	if err != nil {
++		t.Fatal(err)
++	}
++	got, err := extractRuntimeConfigValues(decrypted)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got.ExternalController == nil || *got.ExternalController != "192.168.1.20:9090" ||
++		got.Secret == nil || *got.Secret != "profile-secret" ||
++		got.TunDevice == nil || *got.TunDevice != "tun-from-profile" {
++		t.Fatalf("unexpected decrypted profile values: %+v", got)
++	}
++}
+diff --git a/app/src/main/native/mishka_core/transform_bridge.go b/app/src/main/native/mishka_core/transform_bridge.go
+index faef989..61eff89 100644
+--- a/app/src/main/native/mishka_core/transform_bridge.go
++++ b/app/src/main/native/mishka_core/transform_bridge.go
+@@ -14,6 +14,7 @@ import (
+ 
+ 	"github.com/metacubex/mihomo/component/age"
+ 	"github.com/metacubex/mihomo/config"
++	"go.yaml.in/yaml/v3"
+ 
+ 	"mishka_core/overrides"
+ )
+@@ -59,6 +60,71 @@ type transformCheck struct {
+ 	Valid bool `json:"valid"`
+ }
+ 
++type runtimeConfigValues struct {
++	ExternalController *string `json:"externalController"`
++	Secret             *string `json:"secret"`
++	TunDevice          *string `json:"tunDevice"`
++}
++
++func extractRuntimeConfigValues(configBytes []byte) (runtimeConfigValues, error) {
++	var root map[string]interface{}
++	if err := yaml.Unmarshal(configBytes, &root); err != nil {
++		return runtimeConfigValues{}, err
++	}
++	values := runtimeConfigValues{}
++	if raw, ok := root["external-controller"]; ok {
++		value := yamlScalarString(raw)
++		values.ExternalController = &value
++	}
++	if raw, ok := root["secret"]; ok {
++		value := yamlScalarString(raw)
++		values.Secret = &value
++	}
++	if rawTun, ok := root["tun"].(map[string]interface{}); ok {
++		if rawDevice, exists := rawTun["device"]; exists {
++			value := yamlScalarString(rawDevice)
++			values.TunDevice = &value
++		}
++	}
++	return values, nil
++}
++
++func yamlScalarString(value interface{}) string {
++	if value == nil {
++		return ""
++	}
++	if text, ok := value.(string); ok {
++		return text
++	}
++	return fmt.Sprint(value)
++}
++
++// 解密并应用与 mihomo 启动时相同的订阅变换后，读取服务启动前需要的三个配置值。
++//
++//export mishkaReadRuntimeConfigValues
++func mishkaReadRuntimeConfigValues(cWorkDir, cTransform, cKey *C.char) *C.char {
++	return guardString(func() string {
++		workDir := C.GoString(cWorkDir)
++		transformPath := C.GoString(cTransform)
++		key := C.GoString(cKey)
++		age.SetGlobalSecretKeys(key)
++		defer age.SetGlobalSecretKeys()
++		configBytes, err := readTransformedConfig(workDir, transformPath, key)
++		if err != nil {
++			return "error: " + err.Error()
++		}
++		values, err := extractRuntimeConfigValues(configBytes)
++		if err != nil {
++			return "error: inspect config: " + err.Error()
++		}
++		data, err := json.Marshal(values)
++		if err != nil {
++			return "error: marshal config values: " + err.Error()
++		}
++		return string(data)
++	})
++}
++
+ // 与运行时同一套变换与解析流程：保存改动前先在应用内跑一遍，失败时不去重启代理。
+ //
+ //export mishkaValidateTransform
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..a9f4ec7 100644
+index 78fcd87..49f0aa5 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
 @@ -105,6 +105,9 @@
@@ -17926,15 +19429,33 @@ index 78fcd87..a9f4ec7 100644
      <string name="settings_vpn_settings">Настройки VPN</string>
      <string name="settings_vpn_summary">Обход локальной сети, перехват DNS, IPv6</string>
      <string name="settings_tun_device">Имя устройства TUN</string>
-@@ -406,6 +416,7 @@
+@@ -406,8 +416,11 @@
      <string name="root_tether_scan_result_title">Обнаруженные интерфейсы</string>
      <string name="root_tether_tproxy_unavailable_warning">В ядре отсутствует модуль xt_TPROXY. Используется резервный режим (меньшая скорость, но соединения работают). Для максимальной производительности TPROXY используйте ядро с поддержкой xt_TPROXY.</string>
      <string name="root_tproxy_tether_note">В режиме TPROXY весь трафик точки доступа направляется через ядро автоматически; переключение «В обход / Через прокси» не требуется.</string>
 +    <string name="root_ebpf_tether_note">В режиме EBPF трафик точки доступа перенаправляется eBPF-слушателями mihomo; переключение «В обход / Через прокси» не требуется.</string>
      <string name="root_tun_jumbo_mtu_title">Jumbo MTU и GSO</string>
      <string name="root_tun_jumbo_mtu_summary">Агрегация больших пакетов (mtu=9000, gso=on) уменьшает системные вызовы на пакет для максимальной пропускной способности. Отключите, если восходящий канал отбрасывает фрагментированные пакеты.</string>
++    <string name="root_tun_device_profile_summary">Используется tun.device из активного профиля: %1$s</string>
++    <string name="root_tun_device_override_summary">Используется переопределение Mishka tun.device: %1$s</string>
      <string name="root_attach_force_reapply_title">Принудительно применять правила при переподключении</string>
-@@ -615,4 +626,6 @@
+     <string name="root_attach_force_reapply_summary">Диагностика: повторно применять правила iptables при каждом подключении приложения к работающему mihomo. Включайте только если правила раздачи пропадают после переподключения.</string>
+ 
+@@ -506,10 +519,10 @@
+     <!-- External Control -->
+     <string name="external_control_title">Внешний контроллер</string>
+     <string name="external_control_ip">Адрес API</string>
+-    <string name="external_control_controller_hint">Адрес привязки для HTTP API (например, 127.0.0.1:9090). Значение 0.0.0.0 будет автоматически заменено на 127.0.0.1.</string>
++    <string name="external_control_controller_hint">В первую очередь используется external-controller активного профиля; это поле служит запасным значением. Адрес привязки из профиля, включая 0.0.0.0, сохраняется без принудительной замены на loopback.</string>
+     <string name="external_control_secret">Секретный ключ API</string>
+-    <string name="external_control_secret_hint">Bearer-токен для авторизации в HTTP API. Если поле пустое, используется secret из конфигурации подписки, либо генерируется случайный.</string>
+-    <string name="settings_external_control_summary">Переопределение конфигурации внешнего контроллера</string>
++    <string name="external_control_secret_hint">Секрет активного профиля имеет приоритет; это поле используется как запасное. Если секрет не задан ни в одном источнике, ключ не генерируется и API остаётся без пароля. При привязке к 0.0.0.0 устройства, доступные по этой сети, смогут управлять API.</string>
++    <string name="settings_external_control_summary">Запасное переопределение; приоритет у активного профиля</string>
+ 
+     <!-- File Manager -->
+     <string name="file_manager_title">Файловый менеджер</string>
+@@ -615,4 +628,6 @@
          <item quantity="other">Выбрано %1$d переопределения</item>
      </plurals>
      <string name="subscription_overrides">Переопределения</string>
@@ -17942,7 +19463,7 @@ index 78fcd87..a9f4ec7 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..42442a1 100644
+index cba1bbb..670e52c 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -17979,15 +19500,33 @@ index cba1bbb..42442a1 100644
      <string name="settings_vpn_settings">VPN 设置</string>
      <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
      <string name="settings_tun_device">TUN 设备名称</string>
-@@ -404,6 +414,7 @@
+@@ -404,8 +414,11 @@
      <string name="root_tether_scan_result_title">检测到以下接口</string>
      <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有热点流量由内核规则自动代理，无需切换「绕过 / 走代理」。</string>
 +    <string name="root_ebpf_tether_note">EBPF 模式下热点流量由 mihomo 的 eBPF 监听器重定向，无需切换「绕过 / 走代理」。</string>
      <string name="root_tun_jumbo_mtu_title">大 MTU 与 GSO</string>
      <string name="root_tun_jumbo_mtu_summary">大包聚合（mtu=9000、开启 gso）减少每包 syscall，提升吞吐。上游链路丢弃分片时可关闭。</string>
++    <string name="root_tun_device_profile_summary">使用当前配置文件 tun.device：%1$s</string>
++    <string name="root_tun_device_override_summary">使用 Mishka 的 tun.device 覆写：%1$s</string>
      <string name="root_attach_force_reapply_title">重连时强制重建规则</string>
-@@ -610,4 +621,6 @@
+     <string name="root_attach_force_reapply_summary">诊断开关：每次应用重新连接到正在运行的 mihomo 时强制重建 iptables 规则。仅当重连后热点规则丢失时开启。</string>
+ 
+@@ -504,10 +517,10 @@
+     <!-- External Control -->
+     <string name="external_control_title">外部控制器</string>
+     <string name="external_control_ip">API 地址</string>
+-    <string name="external_control_controller_hint">HTTP API 的监听地址（例如 127.0.0.1:9090）。0.0.0.0 将被自动覆写为 127.0.0.1。</string>
++    <string name="external_control_controller_hint">优先使用当前配置文件的 external-controller；此处仅作回退。配置文件中的监听地址（包括 0.0.0.0）按原值保留，不强制改为回环地址。</string>
+     <string name="external_control_secret">API 密钥</string>
+-    <string name="external_control_secret_hint">HTTP API 的 Bearer 鉴权令牌。留空时优先使用订阅配置中的 secret；若订阅未设置则随机生成。</string>
+-    <string name="settings_external_control_summary">覆写外部控制器配置</string>
++    <string name="external_control_secret_hint">当前配置文件的 secret 优先；此处仅在配置未设置时生效。两处均未设置时不生成密钥，API 无密码；若监听 0.0.0.0 等通配地址，可访问该地址的局域网设备也能调用控制 API。</string>
++    <string name="settings_external_control_summary">回退覆写；当前配置文件的值优先</string>
+ 
+     <!-- File Manager -->
+     <string name="file_manager_title">文件管理</string>
+@@ -610,4 +623,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -17995,7 +19534,7 @@ index cba1bbb..42442a1 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..8e8fe30 100644
+index f6895e0..e84b2bc 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
 @@ -103,6 +103,9 @@
@@ -18032,15 +19571,33 @@ index f6895e0..8e8fe30 100644
      <string name="settings_vpn_settings">VPN 設定</string>
      <string name="settings_vpn_summary">繞過私人網路、DNS 攔截、IPv6</string>
      <string name="settings_tun_device">TUN 裝置名稱</string>
-@@ -404,6 +414,7 @@
+@@ -404,8 +414,11 @@
      <string name="root_tether_scan_result_title">偵測到以下介面</string>
      <string name="root_tether_tproxy_unavailable_warning">目前核心缺少 xt_TPROXY 模組，已降級為相容路徑（吞吐量略低，連線仍可用）。如需原生 TPROXY 效能，請更換支援該模組的核心。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有熱點流量由核心規則自動代理，無需切換「繞過／經過代理」。</string>
 +    <string name="root_ebpf_tether_note">EBPF 模式下熱點流量由 mihomo 的 eBPF 監聽器重定向，無需切換「繞過／經過代理」。</string>
      <string name="root_tun_jumbo_mtu_title">大 MTU 與 GSO</string>
      <string name="root_tun_jumbo_mtu_summary">大封包聚合（mtu=9000、開啟 gso）可減少每個封包的 syscall，提升吞吐量。上游線路丟棄分段封包時可關閉。</string>
++    <string name="root_tun_device_profile_summary">使用目前設定檔 tun.device：%1$s</string>
++    <string name="root_tun_device_override_summary">使用 Mishka 的 tun.device 覆寫：%1$s</string>
      <string name="root_attach_force_reapply_title">重新連線時強制重建規則</string>
-@@ -610,4 +621,6 @@
+     <string name="root_attach_force_reapply_summary">診斷開關：每次應用程式重新連線到執行中的 mihomo 時強制重建 iptables 規則。僅在重連後熱點規則遺失時開啟。</string>
+ 
+@@ -504,10 +517,10 @@
+     <!-- External Control -->
+     <string name="external_control_title">外部控制器</string>
+     <string name="external_control_ip">API 位址</string>
+-    <string name="external_control_controller_hint">HTTP API 的監聽位址（例如 127.0.0.1:9090）。0.0.0.0 將自動覆寫為 127.0.0.1。</string>
++    <string name="external_control_controller_hint">優先使用目前設定檔的 external-controller；此處僅作為回退。設定檔中的監聽位址（包括 0.0.0.0）會照原值保留，不強制改為迴環位址。</string>
+     <string name="external_control_secret">API 金鑰</string>
+-    <string name="external_control_secret_hint">HTTP API 的 Bearer 驗證權杖。留空時優先使用訂閱設定檔中的 secret；若訂閱未設定則隨機產生。</string>
+-    <string name="settings_external_control_summary">覆寫外部控制器設定</string>
++    <string name="external_control_secret_hint">目前設定檔的 secret 優先；此處僅在設定檔未設定時生效。兩處都未設定時不會產生密鑰，API 沒有密碼；若監聽 0.0.0.0 等萬用位址，可連線到該位址的區域網路裝置也能呼叫控制 API。</string>
++    <string name="settings_external_control_summary">回退覆寫；目前設定檔的值優先</string>
+ 
+     <!-- File Manager -->
+     <string name="file_manager_title">檔案管理</string>
+@@ -610,4 +623,6 @@
          <item quantity="other">已選擇 %1$d 項覆寫</item>
      </plurals>
      <string name="subscription_overrides">覆寫</string>
@@ -18048,7 +19605,7 @@ index f6895e0..8e8fe30 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..6234644 100644
+index d1acc59..924d6ad 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
@@ -18085,15 +19642,33 @@ index d1acc59..6234644 100644
      <string name="settings_vpn_settings">VPN Settings</string>
      <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
      <string name="settings_tun_device">TUN Device Name</string>
-@@ -406,6 +416,7 @@
+@@ -406,8 +416,11 @@
      <string name="root_tether_scan_result_title">Detected interfaces</string>
      <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
      <string name="root_tproxy_tether_note">TPROXY mode proxies all hotspot traffic via kernel rules; no Bypass/Through toggle needed.</string>
 +    <string name="root_ebpf_tether_note">EBPF mode redirects hotspot traffic through mihomo eBPF listeners; no Bypass/Through toggle needed.</string>
      <string name="root_tun_jumbo_mtu_title">Jumbo MTU &amp; GSO</string>
      <string name="root_tun_jumbo_mtu_summary">Large-packet aggregation (mtu=9000, gso=on) reduces per-packet syscalls for throughput. Disable if the upstream link drops fragmented traffic.</string>
++    <string name="root_tun_device_profile_summary">Using active profile tun.device: %1$s</string>
++    <string name="root_tun_device_override_summary">Using Mishka tun.device override: %1$s</string>
      <string name="root_attach_force_reapply_title">Force re-apply on reconnect</string>
-@@ -613,4 +624,6 @@
+     <string name="root_attach_force_reapply_summary">Diagnostic: re-apply iptables rules every time the app reattaches to a running mihomo. Leave off unless tether rules disappear after reconnect.</string>
+ 
+@@ -506,10 +519,10 @@
+     <!-- External Control -->
+     <string name="external_control_title">External Controller</string>
+     <string name="external_control_ip">API Address</string>
+-    <string name="external_control_controller_hint">Bind address for the HTTP API (e.g. 127.0.0.1:9090). 0.0.0.0 will be automatically overwritten with 127.0.0.1.</string>
++    <string name="external_control_controller_hint">The active profile's external-controller value takes precedence; this field is a fallback. Profile bind addresses, including 0.0.0.0, are kept as configured and are not forced to loopback.</string>
+     <string name="external_control_secret">API Secret</string>
+-    <string name="external_control_secret_hint">Bearer token for the HTTP API. When empty, falls back to the secret defined in the subscription config, or a random one if the subscription does not set it.</string>
+-    <string name="settings_external_control_summary">Overwrite external controller configuration</string>
++    <string name="external_control_secret_hint">The active profile's secret takes precedence; this value is a fallback. If neither source sets a secret, no key is generated and the API has no password. A wildcard bind such as 0.0.0.0 exposes the control API to devices that can reach it.</string>
++    <string name="settings_external_control_summary">Fallback override; active profile values take priority</string>
+ 
+     <!-- File Manager -->
+     <string name="file_manager_title">File Manager</string>
+@@ -613,4 +626,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>
