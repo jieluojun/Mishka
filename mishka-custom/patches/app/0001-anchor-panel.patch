@@ -1,3 +1,16 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 93a1f15..0ebf6af 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -217,7 +217,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
+ 
+ val mihomoSubmoduleDir = rootProject.layout.projectDirectory.dir("mihomo")
+ val mishkaCoreSourceDir = rootProject.layout.projectDirectory.dir("app/src/main/native/mishka_core")
+-val mihomoBuildTags = listOf("cmfa", "mishka", "with_gvisor")
++val mihomoBuildTags = listOf("cmfa", "mishka", "with_gvisor", "with_ebpf")
+ val mihomoVersion = providers.gradleProperty("mihomo.version").orElse("dev").get()
+ val mihomoVersionPath = "github.com/metacubex/mihomo/constant.Version"
+ val ndkDirectoryProvider = androidComponents.sdkComponents.ndkDirectory
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 index 5c60eb7..7c76159 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -17876,7 +17889,7 @@ index f684c37..2fa9806 100644
          val uuid = getActiveUuid() ?: return
          val dao = selectionDao ?: return
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..f1df50a 100644
+index 78fcd87..a9f4ec7 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
 @@ -105,6 +105,9 @@
@@ -17905,7 +17918,7 @@ index 78fcd87..f1df50a 100644
      <string name="settings_tun_vpn_summary">через VpnService</string>
      <string name="settings_tun_root_tun_summary">собственное TUN-устройство</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
-+    <string name="settings_tun_root_ebpf_summary">eBPF auto-redir</string>
++    <string name="settings_tun_root_ebpf_summary">eBPF авто-редирект (нужен ebpf listener)</string>
      <string name="settings_tun_mode_vpn">VPN</string>
      <string name="settings_tun_mode_root_tun">ROOT TUN</string>
      <string name="settings_tun_mode_root_tproxy">ROOT TPROXY</string>
@@ -17929,7 +17942,7 @@ index 78fcd87..f1df50a 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..db50a82 100644
+index cba1bbb..42442a1 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -17958,7 +17971,7 @@ index cba1bbb..db50a82 100644
      <string name="settings_tun_vpn_summary">通过 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 设备</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
-+    <string name="settings_tun_root_ebpf_summary">eBPF 自动重定向</string>
++    <string name="settings_tun_root_ebpf_summary">eBPF 自动重定向（需配置 ebpf 入站）</string>
      <string name="settings_tun_mode_vpn">VPN</string>
      <string name="settings_tun_mode_root_tun">ROOT TUN</string>
      <string name="settings_tun_mode_root_tproxy">ROOT TPROXY</string>
@@ -17982,7 +17995,7 @@ index cba1bbb..db50a82 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..892c37d 100644
+index f6895e0..8e8fe30 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
 @@ -103,6 +103,9 @@
@@ -18011,7 +18024,7 @@ index f6895e0..892c37d 100644
      <string name="settings_tun_vpn_summary">透過 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 裝置</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
-+    <string name="settings_tun_root_ebpf_summary">eBPF 自動重定向</string>
++    <string name="settings_tun_root_ebpf_summary">eBPF 自動重定向（需設定 ebpf 入站）</string>
      <string name="settings_tun_mode_vpn">VPN</string>
      <string name="settings_tun_mode_root_tun">ROOT TUN</string>
      <string name="settings_tun_mode_root_tproxy">ROOT TPROXY</string>
@@ -18035,7 +18048,7 @@ index f6895e0..892c37d 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..03b33be 100644
+index d1acc59..6234644 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
@@ -18064,7 +18077,7 @@ index d1acc59..03b33be 100644
      <string name="settings_tun_vpn_summary">via VpnService</string>
      <string name="settings_tun_root_tun_summary">owns TUN device</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
-+    <string name="settings_tun_root_ebpf_summary">eBPF auto-redir</string>
++    <string name="settings_tun_root_ebpf_summary">eBPF auto-redir (requires an ebpf listener)</string>
      <string name="settings_tun_mode_vpn">VPN</string>
      <string name="settings_tun_mode_root_tun">ROOT TUN</string>
      <string name="settings_tun_mode_root_tproxy">ROOT TPROXY</string>

@@ -1,7 +1,8 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=b66e844a84e62ae7610a9db0ae61c165777d2c74
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=0c3780fd02dac5b3eac215bcd9b051dd3b111b7e3e006900ef1736a17e0643d3
+patch_sha256=7231fef9cf549d17faf863270848a99955467b1995392a8761e9eaea7e4f386e
+blob_after=0ebf6af7fb0238b52e41188f5bb8897f86dc07a4 app/build.gradle.kts
 blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 blob_new=48b879f20a3cb57945e783d12c8ec262f42a401b app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
@@ -41,7 +42,7 @@ blob_after=f4fe9ce13cce83f719a3116402a46055599717e3 app/src/main/kotlin/top/yuko
 blob_after=eeb582a1cd60330ca660e31a25ee0ad2ef9ab6a9 app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
 blob_after=11fe15b40af46c4e2ee410c8e01f0fdab33e69e6 app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 blob_after=2fa980604aa52c173c838707481ee0598ef0dde5 app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
-blob_after=f1df50a69f76f2724a7c8f0bb93b81f36adc7240 app/src/main/res/values-ru/strings.xml
-blob_after=db50a82f848e2d27e01c3a493bbe13641f1b6ccb app/src/main/res/values-zh-rCN/strings.xml
-blob_after=892c37d62173881f20b04c80ff0157e60fb0e136 app/src/main/res/values-zh-rTW/strings.xml
-blob_after=03b33bed26b753489b2464183eeda0c6e5b59a00 app/src/main/res/values/strings.xml
+blob_after=a9f4ec742c34d026d08802cbbca9be90cf7761cc app/src/main/res/values-ru/strings.xml
+blob_after=42442a141728eef45b055ace45bdace887e0b278 app/src/main/res/values-zh-rCN/strings.xml
+blob_after=8e8fe30fd94b48a05cc516a19efbb73c69db9df3 app/src/main/res/values-zh-rTW/strings.xml
+blob_after=6234644347323674bc320c9aca209d02b22e113c app/src/main/res/values/strings.xml
