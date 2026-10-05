@@ -109,6 +109,39 @@ assert_contains 'mishkaReadRuntimeConfigValues' \
 assert_contains 'mishkaReadRuntimeConfigValues' \
   app/src/main/cpp/mishka_jni.c \
   'JNI bridge calls the native runtime config reader'
+assert_contains 'ProxyProviders     json.RawMessage' \
+  app/src/main/native/mishka_core/transform_bridge.go \
+  'effective proxy-provider definitions are exposed from native config parsing'
+assert_contains 'readProxyProviderFileSource' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt \
+  'file provider type and path are read from the effective profile config'
+assert_contains 'ProfileFileOps.getRuntimeDir(context, subscription.id)' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt \
+  'ROOT file provider operations resolve the runtime/{uuid} destination'
+assert_contains 'RootHelper.copyFileAsRoot(target.profileFile.absolutePath, target.runtimeFile.absolutePath)' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt \
+  'uploaded or edited file providers are synchronized into ROOT runtime'
+assert_contains 'isFileProxyProvider' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt \
+  'file proxy providers use edit/upload actions instead of refresh'
+assert_contains 'provider.type.lowercase()' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt \
+  'provider source is shown as lowercase http/file instead of generic Proxy'
+assert_contains 'NON_SELECTABLE_PROXY_TYPES' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'proxy candidates filter Mihomo built-in and unusable proxy types'
+assert_contains '"proxies" -> host.candidates("selectable-proxies", exclude = setOf(name))' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'proxy-group member choices use only selectable proxies'
+assert_contains 'TetherInterfaceEditDialog(' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'eBPF downstream interface uses the current-interface detector'
+assert_contains 'colors = ButtonDefaults.textButtonColorsPrimary()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt \
+  'visual configuration dialogs use native override primary confirm styling'
+assert_contains 'if (field.type == FormFieldType.BOOL && !tri) setSwitchValue(!switchShown)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'tapping anywhere on a boolean switch row toggles it'
 assert_contains '0.0.0.0' \
   app/src/main/res/values-zh-rCN/strings.xml \
   'Chinese external-control hint warns about wildcard unauthenticated exposure'

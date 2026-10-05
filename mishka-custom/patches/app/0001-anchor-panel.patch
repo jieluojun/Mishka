@@ -4412,10 +4412,10 @@ index 0000000000000000000000000000000000000000..42d14950a3ac0620f3b904f47737de01
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811239d5b9c
+index 0000000000000000000000000000000000000000..cbdc54072028f7b6d4c0d074d1b8fe46e107839a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1415 @@
+@@ -0,0 +1,1483 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4447,6 +4447,8 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.unit.sp
 +import top.yukonga.mishka.platform.showToast
++import top.yukonga.mishka.ui.component.TetherInterfaceEditDialog
++import top.yukonga.mishka.ui.component.tetherInterfaceSummary
 +import top.yukonga.mishka.ui.util.sheetContentSafePadding
 +import top.yukonga.miuix.kmp.basic.BasicComponent
 +import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
@@ -4595,6 +4597,11 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +
 +// ---------------------------------------------------------------- 写回
 +
++private val BUILTIN_POLICY_NAMES: Set<String> =
++    (BUILTIN_POLICIES.map { it.value } + "GLOBAL").map { it.uppercase() }.toSet()
++private val NON_SELECTABLE_PROXY_TYPES: Set<String> =
++    setOf("direct", "reject", "reject-drop", "pass", "pass-rule", "compatible", "dns", "rematch")
++
 +/**
 + * 一次表单会话里的文档 + 写回。所有写操作都从这里过：统一做可写性检查、「没改动」提示、写后定位。
 + * 每个方法返回是否真的改了文本（页面据此决定要不要跳转 / 返回）。
@@ -4741,38 +4748,54 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +        return map.entries.filter { !it.isMerge }.map { it.key }
 +    }
 +
++    private fun proxyEntries(): List<Pair<String, String?>> {
++        val seq = doc.get(listOf("proxies")) ?: return emptyList()
++        if (seq.kind != YamlNode.Kind.SEQ) return emptyList()
++        return seq.items.mapNotNull { item ->
++            val name = FormValues.scalarText(doc, doc.findEntry(item, "name")?.node)?.trim()?.takeIf { it.isNotEmpty() }
++                ?: return@mapNotNull null
++            val type = FormValues.scalarText(doc, doc.findEntry(item, "type")?.node)?.trim()?.lowercase()
++            name to type
++        }
++    }
++
++    private fun isSelectableProxy(name: String, type: String?): Boolean =
++        name.uppercase() !in BUILTIN_POLICY_NAMES && type !in NON_SELECTABLE_PROXY_TYPES
++
 +    /**
-+     * 选择池（参考实现 pages-config.js policyOptions / pages-flow.js outboundOptions）：
-+     *  - `policies`：内置策略（带说明）+ 代理组 + 节点 + GLOBAL —— 代理组成员、规则目标、隧道出口用；
-+     *  - `outbound`：DIRECT + 代理组 + 节点 —— 下载出口 / 链式出口用；
-+     *  - `providers` / `rule-providers` / `sub-rules`：对应映射的键。
-+     * `exclude` 去掉自己（代理组不能把自己当成员）；`current` 里不在池中的值也列出来并标「当前值」，保证已有配置可见、可保留。
++     * 动态候选只提供当前配置里真实存在的项目；路由规则的 policies 保留 Mihomo 内置策略，
++     * 代理选择 / 排除的 outbound、proxies 则过滤不可用协议和 DIRECT、REJECT 等内置策略。
 +     */
-+    fun candidates(kind: String, exclude: Set<String> = emptySet(), current: Collection<String> = emptyList()): List<FormOption> {
++    fun candidates(kind: String, exclude: Set<String> = emptySet()): List<FormOption> {
 +        val seen = HashSet<String>()
 +        val out = ArrayList<FormOption>()
 +        fun add(v: String, label: String) {
 +            if (v.isEmpty() || v in exclude || !seen.add(v)) return
 +            out.add(FormOption(v, label))
 +        }
++        fun addSelectableProxies() {
++            for (n in seqNames(listOf("proxy-groups"))) {
++                if (isSelectableProxy(n, null)) add(n, "代理组")
++            }
++            for ((name, type) in proxyEntries()) {
++                if (isSelectableProxy(name, type)) add(name, "节点")
++            }
++        }
 +        when (kind) {
 +            "policies" -> {
 +                for (o in BUILTIN_POLICIES) add(o.value, o.label)
 +                for (n in seqNames(listOf("proxy-groups"))) add(n, "代理组")
-+                for (n in seqNames(listOf("proxies"))) add(n, "节点")
++                for ((name, _) in proxyEntries()) add(name, "节点")
 +                add("GLOBAL", "内置的全局代理组")
 +            }
-+            "outbound" -> {
-+                add("DIRECT", "DIRECT（直连）")
-+                for (n in seqNames(listOf("proxy-groups"))) add(n, "代理组")
-+                for (n in seqNames(listOf("proxies"))) add(n, "节点")
++            "outbound", "selectable-proxies" -> addSelectableProxies()
++            "proxies" -> for ((name, type) in proxyEntries()) {
++                if (isSelectableProxy(name, type)) add(name, "节点")
 +            }
-+            "proxies" -> for (n in seqNames(listOf("proxies"))) add(n, "节点")
 +            "providers" -> for (n in mapKeys(listOf("proxy-providers"))) add(n, "代理集合")
 +            "rule-providers" -> for (n in mapKeys(listOf("rule-providers"))) add(n, "规则集合")
 +            "sub-rules" -> for (n in mapKeys(listOf("sub-rules"))) add(n, "子规则")
 +        }
-+        for (c in current) if (c.isNotEmpty() && c !in seen) { seen.add(c); out.add(FormOption(c, "当前值")) }
 +        return out
 +    }
 +}
@@ -5084,7 +5107,7 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +            header = header,
 +            customRow = { row -> EbpfCustomRow(row, base, host) },
 +            dynamicOptions = { field, _ ->
-+                if (field.type == FormFieldType.RULESETPICK) host.candidates("rule-providers", current = FormValues.readListField(doc, field, base + YamlDoc.splitPath(field.path))) else null
++                if (field.type == FormFieldType.RULESETPICK) host.candidates("rule-providers") else null
 +            },
 +            intercept = nameGuard,
 +        )
@@ -5099,7 +5122,7 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +            host = host,
 +            header = header,
 +            dynamicOptions = { field, _ ->
-+                if (field.optionsDynamic == "outbound") host.candidates("outbound", current = listOfNotNull(FormValues.readRaw(doc, base + YamlDoc.splitPath(field.path)))) else null
++                if (field.optionsDynamic == "outbound") host.candidates("outbound") else null
 +            },
 +            intercept = nameGuard,
 +            customRow = { row ->
@@ -5161,6 +5184,7 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +        "fakeip-icmp" -> listOf("fakeip-icmp")
 +        "local.enable" -> listOf("local", "enable")
 +        "shared.enable" -> listOf("shared", "enable")
++        "shared.interface" -> listOf("shared", "interface")
 +        else -> emptyList()
 +    }
 +    var dialog by remember(row.kind, base) { mutableStateOf(false) }
@@ -5210,6 +5234,20 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +            }
 +            if (role == "shared" && roleOn && !ebpfHasSharedInterface(doc, base)) {
 +                DialogNote("启用 shared / hybrid 前必须把 shared.interface 配成真实下联网卡；新建监听器不会猜网卡。")
++            }
++        }
++        "shared.interface" -> {
++            val interfaceField = remember {
++                FormField(path = "shared.interface", label = "下游接口", type = FormFieldType.LIST)
++            }
++            val current = FormValues.readListField(doc, interfaceField, path).joinToString(",")
++            Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
++                BasicComponent(
++                    title = "下游接口 shared.interface",
++                    summary = if (current.isBlank()) "未设置（shared / hybrid 必填）" else tetherInterfaceSummary(current),
++                    endActions = { TextButton(text = "检测 / 编辑", onClick = { dialog = true }) },
++                    onClick = { dialog = true },
++                )
 +            }
 +        }
 +        "network" -> {
@@ -5296,6 +5334,22 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +            onPick = { value ->
 +                dialog = false
 +                if (value.isEmpty()) host.clear(path, "FakeIP ICMP") else host.set(path, value, "FakeIP ICMP")
++            },
++        )
++    }
++
++    if (dialog && row.kind == "shared.interface") {
++        val interfaceField = FormField(path = "shared.interface", label = "下游接口", type = FormFieldType.LIST)
++        val current = FormValues.readListField(doc, interfaceField, path).joinToString(",")
++        TetherInterfaceEditDialog(
++            show = true,
++            title = "下游接口 shared.interface",
++            initialValue = current,
++            onDismiss = { dialog = false },
++            onConfirm = { csv ->
++                val values = csv.split(',').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
++                if (values.isEmpty()) host.clear(path, "下游接口")
++                else host.set(path, values, "下游接口")
 +            },
 +        )
 +    }
@@ -5492,6 +5546,11 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +    var dialog by remember(field.path, base) { mutableStateOf(false) }
 +    val p3 = isP3(field)
 +    val tri = isTriBool(field)
++    val switchShown = when {
++        field.type != FormFieldType.BOOL -> false
++        field.asSwitch && !hasVal -> field.default == true
++        else -> hasVal && FormValues.readBool(doc, path) == true
++    }
 +
 +    /** 统一出口：先问详情页的拦截钩子，没人管再按「null = 删键，其余 = 写值」落到 FormHost。 */
 +    fun write(value: Any?): Boolean {
@@ -5526,6 +5585,21 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +        }
 +    }
 +
++    fun setSwitchValue(value: Boolean) {
++        if (!editable) {
++            showToast("${field.label} 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
++            return
++        }
++        if (field.asSwitch) {
++            val defaultValue = field.default == true
++            if (value == defaultValue && !hasVal) showToast("${field.label} 本来就是默认值")
++            else write(value)
++        } else {
++            if (!value && field.optional && !hasVal) showToast("${field.label} 本来就没有设置")
++            else write(value)
++        }
++    }
++
 +    Card(
 +        modifier = Modifier.fillMaxWidth(),
 +        colors = CardDefaults.defaultColors(),
@@ -5541,27 +5615,16 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +            endActions = {
 +                when {
 +                    field.type == FormFieldType.BOOL && field.asSwitch -> {
-+                        // 内核默认「开」这类布尔：显示态跟随默认（未写 = 默认）；拨回默认且配置里本没这个键 → 不写
-+                        val dflt = field.default == true
-+                        val shown = if (hasVal) FormValues.readBool(doc, path) == true else dflt
 +                        Switch(
-+                            checked = shown,
-+                            onCheckedChange = { v ->
-+                                if (v == dflt && !hasVal) showToast("${field.label} 本来就是默认值")
-+                                else write(v)
-+                            },
++                            checked = switchShown,
++                            onCheckedChange = ::setSwitchValue,
 +                            enabled = editable,
 +                        )
 +                    }
 +                    field.type == FormFieldType.BOOL && !tri -> {
-+                        // 两态（不写 = 关）：关掉时若配置里本来就没有这个键，保持不存在
-+                        val shown = hasVal && FormValues.readBool(doc, path) == true
 +                        Switch(
-+                            checked = shown,
-+                            onCheckedChange = { v ->
-+                                if (!v && field.optional && !hasVal) showToast("${field.label} 本来就没有设置")
-+                                else write(v)
-+                            },
++                            checked = switchShown,
++                            onCheckedChange = ::setSwitchValue,
 +                            enabled = editable,
 +                        )
 +                    }
@@ -5569,7 +5632,10 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +                    else -> TextButton(text = if (tri) "选择" else "编辑", onClick = { openEditor() })
 +                }
 +            },
-+            onClick = { if (field.type != FormFieldType.BOOL || tri) openEditor() },
++            onClick = {
++                if (field.type == FormFieldType.BOOL && !tri) setSwitchValue(!switchShown)
++                else openEditor()
++            },
 +        )
 +    }
 +
@@ -5591,8 +5657,10 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +                field = field,
 +                current = selectCurrent(field, doc, path),
 +                candidates = dynamicOptions?.invoke(field, path)
-+                    ?: dynamicKind(field)?.let { host.candidates(it, current = listOfNotNull(FormValues.readRaw(doc, path))) }
++                    ?: dynamicKind(field)?.let { host.candidates(it) }
 +                    ?: emptyList(),
++                hideUnavailableCurrent = dynamicKind(field) in setOf("outbound", "selectable-proxies", "proxies") ||
++                    field.optionsDynamic == "outbound",
 +                onDismiss = close,
 +                onPick = { value ->
 +                    close()
@@ -5604,7 +5672,7 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +                val current = FormValues.readListField(doc, field, path)
 +                val kind = dynamicKind(field)
 +                val candidates = dynamicOptions?.invoke(field, path)
-+                    ?: kind?.let { host.candidates(it, current = current) }
++                    ?: kind?.let { host.candidates(it) }
 +                    ?: field.options
 +                // 参考实现：带候选清单（datalist / 动态池）的列表只能挑选，不能手填
 +                val pickOnly = field.type == FormFieldType.PICKLIST || kind != null || field.options.isNotEmpty() || dynamicOptions?.invoke(field, path) != null
@@ -5649,7 +5717,7 @@ index 0000000000000000000000000000000000000000..5573e3f3cc48ef398b737b20fd164811
 +            field.type == FormFieldType.RULESETPICK -> RuleSetPickDialog(
 +                field = field,
 +                current = FormValues.readListField(doc, field, path),
-+                candidates = host.candidates("rule-providers", current = FormValues.readListField(doc, field, path)),
++                candidates = host.candidates("rule-providers"),
 +                onDismiss = close,
 +                onConfirm = { selected ->
 +                    close()
@@ -6452,10 +6520,10 @@ index 0000000000000000000000000000000000000000..a2854194c3ab363716f0636e2897cd31
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..d7fa6fbc462849771faf411616db934811dc7bec
+index 0000000000000000000000000000000000000000..233e317f552ee25fca63c57f9eb32905e9f78dd5
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2305 @@
+@@ -0,0 +1,2306 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -7128,7 +7196,7 @@ index 0000000000000000000000000000000000000000..d7fa6fbc462849771faf411616db9348
 +        host = host,
 +        intercept = intercept,
 +        dynamicOptions = { field, _ ->
-+            if (field.path == "dialer-proxy") host.candidates("outbound", exclude = setOf(name), current = listOfNotNull(FormValues.readRaw(doc, base + "dialer-proxy")))
++            if (field.path == "dialer-proxy") host.candidates("outbound", exclude = setOf(name))
 +            else null
 +        },
 +        header = {
@@ -7945,14 +8013,15 @@ index 0000000000000000000000000000000000000000..d7fa6fbc462849771faf411616db9348
 +        footer = { AnchorSectionCard(host, "proxy-groups", base) },
 +        dynamicOptions = { field, path ->
 +            when (field.path) {
-+                "proxies" -> host.candidates("policies", exclude = setOf(name), current = FormValues.readListField(doc, field, path))
-+                "use" -> host.candidates("providers", current = FormValues.readListField(doc, field, path))
++                "proxies" -> host.candidates("selectable-proxies", exclude = setOf(name))
++                "use" -> host.candidates("providers")
 +                "default-selected" -> {
-+                    val cur = FormValues.readRaw(doc, path)
 +                    val out = ArrayList<FormOption>()
++                    val selectable = host.candidates("selectable-proxies").mapTo(HashSet()) { it.value }
 +                    val seen = HashSet<String>()
-+                    for (m in FormValues.readList(doc, base + "proxies")) if (seen.add(m)) out.add(FormOption(m, "本组成员"))
-+                    if (cur != null && seen.add(cur)) out.add(FormOption(cur, "当前值"))
++                    for (m in FormValues.readList(doc, base + "proxies")) {
++                        if (m in selectable && seen.add(m)) out.add(FormOption(m, "本组成员"))
++                    }
 +                    out
 +                }
 +                else -> null
@@ -8125,9 +8194,9 @@ index 0000000000000000000000000000000000000000..d7fa6fbc462849771faf411616db9348
 +    val isMatch = type == "MATCH"
 +    val noValue = isMatch || spec?.noPayload == true
 +    val subRule = spec?.targetKind == "sub-rules"
-+    val policyCandidates = if (subRule) host.candidates("sub-rules", current = listOf(policy))
-+    else host.candidates("policies", current = listOf(policy))
-+    val valueCandidates = if (spec?.targetKind == "rule-providers") host.candidates("rule-providers", current = listOf(value)) else emptyList()
++    val policyCandidates = if (subRule) host.candidates("sub-rules")
++    else host.candidates("policies")
++    val valueCandidates = if (spec?.targetKind == "rule-providers") host.candidates("rule-providers") else emptyList()
 +    val preview = RuleText.format(type, value.trim(), policy.trim(), noResolve && !isMatch, keepFlags)
 +
 +    fun syncVisFromText(): Boolean {
@@ -8555,7 +8624,7 @@ index 0000000000000000000000000000000000000000..d7fa6fbc462849771faf411616db9348
 +    var target by remember { mutableStateOf("") }
 +    var proxy by remember { mutableStateOf("") }
 +    var pickProxy by remember { mutableStateOf(false) }
-+    val proxies = host.candidates("policies")
++    val proxies = host.candidates("selectable-proxies")
 +    WindowDialog(
 +        show = true,
 +        title = "新增隧道",
@@ -8889,10 +8958,10 @@ index 0000000000000000000000000000000000000000..033bcf3aa56cf2370827f72b3f642f7a
 +    (name.trim().ifEmpty { fallback }).replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..5aa67fe075825932733112ec247d66171bc2620a
+index 0000000000000000000000000000000000000000..9360301f6d64ead671555659ffbd8fb5ace991a8
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
-@@ -0,0 +1,664 @@
+@@ -0,0 +1,679 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -8918,6 +8987,9 @@ index 0000000000000000000000000000000000000000..5aa67fe075825932733112ec247d6617
 +import androidx.compose.ui.text.style.TextOverflow
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.unit.sp
++import androidx.compose.ui.res.stringResource
++import top.yukonga.mishka.R
++import top.yukonga.miuix.kmp.basic.ButtonDefaults
 +import top.yukonga.miuix.kmp.basic.BasicComponent
 +import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 +import top.yukonga.miuix.kmp.basic.Checkbox
@@ -8935,18 +9007,29 @@ index 0000000000000000000000000000000000000000..5aa67fe075825932733112ec247d6617
 + *  - 带候选清单的列表（datalist）只能挑选、不能手填（手滑写错的名字内核会静默忽略）。
 + */
 +
-+/** 弹层底部的「取消 / 确定」行。 */
++/** 弹层底部的「取消 / 确定」行，统一为覆写设置中的等宽双按钮与强调色确定按钮。 */
 +@Composable
 +internal fun DialogButtons(onDismiss: () -> Unit, confirmLabel: String? = "确定", onConfirm: (() -> Unit)? = null) {
-+    Row(
-+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-+        horizontalArrangement = Arrangement.End,
-+    ) {
-+        TextButton(text = "取消", onClick = onDismiss)
-+        if (confirmLabel != null && onConfirm != null) {
-+            Spacer(Modifier.width(8.dp))
-+            TextButton(text = confirmLabel, onClick = onConfirm)
++    val cancelLabel = stringResource(R.string.common_cancel)
++    if (confirmLabel != null && onConfirm != null) {
++        Row(
++            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
++            horizontalArrangement = Arrangement.spacedBy(12.dp),
++        ) {
++            TextButton(text = cancelLabel, modifier = Modifier.weight(1f), onClick = onDismiss)
++            TextButton(
++                text = confirmLabel,
++                modifier = Modifier.weight(1f),
++                colors = ButtonDefaults.textButtonColorsPrimary(),
++                onClick = onConfirm,
++            )
 +        }
++    } else {
++        TextButton(
++            text = cancelLabel,
++            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
++            onClick = onDismiss,
++        )
 +    }
 +}
 +
@@ -8961,7 +9044,7 @@ index 0000000000000000000000000000000000000000..5aa67fe075825932733112ec247d6617
 +}
 +
 +/**
-+ * 下拉选择。静态选项来自字段表；`candidates` 是运行时算出来的（节点名 / 代理组名 / 集合名 / 当前值）。
++ * 下拉选择。静态选项来自字段表；`candidates` 是运行时算出来的（节点名 / 代理组名 / 集合名）。
 + * 两者都为空时才给自定义输入（否则和参考实现一样只能挑选）。
 + */
 +@Composable
@@ -8969,6 +9052,7 @@ index 0000000000000000000000000000000000000000..5aa67fe075825932733112ec247d6617
 +    field: FormField,
 +    current: String?,
 +    candidates: List<FormOption>,
++    hideUnavailableCurrent: Boolean = false,
 +    onDismiss: () -> Unit,
 +    onPick: (String?) -> Unit,
 +) {
@@ -8996,7 +9080,7 @@ index 0000000000000000000000000000000000000000..5aa67fe075825932733112ec247d6617
 +                        onClick = { onPick(null) },
 +                    )
 +                }
-+                if (current != null && current !in known) {
++                if (!hideUnavailableCurrent && current != null && current !in known) {
 +                    BasicComponent(
 +                        title = current,
 +                        summary = "当前值（不在清单里，保留原样）",
@@ -9625,10 +9709,10 @@ index 0000000000000000000000000000000000000000..5e9420498dfbb70fa0a01f7d21c0578b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..1108fb71a84841b65e41d85778ed01ab28e58512
+index 0000000000000000000000000000000000000000..a9121ae3c15048eb3b6a5777aea9b1e7bb05bcec
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt
-@@ -0,0 +1,1240 @@
+@@ -0,0 +1,1233 @@
 +package top.yukonga.mishka.custom.forms
 +
 +// 本文件由 tools/forms/gen_specs.py 从参考实现的字段表生成，请勿手改。
@@ -10720,14 +10804,7 @@ index 0000000000000000000000000000000000000000..1108fb71a84841b65e41d85778ed01ab
 +            optional = true,
 +            allowEmpty = true,
 +        ),
-+        FormField(
-+            path = "shared.interface",
-+            label = "下游接口",
-+            type = FormFieldType.LIST,
-+            desc = "shared / hybrid 下必填且不能是 lo；正作为默认上游的接口会被暂时跳过，回到下游角色后自动接管",
-+            hint = "如 wlan0、ap0、swlan0",
-+            optional = true,
-+        ),
++        FormCustomRow("shared.interface"),
 +        FormField(
 +            path = "shared.ipv6",
 +            label = "接管 IPv6",
@@ -10871,7 +10948,7 @@ index 0000000000000000000000000000000000000000..1108fb71a84841b65e41d85778ed01ab
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..53b6a8dd7d1a0a88c530e326241fdeae7988a078
+index 0000000000000000000000000000000000000000..173d3b992059d961fca54613a7103424db34f7fc
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 @@ -0,0 +1,2190 @@
@@ -12413,7 +12490,7 @@ index 0000000000000000000000000000000000000000..53b6a8dd7d1a0a88c530e326241fdeae
 +val GROUP_TYPES: List<FormOption> = listOf(FormOption("select", "select 手动选择"), FormOption("url-test", "url-test 自动测速"), FormOption("fallback", "fallback 自动回退"), FormOption("load-balance", "load-balance 负载均衡"), FormOption("smart", "smart 智能(Smart内核)"), FormOption("relay", "relay 链式"))
 +
 +/** 新建代理组模板（参考实现 pages-flow.js:1486；名字重复时加序号）。 */
-+val GROUP_TEMPLATE: Map<String, Any?> by lazy { linkedMapOf<String, Any?>("name" to "手动选择", "type" to "select", "proxies" to listOf<Any?>("DIRECT"), "use" to listOf<Any?>(), "url" to "https://cp.cloudflare.com/generate_204", "interval" to 300, "timeout" to 5000, "lazy" to true) }
++val GROUP_TEMPLATE: Map<String, Any?> by lazy { linkedMapOf<String, Any?>("name" to "手动选择", "type" to "select", "proxies" to emptyList<Any?>(), "use" to listOf<Any?>(), "url" to "https://cp.cloudflare.com/generate_204", "interval" to 300, "timeout" to 5000, "lazy" to true) }
 +
 +/** 代理集合的来源类型（参考实现 pages-flow.js:840）。 */
 +val PROVIDER_TYPES: List<FormOption> = listOf(FormOption("http", "http 远程下载"), FormOption("file", "file 本地文件"), FormOption("inline", "inline 内联节点"))
@@ -14779,10 +14856,10 @@ index 0000000000000000000000000000000000000000..b24e4c4aae90e72f4abfb977c3b33163
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..f496eb56bd2f2b9dab2dfda23661243366fc5a88
+index 0000000000000000000000000000000000000000..2cc26a62cb3ea7d785990ba92b5ef396f3d612a0
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,249 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import android.net.Uri
@@ -14835,8 +14912,8 @@ index 0000000000000000000000000000000000000000..f496eb56bd2f2b9dab2dfda236612433
 +    return File(b, p.removePrefix("./"))
 +}
 +
-+private const val MAX_EDIT_BYTES = 4L * 1024 * 1024
-+private const val MAX_UPLOAD_BYTES = 8L * 1024 * 1024
++internal const val MAX_EDIT_BYTES = 4L * 1024 * 1024
++internal const val MAX_UPLOAD_BYTES = 8L * 1024 * 1024
 +
 +@Composable
 +internal fun ProviderFileOpsRow(
@@ -14959,7 +15036,7 @@ index 0000000000000000000000000000000000000000..f496eb56bd2f2b9dab2dfda236612433
 +
 +/** 在线编辑弹层：打开时 IO 读现有内容（不存在给模板），保存直接写文件。 */
 +@Composable
-+private fun FileContentDialog(
++internal fun FileContentDialog(
 +    title: String,
 +    file: File?,
 +    baseDir: String?,
@@ -14998,37 +15075,28 @@ index 0000000000000000000000000000000000000000..f496eb56bd2f2b9dab2dfda236612433
 +                minLines = 8,
 +                maxLines = 16,
 +            )
-+            // 内容框与保存按钮之间留边距；按钮右对齐与其它弹层一致
-+            Spacer(Modifier.height(12.dp))
-+            Row(
-+                modifier = Modifier.fillMaxWidth(),
-+                horizontalArrangement = Arrangement.End,
-+            ) {
-+                TextButton(text = "保存文件", onClick = {
-+                    val t = target
-+                    if (t == null) {
-+                        showToast("无法确定写入位置：缺少订阅目录或路径为空，请先用「上传」或在配置里填绝对路径", long = true)
-+                        return@TextButton
-+                    }
-+                    if (failed && draft == null) {
-+                        showToast("文件内容没读到，不执行保存（避免把原文件清空）", long = true)
-+                        return@TextButton
-+                    }
-+                    // mihomo 要求订阅文件是 proxies 列表：只贴了节点列表 / 单节点时自动补根，其余内容不动
-+                    val content = if (wrapProxies) ProxyUri.ensureProxiesRoot(draft.orEmpty()).first else draft.orEmpty()
-+                    scope.launch {
-+                        val ok = withContext(Dispatchers.IO) {
-+                            runCatching { t.parentFile?.mkdirs(); t.writeText(content) }.isSuccess
++            DialogButtons(onDismiss = onDismiss, confirmLabel = "保存文件") {
++                val t = target
++                when {
++                    t == null -> showToast("无法确定写入位置：缺少订阅目录或路径为空，请先用「上传」或在配置里填绝对路径", long = true)
++                    failed && draft == null -> showToast("文件内容没读到，不执行保存（避免把原文件清空）", long = true)
++                    else -> {
++                        // mihomo 要求订阅文件是 proxies 列表：只贴了节点列表 / 单节点时自动补根，其余内容不动
++                        val content = if (wrapProxies) ProxyUri.ensureProxiesRoot(draft.orEmpty()).first else draft.orEmpty()
++                        scope.launch {
++                            val ok = withContext(Dispatchers.IO) {
++                                runCatching { t?.parentFile?.mkdirs(); t?.writeText(content) }.isSuccess
++                            }
++                            if (ok) onSaved() else showToast("写入失败：请检查文件权限或磁盘空间", long = true)
 +                        }
-+                        if (ok) onSaved() else showToast("写入失败：请检查文件权限或磁盘空间", long = true)
 +                    }
-+                })
++                }
 +            }
 +        }
 +    }
 +}
 +
-+private fun readBytesLimited(input: java.io.InputStream, limit: Long): ByteArray {
++internal fun readBytesLimited(input: java.io.InputStream, limit: Long): ByteArray {
 +    val out = java.io.ByteArrayOutputStream()
 +    val buf = ByteArray(8192)
 +    var total = 0L
@@ -17427,7 +17495,7 @@ index 33aa9ccb56cdb93340ff5aa0c34a48cfb04786b0..0fdd5de0f18e4b946aa2f9f97a1e6e71
 +class DelayTestFailedException(val node: String, val status: Int, val reason: String) :
 +    MihomoApiException("delay test for '$node' failed: HTTP $status $reason")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
-index 76eb0a20294033ba425c779c4ab000b16ba670b2..125403951781565479676b5a12b94003fd284fb0 100644
+index 76eb0a20294033ba425c779c4ab000b16ba670b2..14ebcdc0fde29fd9aae21d9d09e9186b95ef527c 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 @@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
@@ -17438,7 +17506,7 @@ index 76eb0a20294033ba425c779c4ab000b16ba670b2..125403951781565479676b5a12b94003
  import java.util.concurrent.atomic.AtomicBoolean
  import java.util.concurrent.atomic.AtomicInteger
  
-@@ -37,6 +38,17 @@ data class CoreFetchResult(
+@@ -37,6 +38,19 @@ data class CoreFetchResult(
  @Serializable
  private data class TransformCheck(val valid: Boolean = false)
  
@@ -17452,11 +17520,13 @@ index 76eb0a20294033ba425c779c4ab000b16ba670b2..125403951781565479676b5a12b94003
 +    /** Full effective `tun` mapping after age decryption and subscription transforms. */
 +    val tun: JsonElement? = null,
 +    val listeners: JsonElement? = null,
++    /** Effective `proxy-providers` map after age decryption and subscription transforms. */
++    val proxyProviders: JsonElement? = null,
 +)
  
  class MishkaCoreError(message: String) : RuntimeException(message)
  
-@@ -44,6 +56,7 @@ object MishkaCoreBridge {
+@@ -44,6 +58,7 @@ object MishkaCoreBridge {
  
      private val tokenSeq = AtomicInteger(1)
      private val json = Json { ignoreUnknownKeys = true }
@@ -17464,7 +17534,7 @@ index 76eb0a20294033ba425c779c4ab000b16ba670b2..125403951781565479676b5a12b94003
  
      init {
          // mishka_jni 链接依赖 libmihomo.so 的导出符号，必须先加载。
-@@ -79,13 +92,15 @@ object MishkaCoreBridge {
+@@ -79,13 +94,15 @@ object MishkaCoreBridge {
          val pollerJob = launchProgressPoller(this, token, onProgress)
          try {
              val raw = withContext(Dispatchers.IO) {
@@ -17487,7 +17557,7 @@ index 76eb0a20294033ba425c779c4ab000b16ba670b2..125403951781565479676b5a12b94003
                  }
              }
              interpretResult(raw)
-@@ -122,9 +137,26 @@ object MishkaCoreBridge {
+@@ -122,9 +139,26 @@ object MishkaCoreBridge {
              .getOrElse { throw MishkaCoreError("invalid native payload: $raw") }
      }
  
@@ -17515,7 +17585,7 @@ index 76eb0a20294033ba425c779c4ab000b16ba670b2..125403951781565479676b5a12b94003
          val result = interpretTransformResult(raw)
          check(result.valid) { "native transform validation returned invalid result" }
      }
-@@ -136,6 +168,13 @@ object MishkaCoreBridge {
+@@ -136,6 +170,13 @@ object MishkaCoreBridge {
              .getOrElse { throw MishkaCoreError("invalid native payload: $raw") }
      }
  
@@ -18988,6 +19058,45 @@ index e86fc359b1c92bbcdac1630bc274497fcee58254..0a19898c71ce3b19d59a4241ea665bbc
      }
  
      /**
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
+index 0a60c2efb1c64b81457ee54706fed3e23f93e421..80c22412e0642f1504734481d30d2f2502b92390 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
+@@ -1,6 +1,7 @@
+ package top.yukonga.mishka.service
+ 
+ import android.util.Log
++import java.io.File
+ import java.util.concurrent.TimeUnit
+ 
+ object RootHelper {
+@@ -264,6 +265,26 @@ object RootHelper {
+         }
+     }
+ 
++    /** Copy an app-owned file into a ROOT runtime directory, creating its parent as root. */
++    fun copyFileAsRoot(sourcePath: String, destinationPath: String): Boolean {
++        return try {
++            val source = escapeShellSingleQuoted(sourcePath)
++            val destination = escapeShellSingleQuoted(destinationPath)
++            val parent = escapeShellSingleQuoted(File(destinationPath).parentFile?.absolutePath ?: return false)
++            val process = ProcessBuilder("su", "-c", "mkdir -p $parent && cp -f $source $destination")
++                .redirectErrorStream(true)
++                .start()
++            val outcome = awaitDrained(process, 10)
++            if (outcome.code != 0 && outcome.output.isNotBlank()) {
++                Log.w(TAG, "copyFileAsRoot code=${outcome.code}: ${outcome.output.take(1000)}")
++            }
++            outcome.code == 0
++        } catch (e: Exception) {
++            Log.w(TAG, "copyFileAsRoot failed: ${e.message}")
++            false
++        }
++    }
++
+     /**
+      * 以 root 身份 rm -rf 指定路径。调用方自行保证路径语义（仅用于 app 自己的数据目录下）。
+      * best-effort：无 su 设备或失败返回 false，不抛异常。
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
 index 0c3c8c3abb07e743c460a8280bfc217a51163863..75618b0beeac3aabdf4256d39b72351deaafd6b7 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
@@ -19444,8 +19553,104 @@ index b57d68772dc1b9e1b643e151e7399b48555ec4f5..b3ca80838914b901b18b9ca69edb1d41
          )
      }
  
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt
+index 7a0fb5152385317745026ea0df273e5a6da16fc6..7e2415da58acbc121233ddf707fd84efffeabd8e 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt
+@@ -1,7 +1,5 @@
+ package top.yukonga.mishka.ui.component
+ 
+-import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.Spacer
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.height
+@@ -26,10 +24,10 @@ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.withContext
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.custom.forms.DialogButtons
+ import top.yukonga.mishka.platform.scanTetherInterfacesAsRoot
+ import top.yukonga.mishka.platform.showToast
+ import top.yukonga.miuix.kmp.basic.BasicComponent
+-import top.yukonga.miuix.kmp.basic.ButtonDefaults
+ import top.yukonga.miuix.kmp.basic.Checkbox
+ import top.yukonga.miuix.kmp.basic.TextButton
+ import top.yukonga.miuix.kmp.basic.TextField
+@@ -96,31 +94,15 @@ fun TetherInterfaceEditDialog(
+                 }
+             },
+         )
+-        Spacer(Modifier.height(12.dp))
+-        Row(
+-            modifier = Modifier.fillMaxWidth(),
+-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+-        ) {
+-            TextButton(
+-                text = stringResource(R.string.common_cancel),
+-                modifier = Modifier.weight(1f),
+-                onClick = onDismiss,
+-            )
+-            TextButton(
+-                text = stringResource(R.string.common_confirm),
+-                modifier = Modifier.weight(1f),
+-                colors = ButtonDefaults.textButtonColorsPrimary(),
+-                onClick = {
+-                    val csv = textState.text.toString()
+-                        .lines()
+-                        .map { it.trim() }
+-                        .filter { it.isNotEmpty() }
+-                        .distinct()
+-                        .joinToString(",")
+-                    onConfirm(csv)
+-                    onDismiss()
+-                },
+-            )
++        DialogButtons(onDismiss = onDismiss) {
++            val csv = textState.text.toString()
++                .lines()
++                .map { it.trim() }
++                .filter { it.isNotEmpty() }
++                .distinct()
++                .joinToString(",")
++            onConfirm(csv)
++            onDismiss()
+         }
+     }
+ 
+@@ -166,27 +148,9 @@ private fun ScanResultDialog(
+                 )
+             }
+         }
+-        Spacer(Modifier.height(12.dp))
+-        Row(
+-            modifier = Modifier
+-                .fillMaxWidth()
+-                .padding(top = 4.dp),
+-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+-        ) {
+-            TextButton(
+-                text = stringResource(R.string.common_cancel),
+-                modifier = Modifier.weight(1f),
+-                onClick = onDismiss,
+-            )
+-            TextButton(
+-                text = stringResource(R.string.common_confirm),
+-                modifier = Modifier.weight(1f),
+-                colors = ButtonDefaults.textButtonColorsPrimary(),
+-                onClick = {
+-                    val picked = candidates.filter { selected[it] == true }
+-                    onApply(picked)
+-                },
+-            )
++        DialogButtons(onDismiss = onDismiss) {
++            val picked = candidates.filter { selected[it] == true }
++            onApply(picked)
+         }
+     }
+ }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 2341aa96e827896441463a0735866db66c64c1a2..fe0d2ccdadc3d9e2344f70b61321130e9524573e 100644
+index 2341aa96e827896441463a0735866db66c64c1a2..3e42813d7a8a731e7e9b32483b829016fa258748 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 @@ -335,6 +335,9 @@ fun AppNavigation(
@@ -19458,7 +19663,16 @@ index 2341aa96e827896441463a0735866db66c64c1a2..fe0d2ccdadc3d9e2344f70b61321130e
                      )
                  }
              }
-@@ -422,6 +425,10 @@ fun AppNavigation(
+@@ -387,6 +390,8 @@ fun AppNavigation(
+                 providerViewModel?.let {
+                     ProviderScreen(
+                         viewModel = it,
++                        homeViewModel = homeViewModel,
++                        subscriptionViewModel = subscriptionViewModel,
+                         onBack = { navigator.pop() },
+                     )
+                 }
+@@ -422,6 +427,10 @@ fun AppNavigation(
                      RootSettingsScreen(
                          storage = it,
                          isProxyRunning = homeState?.isRunning == true || homeState?.isStarting == true,
@@ -19469,7 +19683,7 @@ index 2341aa96e827896441463a0735866db66c64c1a2..fe0d2ccdadc3d9e2344f70b61321130e
                          onBack = { navigator.pop() },
                      )
                  }
-@@ -509,6 +516,7 @@ fun AppNavigation(
+@@ -509,6 +518,7 @@ fun AppNavigation(
                      uuid = route.uuid,
                      relativePath = route.relativePath,
                      subscriptionViewModel = subscriptionViewModel,
@@ -19495,10 +19709,10 @@ index bdb96f71653c2ad22280ab2ec56d7153ab88e8df..c5f897059a3970523105e2b323cb757a
      @Serializable
      data object AppProxy : Route
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
-index 018c54d9fc5afa1c553e875fad47859faed6015a..9e72a56c0fe7c894ef84774d617f9efdedc9335e 100644
+index 018c54d9fc5afa1c553e875fad47859faed6015a..4623ff2cbeab1396764a2ba10a02fe48b3d3da9a 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
-@@ -179,29 +179,45 @@ private fun StatusContent(
+@@ -179,25 +179,34 @@ private fun StatusContent(
                  )
              }
              Spacer(Modifier.height(12.dp))
@@ -19540,18 +19754,7 @@ index 018c54d9fc5afa1c553e875fad47859faed6015a..9e72a56c0fe7c894ef84774d617f9efd
                      fontSize = 20.sp,
                      fontWeight = FontWeight.Bold,
                      color = MiuixTheme.colorScheme.onSurface,
-                 )
-+                if (state.tunMode == TunMode.RootTun) {
-+                    Text(
-+                        text = state.config?.tun?.device?.takeIf { it.isNotBlank() } ?: "--",
-+                        fontSize = 13.sp,
-+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                    )
-+                }
-             }
-         }
-     }
-@@ -209,7 +225,7 @@ private fun StatusContent(
+@@ -209,7 +218,7 @@ private fun StatusContent(
      OptionSelectDialog(
          show = showModeDialog,
          title = stringResource(R.string.home_switch_mode),
@@ -19560,7 +19763,7 @@ index 018c54d9fc5afa1c553e875fad47859faed6015a..9e72a56c0fe7c894ef84774d617f9efd
          current = state.mode,
          onSelect = onSwitchMode,
          onDismiss = { showModeDialog = false },
-@@ -228,13 +244,22 @@ private fun StatusContent(
+@@ -228,13 +237,22 @@ private fun StatusContent(
  // ROOT TPROXY 模式 mihomo tproxy-port（与 RootTproxyApplier.TPROXY_PORT 对齐，UI 仅展示用）
  private const val TPROXY_INBOUND_PORT: Int = 7895
  
@@ -19587,6 +19790,295 @@ index 018c54d9fc5afa1c553e875fad47859faed6015a..9e72a56c0fe7c894ef84774d617f9efd
  
  private fun tunStackLabel(stack: String): String =
      TUN_STACK_OPTIONS.firstOrNull { it.first == stack.lowercase() }?.second ?: stack.ifEmpty { "--" }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
+index 93088aa5afde73d5211efcbcf89d48ee3868a337..3eeddd12299063087a9a6a410e0f2458dd26facf 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
+@@ -1,5 +1,8 @@
+ package top.yukonga.mishka.ui.screen.provider
+ 
++import android.net.Uri
++import androidx.activity.compose.rememberLauncherForActivityResult
++import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.compose.animation.AnimatedVisibility
+ import androidx.compose.animation.expandVertically
+ import androidx.compose.animation.fadeIn
+@@ -26,6 +29,7 @@ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableIntStateOf
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
+ import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+@@ -34,6 +38,7 @@ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.graphics.ColorFilter
+ import androidx.compose.ui.graphics.graphicsLayer
+ import androidx.compose.ui.input.nestedscroll.nestedScroll
++import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.platform.LocalLayoutDirection
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.semantics.LiveRegionMode
+@@ -44,16 +49,31 @@ import androidx.compose.ui.unit.LayoutDirection
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import java.io.File
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.custom.forms.FileContentDialog
++import top.yukonga.mishka.custom.forms.MAX_EDIT_BYTES
++import top.yukonga.mishka.custom.forms.MAX_UPLOAD_BYTES
++import top.yukonga.mishka.custom.forms.readBytesLimited
++import top.yukonga.mishka.custom.forms.resolveProviderFile
++import top.yukonga.mishka.platform.TunMode
++import top.yukonga.mishka.platform.showToast
++import top.yukonga.mishka.service.RootHelper
+ import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
+ import top.yukonga.mishka.ui.component.blur.BlurredBar
+ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
+ import top.yukonga.mishka.ui.theme.StatusColors
+ import top.yukonga.mishka.ui.util.horizontalCutoutPadding
+ import top.yukonga.mishka.util.formatIsoTimeAsLocalShort
++import top.yukonga.mishka.viewmodel.HomeUiState
++import top.yukonga.mishka.viewmodel.HomeViewModel
+ import top.yukonga.mishka.viewmodel.ProviderErrorKey
+ import top.yukonga.mishka.viewmodel.ProviderItemUi
+ import top.yukonga.mishka.viewmodel.ProviderViewModel
++import top.yukonga.mishka.viewmodel.SubscriptionViewModel
+ import top.yukonga.miuix.kmp.basic.BasicComponent
+ import top.yukonga.miuix.kmp.basic.Card
+ import top.yukonga.miuix.kmp.basic.Icon
+@@ -62,6 +82,7 @@ import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+ import top.yukonga.miuix.kmp.basic.Scaffold
+ import top.yukonga.miuix.kmp.basic.TabRow
+ import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.basic.TextButton
+ import top.yukonga.miuix.kmp.blur.layerBackdrop
+ import top.yukonga.miuix.kmp.icon.MiuixIcons
+ import top.yukonga.miuix.kmp.icon.extended.Back
+@@ -70,12 +91,140 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
+ import top.yukonga.miuix.kmp.utils.overScrollVertical
+ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
+ 
++private data class ProviderFileTarget(
++    val name: String,
++    val path: String,
++    val format: String?,
++    val profileFile: File,
++    val runtimeFile: File,
++)
++
++private fun resolveProviderActionFile(baseDir: String, cfgPath: String): File? {
++    val trimmed = cfgPath.trim()
++    val resolved = resolveProviderFile(baseDir, trimmed) ?: return null
++    val canonical = runCatching { resolved.canonicalFile }.getOrNull() ?: return null
++    if (!trimmed.startsWith("/")) {
++        val root = runCatching { File(baseDir).canonicalFile.path }.getOrNull() ?: return null
++        if (canonical.path != root && !canonical.path.startsWith(root + File.separator)) return null
++    }
++    return canonical
++}
++
++private suspend fun resolveProviderFileTarget(
++    viewModel: SubscriptionViewModel?,
++    name: String,
++    subscriptionId: String?,
++    useRootRuntime: Boolean,
++): ProviderFileTarget? = withContext(Dispatchers.IO) {
++    val source = viewModel?.readProxyProviderFileSource(name, subscriptionId, useRootRuntime)
++        ?: return@withContext null
++    val profileFile = resolveProviderActionFile(source.profileWorkDir, source.path)
++        ?: return@withContext null
++    val runtimeFile = resolveProviderActionFile(source.runtimeWorkDir, source.path)
++        ?: return@withContext null
++    ProviderFileTarget(name, source.path, source.format, profileFile, runtimeFile)
++}
++
++private suspend fun syncProviderFileToRuntime(target: ProviderFileTarget): Boolean = withContext(Dispatchers.IO) {
++    val sameFile = runCatching { target.profileFile.canonicalPath == target.runtimeFile.canonicalPath }.getOrDefault(false)
++    if (sameFile) return@withContext true
++    RootHelper.copyFileAsRoot(target.profileFile.absolutePath, target.runtimeFile.absolutePath)
++}
++
++private const val PROVIDER_FILE_TEMPLATE =
++    "proxies:\n  # - { name: node1, type: ss, server: example.com, port: 8388, cipher: aes-256-gcm, password: xxx }\n"
++
+ @Composable
+ fun ProviderScreen(
+     viewModel: ProviderViewModel,
++    homeViewModel: HomeViewModel? = null,
++    subscriptionViewModel: SubscriptionViewModel? = null,
+     onBack: () -> Unit = {},
+ ) {
+     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
++    val homeState = homeViewModel?.uiState?.collectAsStateWithLifecycle()?.value ?: HomeUiState()
++    val subscriptionState = subscriptionViewModel?.uiState?.collectAsStateWithLifecycle()?.value
++    val activeSubscriptionId = subscriptionState?.subscriptions?.firstOrNull { it.isActive }?.id
++    val useRootRuntime = homeState.tunMode != TunMode.Vpn
++    val context = LocalContext.current
++    val scope = rememberCoroutineScope()
++
++    fun onProviderFileChanged(target: ProviderFileTarget, successMessage: String) {
++        scope.launch {
++            val synced = syncProviderFileToRuntime(target)
++            if (!synced) {
++                showToast("$successMessage；ROOT runtime 同步失败，正在重启以从订阅目录重新复制", long = true)
++                if (homeViewModel != null) homeViewModel.restartProxy()
++                else showToast("请手动重启代理以同步 ROOT runtime", long = true)
++                return@launch
++            }
++            showToast(successMessage)
++            viewModel.updateProvider(target.name, isRuleProvider = false)
++        }
++    }
++
++    var fileActionResolving by remember { mutableStateOf<String?>(null) }
++    var editingFileTarget by remember { mutableStateOf<ProviderFileTarget?>(null) }
++    var uploadFileTarget by remember { mutableStateOf<ProviderFileTarget?>(null) }
++    val uploadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
++        val target = uploadFileTarget
++        uploadFileTarget = null
++        if (uri == null || target == null) return@rememberLauncherForActivityResult
++        scope.launch {
++            val result = withContext(Dispatchers.IO) {
++                runCatching {
++                    val bytes = context.contentResolver.openInputStream(uri)?.use {
++                        readBytesLimited(it, MAX_UPLOAD_BYTES + 1)
++                    } ?: error("读取所选文件失败")
++                    require(bytes.size.toLong() <= MAX_UPLOAD_BYTES) { "文件过大（>8MB）" }
++                    target.profileFile.parentFile?.mkdirs()
++                    target.profileFile.writeBytes(bytes)
++                    true
++                }
++            }
++            result.fold(
++                onSuccess = { onProviderFileChanged(target, "已上传文件") },
++                onFailure = { showToast("上传失败：${it.message ?: it::class.simpleName}", long = true) },
++            )
++        }
++    }
++
++    fun requestProviderFileAction(name: String, edit: Boolean) {
++        if (fileActionResolving != null) return
++        if (subscriptionViewModel == null) {
++            showToast("无法读取活动配置，请重新打开主页工具", long = true)
++            return
++        }
++        fileActionResolving = name
++        scope.launch {
++            val target = resolveProviderFileTarget(
++                subscriptionViewModel,
++                name,
++                activeSubscriptionId,
++                useRootRuntime,
++            )
++            fileActionResolving = null
++            if (target == null) {
++                showToast("无法从活动配置解析 file 提供者路径，请检查 proxy-providers.$name.path", long = true)
++                return@launch
++            }
++            if (edit) {
++                when {
++                    target.format.equals("mrs", ignoreCase = true) || target.profileFile.name.endsWith(".mrs", ignoreCase = true) ->
++                        showToast("mrs 是二进制格式，不支持在线编辑，请用上传文件替换", long = true)
++                    target.profileFile.exists() && !target.profileFile.isFile ->
++                        showToast("提供者路径不是普通文件：${target.profileFile.path}", long = true)
++                    target.profileFile.exists() && target.profileFile.length() > MAX_EDIT_BYTES ->
++                        showToast("文件超过 4MB，请直接用文件管理器编辑", long = true)
++                    else -> editingFileTarget = target
++                }
++            } else {
++                uploadFileTarget = target
++                uploadLauncher.launch(arrayOf("*/*"))
++            }
++        }
++    }
++
+     val scrollBehavior = MiuixScrollBehavior()
+     var selectedTabIndex by rememberSaveable("provider_type_tab") { mutableIntStateOf(RULE_PROVIDERS_TAB) }
+     val selectedIsRuleProvider = selectedTabIndex == RULE_PROVIDERS_TAB
+@@ -236,9 +385,12 @@ fun ProviderScreen(
+                             error = uiState.providerErrors[
+                                 ProviderErrorKey(provider.name, provider.isRuleProvider)
+                             ],
++                            fileActionEnabled = fileActionResolving == null,
+                             onUpdate = {
+                                 viewModel.updateProvider(provider.name, provider.isRuleProvider)
+                             },
++                            onEditFile = { requestProviderFileAction(provider.name, edit = true) },
++                            onUploadFile = { requestProviderFileAction(provider.name, edit = false) },
+                         )
+                     }
+                 }
+@@ -257,6 +409,23 @@ fun ProviderScreen(
+         show = uiState.refresh != null,
+         progress = uiState.refresh,
+     )
++
++    editingFileTarget?.let { target ->
++        FileContentDialog(
++            title = "编辑代理提供者文件",
++            file = target.profileFile,
++            baseDir = target.profileFile.parentFile?.absolutePath,
++            cfgPath = target.path,
++            newFileText = PROVIDER_FILE_TEMPLATE,
++            wrapProxies = true,
++            scope = scope,
++            onDismiss = { editingFileTarget = null },
++            onSaved = {
++                editingFileTarget = null
++                onProviderFileChanged(target, "已保存提供者文件")
++            },
++        )
++    }
+ }
+ 
+ private const val RULE_PROVIDERS_TAB = 0
+@@ -265,17 +434,39 @@ private const val RULE_PROVIDERS_TAB = 0
+ private fun ProviderItem(
+     provider: ProviderItemUi,
+     error: String?,
++    fileActionEnabled: Boolean,
+     onUpdate: () -> Unit,
++    onEditFile: () -> Unit,
++    onUploadFile: () -> Unit,
+ ) {
+     Column {
+         BasicComponent(
+             title = provider.name,
+             summary = stringResource(
+                 if (provider.isRuleProvider) R.string.provider_kind_rule else R.string.provider_kind_proxy,
+-                provider.type,
++                provider.type.lowercase(),
+             ),
+             endActions = {
+-                if (provider.vehicleType != "Inline") {
++                val isFileProxyProvider = !provider.isRuleProvider && provider.type.equals("file", ignoreCase = true)
++                if (isFileProxyProvider) {
++                    Row(
++                        verticalAlignment = Alignment.CenterVertically,
++                        horizontalArrangement = Arrangement.spacedBy(4.dp),
++                    ) {
++                        TextButton(
++                            text = stringResource(R.string.common_edit),
++                            minWidth = 0.dp,
++                            enabled = fileActionEnabled,
++                            onClick = onEditFile,
++                        )
++                        TextButton(
++                            text = stringResource(R.string.provider_upload_file),
++                            minWidth = 0.dp,
++                            enabled = fileActionEnabled,
++                            onClick = onUploadFile,
++                        )
++                    }
++                } else if (!provider.vehicleType.equals("Inline", ignoreCase = true)) {
+                     Row(
+                         verticalAlignment = Alignment.CenterVertically,
+                         horizontalArrangement = Arrangement.spacedBy(8.dp),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d0238169ddb660 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
@@ -20338,6 +20830,63 @@ index b112741da831dd40ce8bc297f646813d3394af60..74194d3fd23e8ed8bd9e70d06e8d08fc
      }
  
      fun reloadConfig() {
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
+index 4b576a625df5fc5bd0e8709ea02ed4a5fffd15bb..e0a0abe09c2df43d2af99b52b85f5fb31a1fd875 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
+@@ -22,8 +22,7 @@ import top.yukonga.mishka.util.describe
+ 
+ data class ProviderItemUi(
+     val name: String,
+-    // 技术类型原值（proxy provider 取 type，rule provider 取 vehicleType）；
+-    // 展示成「代理(…)/规则(…)」由屏幕按 isRuleProvider 本地化拼装
++    // provider 来源类型（HTTP/File/Inline），主页统一显示为代理/规则（http/file/inline）。
+     val type: String,
+     val vehicleType: String,
+     val updatedAt: String,
+@@ -89,12 +88,12 @@ class ProviderViewModel : ViewModel() {
+ 
+             repo.getProviders().onSuccess { response ->
+                 response.providers.values
+-                    .filter { it.vehicleType != "Compatible" }
++                    .filter { !it.vehicleType.equals("Compatible", ignoreCase = true) }
+                     .forEach { info ->
+                         items.add(
+                             ProviderItemUi(
+                                 name = info.name,
+-                                type = info.type,
++                                type = info.vehicleType.ifBlank { "unknown" },
+                                 vehicleType = info.vehicleType,
+                                 updatedAt = info.updatedAt,
+                                 isRuleProvider = false,
+@@ -105,12 +104,12 @@ class ProviderViewModel : ViewModel() {
+ 
+             repo.getRuleProviders().onSuccess { response ->
+                 response.providers.values
+-                    .filter { it.vehicleType != "Compatible" }
++                    .filter { !it.vehicleType.equals("Compatible", ignoreCase = true) }
+                     .forEach { info ->
+                         items.add(
+                             ProviderItemUi(
+                                 name = info.name,
+-                                type = info.vehicleType,
++                                type = info.vehicleType.ifBlank { "unknown" },
+                                 vehicleType = info.vehicleType,
+                                 updatedAt = info.updatedAt,
+                                 isRuleProvider = true,
+@@ -166,7 +165,11 @@ class ProviderViewModel : ViewModel() {
+ 
+     fun updateAll() {
+         val repo = repository ?: return
+-        val snapshot = _uiState.value.providers
++        // File proxy providers are managed by file upload in the row; Inline providers have no
++        // refresh operation. Keep the global refresh button consistent with the per-row actions.
++        val snapshot = _uiState.value.providers.filterNot {
++            !it.isRuleProvider && (it.type.equals("file", ignoreCase = true) || it.vehicleType.equals("Inline", ignoreCase = true))
++        }
+         if (snapshot.isEmpty()) return
+         if (_uiState.value.refresh != null) return
+ 
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f92b0666c1 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
@@ -20550,15 +21099,18 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
          val uuid = getActiveUuid() ?: return
          val dao = selectionDao ?: return
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-index ef9b641bbd774b403bf03531c43932de623134a0..b09ee3db6a627666c0a83c4830dff82d10e0669a 100644
+index ef9b641bbd774b403bf03531c43932de623134a0..91a7411f1c2f09ae2c86ca25c789565ba10d0dfd 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-@@ -2,27 +2,35 @@ package top.yukonga.mishka.viewmodel
+@@ -2,27 +2,40 @@ package top.yukonga.mishka.viewmodel
  
  import android.content.Context
  import androidx.annotation.StringRes
 +import kotlinx.serialization.json.Json
 +import kotlinx.serialization.json.decodeFromJsonElement
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
  import androidx.compose.runtime.Immutable
  import androidx.lifecycle.ViewModel
  import androidx.lifecycle.viewModelScope
@@ -20572,6 +21124,7 @@ index ef9b641bbd774b403bf03531c43932de623134a0..b09ee3db6a627666c0a83c4830dff82d
  import kotlinx.coroutines.flow.asStateFlow
  import kotlinx.coroutines.launch
 +import kotlinx.coroutines.withContext
++import java.io.File
  import top.yukonga.mishka.R
 +import top.yukonga.mishka.data.bridge.MishkaCoreBridge
 +import top.yukonga.mishka.data.store.ProfileTransformWriter
@@ -20585,11 +21138,28 @@ index ef9b641bbd774b403bf03531c43932de623134a0..b09ee3db6a627666c0a83c4830dff82d
  import top.yukonga.mishka.domain.repository.SubscriptionRepository
  import top.yukonga.mishka.platform.ProfileFileManager
  import top.yukonga.mishka.platform.ProxyServiceController
++import top.yukonga.mishka.service.ConfigGenerator
 +import top.yukonga.mishka.service.ProfileFileOps
  import top.yukonga.mishka.util.describe
  
  /**
-@@ -59,6 +67,7 @@ class SubscriptionViewModel(
+@@ -54,11 +67,23 @@ data class UpdateAllProgress(
+     val currentStep: ImportProgress? = null,
+ )
+ 
++@Immutable
++data class ProxyProviderFileSource(
++    val type: String,
++    val path: String,
++    val format: String? = null,
++    /** The app-owned source directory where uploads and edits must persist. */
++    val profileWorkDir: String,
++    /** The directory currently used by mihomo; ROOT profiles use runtime/{uuid}. */
++    val runtimeWorkDir: String,
++)
++
+ class SubscriptionViewModel(
+     private val repository: SubscriptionRepository,
      val fileManager: ProfileFileManager,
      private val processor: ProfileProcessor,
      private val serviceController: ProxyServiceController,
@@ -20597,7 +21167,7 @@ index ef9b641bbd774b403bf03531c43932de623134a0..b09ee3db6a627666c0a83c4830dff82d
      private val context: Context,
  ) : ViewModel() {
  
-@@ -91,6 +100,49 @@ class SubscriptionViewModel(
+@@ -91,6 +116,121 @@ class SubscriptionViewModel(
          _uiState.value = _uiState.value.copy(error = "")
      }
  
@@ -20627,6 +21197,78 @@ index ef9b641bbd774b403bf03531c43932de623134a0..b09ee3db6a627666c0a83c4830dff82d
 +    suspend fun readProfileTunDevice(subscriptionId: String): String? =
 +        readProfileTunConfig(subscriptionId)?.device?.trim()?.takeIf { it.isNotEmpty() }
 +
++    /**
++     * Resolve a file proxy provider from the live effective profile rather than guessing its path
++     * from a form default. Native inspection follows the same age-decryption and transform chain as
++     * mihomo. The returned profile directory is always app-owned; ROOT's runtime directory is
++     * returned separately so file operations can explicitly mirror changes into runtime/{uuid}.
++     */
++    suspend fun readProxyProviderFileSource(
++        name: String,
++        subscriptionId: String?,
++        useRootRuntime: Boolean,
++    ): ProxyProviderFileSource? = withContext(Dispatchers.IO) {
++        val subscription = if (subscriptionId.isNullOrBlank()) {
++            repository.subscriptions.value.firstOrNull { it.isActive } ?: repository.getActive()
++        } else {
++            repository.subscriptions.value.firstOrNull { it.id == subscriptionId }
++                ?: repository.getActive()?.takeIf { it.id == subscriptionId }
++                ?: return@withContext null
++        }
++        val profileWorkDir = if (subscription != null) {
++            ProfileFileOps.getSubscriptionDir(context, subscription.id)
++        } else {
++            ConfigGenerator.getWorkDir(context)
++        }
++        val runtimeWorkDir = if (useRootRuntime && subscription != null) {
++            ProfileFileOps.getRuntimeDir(context, subscription.id)
++        } else {
++            profileWorkDir
++        }
++        // While ROOT is running, inspect the copied config that mihomo actually started from. If
++        // runtime/ has not been prepared yet, use imported/ so a stopped service can still resolve.
++        val configWorkDir = if (useRootRuntime && subscription != null && File(runtimeWorkDir, "config.yaml").isFile) {
++            runtimeWorkDir
++        } else {
++            profileWorkDir
++        }
++        val transformPath = try {
++            transformWriter.write(subscription, ProfileTransformWriter.RUNTIME_PATH)
++        } catch (_: Exception) {
++            return@withContext null
++        }
++        val runtime = try {
++            MishkaCoreBridge.readRuntimeConfigValues(
++                configWorkDir.absolutePath,
++                transformPath,
++                subscription?.ageSecretKey.orEmpty(),
++            )
++        } catch (_: Exception) {
++            return@withContext null
++        }
++        val provider = runCatching { runtime.proxyProviders?.jsonObject?.get(name)?.jsonObject }.getOrNull()
++            ?: return@withContext null
++        val type = runCatching { provider["type"]?.jsonPrimitive?.contentOrNull }.getOrNull()
++            ?.trim()
++            ?.takeIf { it.isNotEmpty() }
++            ?: return@withContext null
++        if (!type.equals("file", ignoreCase = true)) return@withContext null
++        val path = runCatching { provider["path"]?.jsonPrimitive?.contentOrNull }.getOrNull()
++            ?.trim()
++            ?.takeIf { it.isNotEmpty() }
++            ?: return@withContext null
++        val format = runCatching { provider["format"]?.jsonPrimitive?.contentOrNull }.getOrNull()
++            ?.trim()
++            ?.takeIf { it.isNotEmpty() }
++        ProxyProviderFileSource(
++            type = type.lowercase(),
++            path = path,
++            format = format,
++            profileWorkDir = profileWorkDir.absolutePath,
++            runtimeWorkDir = runtimeWorkDir.absolutePath,
++        )
++    }
++
 +    /** App tun edits take priority only when the source cannot be edited or a transform may rewrite it. */
 +    suspend fun shouldPreferUserTunOverrides(subscriptionId: String): Boolean = withContext(Dispatchers.IO) {
 +        val subscription = repository.subscriptions.value.firstOrNull { it.id == subscriptionId }
@@ -20648,7 +21290,7 @@ index ef9b641bbd774b403bf03531c43932de623134a0..b09ee3db6a627666c0a83c4830dff82d
       * 取消当前正在进行的订阅 Pipeline（导入 / 更新 / 编辑 / 复制）。
       *
 diff --git a/app/src/main/native/mishka_core/runtime_test.go b/app/src/main/native/mishka_core/runtime_test.go
-index df86317213f3cb47e89f6d944969492e43f430da..9f6c165638253e6b80a54c06e60e067fd5c043b2 100644
+index df86317213f3cb47e89f6d944969492e43f430da..987a093b9df3b34e3da6a3868c8d9ca1ef1defbd 100644
 --- a/app/src/main/native/mishka_core/runtime_test.go
 +++ b/app/src/main/native/mishka_core/runtime_test.go
 @@ -1,6 +1,7 @@
@@ -20659,7 +21301,7 @@ index df86317213f3cb47e89f6d944969492e43f430da..9f6c165638253e6b80a54c06e60e067f
  	"os"
  	"path/filepath"
  	"testing"
-@@ -54,3 +55,171 @@ func TestShouldDefaultTunStackWithEncryptedSubscription(t *testing.T) {
+@@ -54,3 +55,209 @@ func TestShouldDefaultTunStackWithEncryptedSubscription(t *testing.T) {
  		t.Fatal("encrypted subscription's explicit stack was ignored")
  	}
  }
@@ -20752,6 +21394,30 @@ index df86317213f3cb47e89f6d944969492e43f430da..9f6c165638253e6b80a54c06e60e067f
 +	}
 +}
 +
++func TestExtractRuntimeConfigValuesIncludesProxyProviders(t *testing.T) {
++	got, err := extractRuntimeConfigValues([]byte(`proxy-providers:
++  "local nodes":
++    type: file
++    path: ./proxies/local.yaml
++  remote nodes:
++    type: http
++    path: ./proxies/remote.yaml
++`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	var providers map[string]map[string]interface{}
++	if err := json.Unmarshal(got.ProxyProviders, &providers); err != nil {
++		t.Fatalf("decode proxy providers: %v", err)
++	}
++	if providers["local nodes"]["type"] != "file" || providers["local nodes"]["path"] != "./proxies/local.yaml" {
++		t.Fatalf("local file provider source was not retained: %#v", providers["local nodes"])
++	}
++	if providers["remote nodes"]["type"] != "http" || providers["remote nodes"]["path"] != "./proxies/remote.yaml" {
++		t.Fatalf("remote provider source was not retained: %#v", providers["remote nodes"])
++	}
++}
++
 +func TestExtractRuntimeConfigValuesPreservesExplicitEmptySecret(t *testing.T) {
 +	got, err := extractRuntimeConfigValues([]byte("secret: ''\n"))
 +	if err != nil {
@@ -20772,7 +21438,7 @@ index df86317213f3cb47e89f6d944969492e43f430da..9f6c165638253e6b80a54c06e60e067f
 +		t.Fatal(err)
 +	}
 +	overridePath := filepath.Join(workDir, "runtime-override.yaml")
-+	override := []byte("secret: transformed-secret\ntun:\n  device: transformed-tun\n  stack: gvisor\n  mtu: 9000\n  gso: true\n")
++	override := []byte("secret: transformed-secret\ntun:\n  device: transformed-tun\n  stack: gvisor\n  mtu: 9000\n  gso: true\nproxy-providers:\n  local-from-transform:\n    type: file\n    path: ./proxies/transformed.yaml\n")
 +	if err := os.WriteFile(overridePath, override, 0600); err != nil {
 +		t.Fatal(err)
 +	}
@@ -20801,6 +21467,13 @@ index df86317213f3cb47e89f6d944969492e43f430da..9f6c165638253e6b80a54c06e60e067f
 +	if tun["stack"] != "gvisor" || tun["mtu"] != float64(9000) || tun["gso"] != true {
 +		t.Fatalf("unexpected transformed tun values: %#v", tun)
 +	}
++	var providers map[string]map[string]interface{}
++	if err := json.Unmarshal(got.ProxyProviders, &providers); err != nil {
++		t.Fatalf("decode transformed proxy providers: %v", err)
++	}
++	if providers["local-from-transform"]["type"] != "file" || providers["local-from-transform"]["path"] != "./proxies/transformed.yaml" {
++		t.Fatalf("transformed proxy provider source was not retained: %#v", providers["local-from-transform"])
++	}
 +}
 +
 +func TestReadRuntimeConfigValuesFromEncryptedProfile(t *testing.T) {
@@ -20808,7 +21481,7 @@ index df86317213f3cb47e89f6d944969492e43f430da..9f6c165638253e6b80a54c06e60e067f
 +	if err != nil {
 +		t.Fatal(err)
 +	}
-+	plain := []byte("external-controller: 192.168.1.20:9090\nsecret: profile-secret\ntun:\n  device: tun-from-profile\n")
++	plain := []byte("external-controller: 192.168.1.20:9090\nsecret: profile-secret\ntun:\n  device: tun-from-profile\nproxy-providers:\n  local-encrypted:\n    type: file\n    path: ./proxies/encrypted.yaml\n")
 +	ciphertext, err := age.EncryptBytes(plain, publicKey)
 +	if err != nil {
 +		t.Fatal(err)
@@ -20830,9 +21503,16 @@ index df86317213f3cb47e89f6d944969492e43f430da..9f6c165638253e6b80a54c06e60e067f
 +		got.TunDevice == nil || *got.TunDevice != "tun-from-profile" {
 +		t.Fatalf("unexpected decrypted profile values: %+v", got)
 +	}
++	var providers map[string]map[string]interface{}
++	if err := json.Unmarshal(got.ProxyProviders, &providers); err != nil {
++		t.Fatalf("decode encrypted proxy providers: %v", err)
++	}
++	if providers["local-encrypted"]["type"] != "file" || providers["local-encrypted"]["path"] != "./proxies/encrypted.yaml" {
++		t.Fatalf("encrypted proxy provider source was not retained: %#v", providers["local-encrypted"])
++	}
 +}
 diff --git a/app/src/main/native/mishka_core/transform_bridge.go b/app/src/main/native/mishka_core/transform_bridge.go
-index faef989d41aadcf668a6ecc173a1d9773c42673f..d0dc015546b111addb73c922b206bedb0e8f0b86 100644
+index faef989d41aadcf668a6ecc173a1d9773c42673f..2c11db737a7c10e7b1a78f4d7206e3be97eecd16 100644
 --- a/app/src/main/native/mishka_core/transform_bridge.go
 +++ b/app/src/main/native/mishka_core/transform_bridge.go
 @@ -10,10 +10,12 @@ import (
@@ -20848,7 +21528,7 @@ index faef989d41aadcf668a6ecc173a1d9773c42673f..d0dc015546b111addb73c922b206bedb
  
  	"mishka_core/overrides"
  )
-@@ -59,6 +61,93 @@ type transformCheck struct {
+@@ -59,6 +61,101 @@ type transformCheck struct {
  	Valid bool `json:"valid"`
  }
  
@@ -20860,6 +21540,7 @@ index faef989d41aadcf668a6ecc173a1d9773c42673f..d0dc015546b111addb73c922b206bedb
 +	HasTun             bool            `json:"hasTun"`
 +	Tun                json.RawMessage `json:"tun,omitempty"`
 +	Listeners          json.RawMessage `json:"listeners,omitempty"`
++	ProxyProviders     json.RawMessage `json:"proxyProviders,omitempty"`
 +}
 +
 +func extractRuntimeConfigValues(configBytes []byte) (runtimeConfigValues, error) {
@@ -20899,6 +21580,13 @@ index faef989d41aadcf668a6ecc173a1d9773c42673f..d0dc015546b111addb73c922b206bedb
 +			return runtimeConfigValues{}, fmt.Errorf("marshal listeners: %w", err)
 +		}
 +		values.Listeners = encoded
++	}
++	if raw, ok := root["proxy-providers"]; ok && raw != nil {
++		encoded, err := json.Marshal(raw)
++		if err != nil {
++			return runtimeConfigValues{}, fmt.Errorf("marshal proxy providers: %w", err)
++		}
++		values.ProxyProviders = encoded
 +	}
 +	return values, nil
 +}
@@ -20943,7 +21631,7 @@ index faef989d41aadcf668a6ecc173a1d9773c42673f..d0dc015546b111addb73c922b206bedb
  //
  //export mishkaValidateTransform
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87d11a0df886d8ba4d41313985835cefbdf..baaca855615d7016f6480557abe3856168c8759a 100644
+index 78fcd87d11a0df886d8ba4d41313985835cefbdf..97847603c505b7b83a008212eac2b11e0a17000c 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
 @@ -105,6 +105,9 @@
@@ -20978,7 +21666,15 @@ index 78fcd87d11a0df886d8ba4d41313985835cefbdf..baaca855615d7016f6480557abe38561
      <string name="proxy_fixed">Зафиксировано на этом узле</string>
      <string name="proxy_unfix">Открепить, вернуть автовыбор</string>
  
-@@ -289,9 +300,11 @@
+@@ -280,6 +291,7 @@
+     <string name="provider_updating_single">Обновление %1$s…</string>
+     <string name="provider_updating_progress">%1$d / %2$d</string>
+     <string name="provider_update_failed">Не удалось обновить %1$s: %2$s</string>
++    <string name="provider_upload_file">Загрузить файл</string>
+ 
+     <!-- Settings -->
+     <string name="settings_title">Настройки</string>
+@@ -289,9 +301,11 @@
      <string name="settings_tun_vpn_summary">через VpnService</string>
      <string name="settings_tun_root_tun_summary">собственное TUN-устройство</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -20990,7 +21686,7 @@ index 78fcd87d11a0df886d8ba4d41313985835cefbdf..baaca855615d7016f6480557abe38561
      <string name="settings_vpn_settings">Настройки VPN</string>
      <string name="settings_vpn_summary">Обход локальной сети, перехват DNS, IPv6</string>
      <string name="settings_tun_device">Имя устройства TUN</string>
-@@ -333,7 +346,7 @@
+@@ -333,7 +347,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">Равномерное матовое размытие по всей верхней панели</string>
      <string name="settings_theme_blur_style_progressive_summary">Градиентное размытие с усилением к верхнему краю</string>
      <string name="settings_theme_density_scale">Масштаб интерфейса</string>
@@ -20999,7 +21695,7 @@ index 78fcd87d11a0df886d8ba4d41313985835cefbdf..baaca855615d7016f6480557abe38561
      <string name="settings_theme_floating_bottom_bar">Плавающая нижняя панель</string>
      <string name="settings_theme_floating_bottom_bar_summary">Использовать парящую нижнюю панель на смартфонах</string>
      <string name="settings_theme_floating_bottom_bar_style">Стиль плавающей нижней панели</string>
-@@ -406,8 +419,12 @@
+@@ -406,8 +420,12 @@
      <string name="root_tether_scan_result_title">Обнаруженные интерфейсы</string>
      <string name="root_tether_tproxy_unavailable_warning">В ядре отсутствует модуль xt_TPROXY. Используется резервный режим (меньшая скорость, но соединения работают). Для максимальной производительности TPROXY используйте ядро с поддержкой xt_TPROXY.</string>
      <string name="root_tproxy_tether_note">В режиме TPROXY весь трафик точки доступа направляется через ядро автоматически; переключение «В обход / Через прокси» не требуется.</string>
@@ -21012,7 +21708,7 @@ index 78fcd87d11a0df886d8ba4d41313985835cefbdf..baaca855615d7016f6480557abe38561
      <string name="root_attach_force_reapply_title">Принудительно применять правила при переподключении</string>
      <string name="root_attach_force_reapply_summary">Диагностика: повторно применять правила iptables при каждом подключении приложения к работающему mihomo. Включайте только если правила раздачи пропадают после переподключения.</string>
  
-@@ -506,10 +523,10 @@
+@@ -506,10 +524,10 @@
      <!-- External Control -->
      <string name="external_control_title">Внешний контроллер</string>
      <string name="external_control_ip">Адрес API</string>
@@ -21026,7 +21722,7 @@ index 78fcd87d11a0df886d8ba4d41313985835cefbdf..baaca855615d7016f6480557abe38561
  
      <!-- File Manager -->
      <string name="file_manager_title">Файловый менеджер</string>
-@@ -615,4 +632,6 @@
+@@ -615,4 +633,6 @@
          <item quantity="other">Выбрано %1$d переопределения</item>
      </plurals>
      <string name="subscription_overrides">Переопределения</string>
@@ -21034,7 +21730,7 @@ index 78fcd87d11a0df886d8ba4d41313985835cefbdf..baaca855615d7016f6480557abe38561
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb9a85512f9e6591151dff58fa8031168ef..d5e34841134c98230b763895b61e175625e0faa6 100644
+index cba1bbb9a85512f9e6591151dff58fa8031168ef..204eba2f52f32a3aa87f6b170d60bf8bbe97f51d 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -21069,7 +21765,15 @@ index cba1bbb9a85512f9e6591151dff58fa8031168ef..d5e34841134c98230b763895b61e1756
      <string name="proxy_fixed">已固定到此节点</string>
      <string name="proxy_unfix">解除固定，恢复自动选择</string>
  
-@@ -287,9 +298,11 @@
+@@ -278,6 +289,7 @@
+     <string name="provider_updating_single">正在更新 %1$s…</string>
+     <string name="provider_updating_progress">%1$d / %2$d</string>
+     <string name="provider_update_failed">更新 %1$s 失败: %2$s</string>
++    <string name="provider_upload_file">上传文件</string>
+ 
+     <!-- Settings -->
+     <string name="settings_title">设置</string>
+@@ -287,9 +299,11 @@
      <string name="settings_tun_vpn_summary">通过 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 设备</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -21081,7 +21785,7 @@ index cba1bbb9a85512f9e6591151dff58fa8031168ef..d5e34841134c98230b763895b61e1756
      <string name="settings_vpn_settings">VPN 设置</string>
      <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
      <string name="settings_tun_device">TUN 设备名称</string>
-@@ -331,7 +344,7 @@
+@@ -331,7 +345,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">顶栏整体均匀模糊</string>
      <string name="settings_theme_blur_style_progressive_summary">顶部渐强模糊</string>
      <string name="settings_theme_density_scale">界面缩放</string>
@@ -21090,7 +21794,7 @@ index cba1bbb9a85512f9e6591151dff58fa8031168ef..d5e34841134c98230b763895b61e1756
      <string name="settings_theme_floating_bottom_bar">悬浮底栏</string>
      <string name="settings_theme_floating_bottom_bar_summary">在手机布局中使用悬浮底部导航栏</string>
      <string name="settings_theme_floating_bottom_bar_style">悬浮底栏样式</string>
-@@ -404,8 +417,12 @@
+@@ -404,8 +418,12 @@
      <string name="root_tether_scan_result_title">检测到以下接口</string>
      <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有热点流量由内核规则自动代理，无需切换「绕过 / 走代理」。</string>
@@ -21103,7 +21807,7 @@ index cba1bbb9a85512f9e6591151dff58fa8031168ef..d5e34841134c98230b763895b61e1756
      <string name="root_attach_force_reapply_title">重连时强制重建规则</string>
      <string name="root_attach_force_reapply_summary">诊断开关：每次应用重新连接到正在运行的 mihomo 时强制重建 iptables 规则。仅当重连后热点规则丢失时开启。</string>
  
-@@ -504,10 +521,10 @@
+@@ -504,10 +522,10 @@
      <!-- External Control -->
      <string name="external_control_title">外部控制器</string>
      <string name="external_control_ip">API 地址</string>
@@ -21117,7 +21821,7 @@ index cba1bbb9a85512f9e6591151dff58fa8031168ef..d5e34841134c98230b763895b61e1756
  
      <!-- File Manager -->
      <string name="file_manager_title">文件管理</string>
-@@ -610,4 +627,6 @@
+@@ -610,4 +628,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -21125,7 +21829,7 @@ index cba1bbb9a85512f9e6591151dff58fa8031168ef..d5e34841134c98230b763895b61e1756
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0c5552e038698d6fd6380735f408e7889a..bced318a2adba39fc41128780f7828c6125f837f 100644
+index f6895e0c5552e038698d6fd6380735f408e7889a..1234bed8c1614f74f477a78c0822c543ffc1229f 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
 @@ -103,6 +103,9 @@
@@ -21160,7 +21864,15 @@ index f6895e0c5552e038698d6fd6380735f408e7889a..bced318a2adba39fc41128780f7828c6
      <string name="proxy_fixed">已固定至此節點</string>
      <string name="proxy_unfix">解除固定，恢復自動選擇</string>
  
-@@ -287,9 +298,11 @@
+@@ -278,6 +289,7 @@
+     <string name="provider_updating_single">正在更新 %1$s…</string>
+     <string name="provider_updating_progress">%1$d / %2$d</string>
+     <string name="provider_update_failed">更新 %1$s 失敗: %2$s</string>
++    <string name="provider_upload_file">上傳檔案</string>
+ 
+     <!-- Settings -->
+     <string name="settings_title">設定</string>
+@@ -287,9 +299,11 @@
      <string name="settings_tun_vpn_summary">透過 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 裝置</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -21172,7 +21884,7 @@ index f6895e0c5552e038698d6fd6380735f408e7889a..bced318a2adba39fc41128780f7828c6
      <string name="settings_vpn_settings">VPN 設定</string>
      <string name="settings_vpn_summary">繞過私人網路、DNS 攔截、IPv6</string>
      <string name="settings_tun_device">TUN 裝置名稱</string>
-@@ -331,7 +344,7 @@
+@@ -331,7 +345,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">頂欄整體均勻模糊</string>
      <string name="settings_theme_blur_style_progressive_summary">頂部漸強模糊</string>
      <string name="settings_theme_density_scale">介面縮放</string>
@@ -21181,7 +21893,7 @@ index f6895e0c5552e038698d6fd6380735f408e7889a..bced318a2adba39fc41128780f7828c6
      <string name="settings_theme_floating_bottom_bar">懸浮底部列</string>
      <string name="settings_theme_floating_bottom_bar_summary">在手機版面中使用懸浮底部導覽列</string>
      <string name="settings_theme_floating_bottom_bar_style">懸浮底部列樣式</string>
-@@ -404,8 +417,12 @@
+@@ -404,8 +418,12 @@
      <string name="root_tether_scan_result_title">偵測到以下介面</string>
      <string name="root_tether_tproxy_unavailable_warning">目前核心缺少 xt_TPROXY 模組，已降級為相容路徑（吞吐量略低，連線仍可用）。如需原生 TPROXY 效能，請更換支援該模組的核心。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有熱點流量由核心規則自動代理，無需切換「繞過／經過代理」。</string>
@@ -21194,7 +21906,7 @@ index f6895e0c5552e038698d6fd6380735f408e7889a..bced318a2adba39fc41128780f7828c6
      <string name="root_attach_force_reapply_title">重新連線時強制重建規則</string>
      <string name="root_attach_force_reapply_summary">診斷開關：每次應用程式重新連線到執行中的 mihomo 時強制重建 iptables 規則。僅在重連後熱點規則遺失時開啟。</string>
  
-@@ -504,10 +521,10 @@
+@@ -504,10 +522,10 @@
      <!-- External Control -->
      <string name="external_control_title">外部控制器</string>
      <string name="external_control_ip">API 位址</string>
@@ -21208,7 +21920,7 @@ index f6895e0c5552e038698d6fd6380735f408e7889a..bced318a2adba39fc41128780f7828c6
  
      <!-- File Manager -->
      <string name="file_manager_title">檔案管理</string>
-@@ -610,4 +627,6 @@
+@@ -610,4 +628,6 @@
          <item quantity="other">已選擇 %1$d 項覆寫</item>
      </plurals>
      <string name="subscription_overrides">覆寫</string>
@@ -21216,7 +21928,7 @@ index f6895e0c5552e038698d6fd6380735f408e7889a..bced318a2adba39fc41128780f7828c6
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59731a685c89111fb1890ddfea19d2b9fa5..f191f935f9a6188b64ca6030f00e2010a17fbfc3 100644
+index d1acc59731a685c89111fb1890ddfea19d2b9fa5..aea746541df9706e6aa7eb4bf31f261fff08e75a 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
@@ -21251,7 +21963,15 @@ index d1acc59731a685c89111fb1890ddfea19d2b9fa5..f191f935f9a6188b64ca6030f00e2010
      <string name="proxy_fixed">Fixed to this node</string>
      <string name="proxy_unfix">Unfix, restore automatic selection</string>
  
-@@ -289,9 +300,11 @@
+@@ -280,6 +291,7 @@
+     <string name="provider_updating_single">Updating %1$s…</string>
+     <string name="provider_updating_progress">%1$d / %2$d</string>
+     <string name="provider_update_failed">Failed to update %1$s: %2$s</string>
++    <string name="provider_upload_file">Upload file</string>
+ 
+     <!-- Settings -->
+     <string name="settings_title">Settings</string>
+@@ -289,9 +301,11 @@
      <string name="settings_tun_vpn_summary">via VpnService</string>
      <string name="settings_tun_root_tun_summary">owns TUN device</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -21263,7 +21983,7 @@ index d1acc59731a685c89111fb1890ddfea19d2b9fa5..f191f935f9a6188b64ca6030f00e2010
      <string name="settings_vpn_settings">VPN Settings</string>
      <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
      <string name="settings_tun_device">TUN Device Name</string>
-@@ -333,7 +346,7 @@
+@@ -333,7 +347,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">Uniform frosted blur across the top bar</string>
      <string name="settings_theme_blur_style_progressive_summary">Gradient blur, strongest at the top edge</string>
      <string name="settings_theme_density_scale">Interface Scale</string>
@@ -21272,7 +21992,7 @@ index d1acc59731a685c89111fb1890ddfea19d2b9fa5..f191f935f9a6188b64ca6030f00e2010
      <string name="settings_theme_floating_bottom_bar">Floating Bottom Bar</string>
      <string name="settings_theme_floating_bottom_bar_summary">Use a floating bottom navigation bar on phones</string>
      <string name="settings_theme_floating_bottom_bar_style">Floating Bottom Bar Style</string>
-@@ -406,8 +419,12 @@
+@@ -406,8 +420,12 @@
      <string name="root_tether_scan_result_title">Detected interfaces</string>
      <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
      <string name="root_tproxy_tether_note">TPROXY mode proxies all hotspot traffic via kernel rules; no Bypass/Through toggle needed.</string>
@@ -21285,7 +22005,7 @@ index d1acc59731a685c89111fb1890ddfea19d2b9fa5..f191f935f9a6188b64ca6030f00e2010
      <string name="root_attach_force_reapply_title">Force re-apply on reconnect</string>
      <string name="root_attach_force_reapply_summary">Diagnostic: re-apply iptables rules every time the app reattaches to a running mihomo. Leave off unless tether rules disappear after reconnect.</string>
  
-@@ -506,10 +523,10 @@
+@@ -506,10 +524,10 @@
      <!-- External Control -->
      <string name="external_control_title">External Controller</string>
      <string name="external_control_ip">API Address</string>
@@ -21299,7 +22019,7 @@ index d1acc59731a685c89111fb1890ddfea19d2b9fa5..f191f935f9a6188b64ca6030f00e2010
  
      <!-- File Manager -->
      <string name="file_manager_title">File Manager</string>
-@@ -613,4 +630,6 @@
+@@ -613,4 +631,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>
