@@ -230,11 +230,38 @@ Activity——app context 反查**永远是 null**，被判成「宿主已死」
   当前键值。
 - 重进没有任何加载事件，标题会卡在占位符：复用分支 `post` 从实例现值同步一次标题。
 
+## 11. web 面板整体重做：整套照搬 box.app `ThemedWebView`（防白闪 = hideUntilCommitVisible）
+
+用户反馈修完仍闪烁，要求「完全去除 web 面板，参考 box.app 重做」。§7-§10 在「实例保留 /
+goHome / 判活修复」里兜圈，始终没搬 box.app 真正的防闪机制——**`hideUntilCommitVisible`**：
+内容提交（`onPageCommitVisible`）前 WebView 保持隐藏、只露底色，加载期永远不会露出白帧。
+本轮把 `PanelWebView.kt` 整文件推倒，按 box.app `ThemedWebView` 逐块重写：
+
+- **进入**：每次进入都是新 WebView（`WebViewPreloader.take() ?: WebView(ctx)` 秒建）+
+  `loadUrl(入口 URL)`——重进总是面板首页（box.app 进入逻辑）；
+- **防白闪**：`hideUntilCommitVisible = true`（组件默认；box.app 自带的三个 web 页传 false，
+  但这个机制就是为去白闪而生，我们启用）——内容提交前隐藏 WebView 只露底色，提交才露真身；
+- **返回**：系统返回先退页内历史（`backRequestKey` → `goBack`），退无可退退出页面；
+  `doUpdateVisitedHistory` 转发 canGoBack（box.app 漏了这个回调）；
+- **换面板 / 换深浅色**：`key(isDark, sessionKey)` 重建实例（box.app 同款）+
+  `resetHistoryOnUrlChange` 加载完 `clearHistory()`；
+- **退出**：`onRelease` 销毁实例（box.app 丢 GC，这里 destroy 防泄漏，对外行为一致）；
+- 外层容器手势防抢（`requestDisallowInterceptTouchEvent`）、不透明底色等 box.app 细节一并照搬；
+- **删除 §6-§10 的全部保留型机制**：`PanelWebViewCache` / `goHome` / `cachedHost` 判活等。
+
+与 box.app 的三处差异（都为修 bug，行为只强不弱）：`doUpdateVisitedHistory` 转发；
+http(s) 导航交回 WebView 保留 POST（box.app 一律 `loadUrl` 重放会丢 POST）；
+`onRelease` 里 destroy。
+
+另：本轮开工时工作区快照曾损坏（Mishka 的 .git/源码、补丁目录、kotlin-compiler 与若干
+依赖 jar 丢失），已从成品 zip、上游基线 `5e6743592b9c` 与 Maven / Google Maven 全量恢复，
+verify 复核通过后再动的代码。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
   应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（面板相关断言共 15 条：布局 2 +
-  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ 返回进入 / 不重载 9）。
+  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ box.app web 生命周期 / 防白闪 9）。
 - **Kotlin 类型检查通过**：kotlinc 2.4.20 + 真实依赖（miuix 0.9.4 / JetBrains Compose
   1.12.0 族（miuix 0.9.4 的实际传递版本）/ androidx.activity 1.13.0 / lifecycle 2.11.0 /
   navigationevent 1.1.2 / Robolectric `android-all` 当 android.jar），对 `custom/panel/`

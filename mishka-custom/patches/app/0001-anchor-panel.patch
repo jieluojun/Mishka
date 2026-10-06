@@ -17141,10 +17141,10 @@ index 0000000..cbb28a7
 +internal const val PANEL_URL_METACUBEXD = "https://metacubex.github.io/metacubexd"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
 new file mode 100644
-index 0000000..785625d
+index 0000000..60c8c4b
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,414 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import androidx.compose.foundation.background
@@ -17229,10 +17229,10 @@ index 0000000..785625d
 + * 、标题与图标用 `onSurface`，和 App 其它顶栏同色系、随深浅色主题走。顶栏铺到状态栏后面，
 + * 状态栏图标外观交给 MainActivity 的主题化 enforce，不再强制。
 + *
-+ * **返回进入语义对齐 box.app**：进入总是面板首页，返回先退页内历史、退无可退退出页面。
-+ * 实现上 WebView 实例跨「返回 / 重进」保留、重进**不整页重载**（整页重载正是「闪烁 +
-+ * 卡片缺失」的根源，box.app 每次进入重新 load 也躲不掉），重进由 [goHome] 按历史深度
-+ * 回退到首页；新实例由 [WebViewPreloader] 秒建。
++ * **返回进入逻辑整套照搬 box.app `ThemedWebView`**：每次进入都是新 WebView + 加载入口
++ * （重进总是面板首页），返回先退页内历史、退无可退退出页面；防白闪靠组件的
++ * `hideUntilCommitVisible`（内容提交前隐藏 WebView、只露底色），换面板加载完清 history。
++ * 新实例由 [WebViewPreloader] 秒建。
 + *
 + * @param isDark 跟随 App 主题，交给 WebView 的算法深色
 + */
@@ -17265,9 +17265,8 @@ index 0000000..785625d
 +    var backRequestKey by rememberSaveable { mutableIntStateOf(0) }
 +    var pageTitle by rememberSaveable { mutableStateOf<String?>(null) }
 +    // 瞬态状态不跨「返回 / 重进」保存（box.app openSubpage 进入即清零的等价语义）：
-+    // 重进不重新加载，离开期间的加载结束事件送不进新组合，恢复一个 true 的 refreshing
-+    // 会让顶栏转圈永远停不下来；canGoBack 从「不能返回」起步，等 goHome 落地后由
-+    // doUpdateVisitedHistory 回报真实值
++    // 每次进入都是新实例重新加载，恢复一个 true 的 refreshing 会让顶栏转圈永远
++    // 停不下来；canGoBack 从「不能返回」起步，等加载 / 历史变化回报真实值
 +    var webError by remember { mutableStateOf<String?>(null) }
 +    var refreshing by remember { mutableStateOf(false) }
 +    var canGoBack by remember { mutableStateOf(false) }
@@ -17345,6 +17344,8 @@ index 0000000..785625d
 +                    reloadKey = reloadKey,
 +                    sessionKey = sessionKey,
 +                    backRequestKey = backRequestKey,
++                    hideUntilCommitVisible = true,
++                    resetHistoryOnUrlChange = true,
 +                    modifier = Modifier
 +                        .fillMaxSize()
 +                        .padding(top = innerPadding.calculateTopPadding()),
@@ -17831,26 +17832,22 @@ index 0000000..fb1c8a6
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 new file mode 100644
-index 0000000..b24578b
+index 0000000..74616a0
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
-@@ -0,0 +1,662 @@
+@@ -0,0 +1,620 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import android.annotation.SuppressLint
-+import android.app.Activity
-+import android.app.Application
-+import android.content.ActivityNotFoundException
 +import android.content.Context
-+import android.content.ContextWrapper
 +import android.content.Intent
 +import android.graphics.Color
 +import android.net.Uri
 +import android.os.Build
-+import android.os.Bundle
 +import android.os.Handler
 +import android.os.Looper
 +import android.util.Base64
++import android.view.MotionEvent
 +import android.view.ViewGroup
 +import android.webkit.CookieManager
 +import android.webkit.DownloadListener
@@ -17866,13 +17863,14 @@ index 0000000..b24578b
 +import android.webkit.WebStorage
 +import android.webkit.WebView
 +import android.webkit.WebViewClient
-+import java.util.concurrent.atomic.AtomicBoolean
 +import androidx.activity.compose.rememberLauncherForActivityResult
 +import androidx.activity.result.contract.ActivityResultContracts
++import androidx.compose.foundation.background
 +import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.fillMaxSize
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.getValue
 +import androidx.compose.runtime.key
 +import androidx.compose.runtime.mutableStateOf
@@ -17881,15 +17879,65 @@ index 0000000..b24578b
 +import androidx.compose.runtime.rememberUpdatedState
 +import androidx.compose.runtime.setValue
 +import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color as ComposeColor
 +import androidx.compose.ui.platform.LocalContext
 +import androidx.compose.ui.res.stringResource
 +import androidx.compose.ui.viewinterop.AndroidView
-+import top.yukonga.mishka.R
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.launch
 +import kotlinx.coroutines.withContext
++import top.yukonga.mishka.R
 +import java.net.HttpURLConnection
 +import java.net.URL
++import java.util.concurrent.atomic.AtomicBoolean
++
++/**
++ * 两阶段 WebView 预热器（box.app 同款）：
++ *
++ * 阶段 1（后台线程，立即）：`CookieManager.getInstance()` 触发 Chromium native library 加载；
++ * 阶段 2（主线程，空闲时）：预创建 WebView 实例并暂存，不加载任何 URL、零历史。
++ *
++ * 面板每次**进入**都是新 WebView + `loadUrl(入口)`（box.app 的返回进入逻辑），
++ * `new WebView()` 的 ~500ms 冷启是这套逻辑唯一的构造开销，预热后取用近乎 0ms。
++ * 用 WeakReference 暂存，避免静态持有 WebView 造成泄漏。
++ */
++internal object WebViewPreloader {
++    @Volatile
++    private var prewarmedRef: java.lang.ref.WeakReference<WebView>? = null
++
++    @Volatile
++    private var providerLoaded = false
++
++    /** 在 Activity.onCreate 调：先后台加载 Chromium provider，再在主线程空闲时预创建实例。 */
++    fun preload(context: Context) {
++        if (providerLoaded) return
++        providerLoaded = true
++        Thread {
++            runCatching { CookieManager.getInstance() }
++            Handler(Looper.getMainLooper()).post {
++                Looper.myQueue().addIdleHandler {
++                    if (prewarmedRef?.get() == null) {
++                        runCatching {
++                            val wv = WebView(context.applicationContext).apply {
++                                settings.javaScriptEnabled = true
++                                settings.domStorageEnabled = true
++                            }
++                            prewarmedRef = java.lang.ref.WeakReference(wv)
++                        }
++                    }
++                    false
++                }
++            }
++        }.start()
++    }
++
++    /** 取出预热的 WebView（一次性）；未就绪或已被 GC 回收则返回 null，调用方 fallback 到新建。 */
++    fun take(): WebView? {
++        val wv = prewarmedRef?.get()
++        prewarmedRef = null
++        return wv
++    }
++}
 +
 +/**
 + * 清除面板 WebView 的全部站点数据：缓存 / Cookie / Storage / 表单 / SSL 偏好。
@@ -17960,187 +18008,35 @@ index 0000000..b24578b
 +})();
 +"""
 +
-+private data class WebViewTag(
++private data class TagState(
 +    val reloadKey: Int,
 +    val url: String,
 +    val backRequestKey: Int,
 +)
 +
 +/**
-+ * 两阶段 WebView 预热器（box.app 同款）：
++ * 外部面板用的 WebView——box.app `ThemedWebView` 的忠实移植（返回进入逻辑整套照搬）：
 + *
-+ * 阶段 1（后台线程，立即）：`CookieManager.getInstance()` 触发 Chromium native library 加载；
-+ * 阶段 2（主线程，空闲时）：预创建 WebView 实例并暂存，不加载任何 URL、零历史。
++ *  - **每次进入都是新实例 + `loadUrl(入口 URL)`**（box.app 的进入逻辑：重进总是面板首页）；
++ *  - **返回先退页内历史**（[backRequestKey] → `goBack`），退无可退由宿主退出页面；
++ *  - **防白闪 = [hideUntilCommitVisible]**：内容提交（`onPageCommitVisible`）前 WebView
++ *    保持隐藏，只露底色——加载期永远不露出白帧，这是 box.app 组件自带的防闪机制；
++ *  - **[resetHistoryOnUrlChange]**：换 [url]（切面板）加载完 `clearHistory()`，返回不会
++ *    走进上一个面板的历史；
++ *  - `key(isDark, sessionKey)` 重建（box.app 同款）：换面板 / 换深浅色都换实例。
 + *
-+ * 面板每次**进入**都是新 WebView + `loadUrl(入口)`（box.app 的返回进入逻辑），
-+ * `new WebView()` 的 ~500ms 冷启是这套逻辑唯一的开销，预热后取用近乎 0ms。
-+ * 用 WeakReference 暂存，避免静态持有 WebView 造成泄漏。
-+ */
-+internal object WebViewPreloader {
-+    @Volatile
-+    private var prewarmedRef: java.lang.ref.WeakReference<WebView>? = null
-+
-+    @Volatile
-+    private var providerLoaded = false
-+
-+    /** 在 Activity.onCreate 调：先后台加载 Chromium provider，再在主线程空闲时预创建实例。 */
-+    fun preload(context: Context) {
-+        if (providerLoaded) return
-+        providerLoaded = true
-+        Thread {
-+            runCatching { CookieManager.getInstance() }
-+            Handler(Looper.getMainLooper()).post {
-+                Looper.myQueue().addIdleHandler {
-+                    if (prewarmedRef?.get() == null) {
-+                        runCatching {
-+                            val wv = WebView(context.applicationContext).apply {
-+                                settings.javaScriptEnabled = true
-+                                settings.domStorageEnabled = true
-+                            }
-+                            prewarmedRef = java.lang.ref.WeakReference(wv)
-+                        }
-+                    }
-+                    false
-+                }
-+            }
-+        }.start()
-+    }
-+
-+    /** 取出预热的 WebView（一次性）；未就绪或已被 GC 回收则返回 null，调用方 fallback 到新建。 */
-+    fun take(): WebView? {
-+        val wv = prewarmedRef?.get()
-+        prewarmedRef = null
-+        return wv
-+    }
-+}
-+
-+/** Compose 视图的 context 可能是 ContextWrapper 链，逐层解包找宿主 Activity。 */
-+private tailrec fun Context.findActivityOrNull(): Activity? = when (this) {
-+    is Activity -> this
-+    is ContextWrapper -> baseContext.findActivityOrNull()
-+    else -> null
-+}
-+
-+/**
-+ * 跨「返回 / 重进」保留面板 WebView 实例。
-+ *
-+ * 返回退出面板页时 [androidx.compose.ui.viewinterop.AndroidView] 被拆掉，但 WebView 本身
-+ * 不销毁、不丢弃：重进把**同一个实例**挂回视图树。没有这一层，每次重进都整页重载——
-+ * 白闪（闪烁）+ 面板 SPA 重新初始化拉数据（卡片逐个冒出来，看着像缺卡），这两个症状
-+ * 正是「重新加载」本身，box.app 的「每次进入新建 + loadUrl」也躲不掉。
-+ *
-+ * 语义仍按 box.app 的返回进入逻辑：重进用 [goHome] 回面板首页（历史回退，不重载）。
-+ * 销毁点只有两个：
-+ *  - [sessionKey] 变化（切面板）→ 销毁重建，避免带上一个面板的 history / JS 全局 / 登录态；
-+ *  - Activity 销毁（recreate / finish）→ 销毁，WebView 持有 Activity 的 Context，留着就是泄漏。
-+ *
-+ * **宿主判活必须用 acquire 时记下的 Activity 身份**（[cachedHost]），不能拿
-+ * `webView.context` 反查：预热器按 box.app 的做法给的是 application context，反查永远
-+ * 是 null，会被误判「宿主已死」而销毁重建——现象就是「杀后台重进后第一次进正常、
-+ * 返回再进就闪烁」（重建 + 整页 loadUrl）。
-+ */
-+internal object PanelWebViewCache {
-+    private var cached: WebView? = null
-+    private var cachedSessionKey = Int.MIN_VALUE
-+    private var cachedHost: java.lang.ref.WeakReference<Activity>? = null
-+    private var watcherInstalled = false
-+
-+    /**
-+     * 取复用实例；返回 `webView` 与「是否新建」。新建的调用方要 `loadUrl(入口)`；
-+     * 复用的**绝不能**再整页 load（那正是闪烁/缺卡的来源），重进回首页交给 [goHome]。
-+     */
-+    fun acquire(context: Context, sessionKey: Int): Pair<WebView, Boolean> {
-+        installWatcher(context)
-+        val host = context.findActivityOrNull()
-+        val existing = cached
-+        if (existing != null && host != null && cachedHost?.get() === host && cachedSessionKey == sessionKey) {
-+            (existing.parent as? ViewGroup)?.removeView(existing)
-+            return existing to false
-+        }
-+        destroy()
-+        return (WebViewPreloader.take() ?: WebView(context)).also {
-+            cached = it
-+            cachedSessionKey = sessionKey
-+            cachedHost = host?.let { h -> java.lang.ref.WeakReference(h) }
-+        } to true
-+    }
-+
-+    /** 销毁缓存实例（幂等）。 */
-+    fun destroy() {
-+        cached?.let { webView ->
-+            (webView.parent as? ViewGroup)?.removeView(webView)
-+            runCatching {
-+                webView.stopLoading()
-+                webView.destroy()
-+            }
-+        }
-+        cached = null
-+        cachedSessionKey = Int.MIN_VALUE
-+        cachedHost = null
-+    }
-+
-+    private fun installWatcher(context: Context) {
-+        if (watcherInstalled) return
-+        val app = context.applicationContext as? Application ?: return
-+        watcherInstalled = true
-+        app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-+            override fun onActivityDestroyed(activity: Activity) {
-+                // 只认持有 WebView 的那个宿主；用 acquire 时记下的身份比对（见类型 KDoc）
-+                if (cachedHost?.get() === activity) destroy()
-+            }
-+
-+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
-+            override fun onActivityStarted(activity: Activity) {}
-+            override fun onActivityResumed(activity: Activity) {}
-+            override fun onActivityPaused(activity: Activity) {}
-+            override fun onActivityStopped(activity: Activity) {}
-+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
-+        })
-+    }
-+}
-+
-+/**
-+ * 回到面板首页（入口项）——「重进总是面板首页」，但**不能**整页 `loadUrl`（那是白闪本体）。
-+ *
-+ * 按**历史深度**回退 `history.go(-currentIndex)`：一步退回会话的第一个真实入口项，
-+ * SPA 走 popstate 把路由切回首页，不重新下载、不白闪、卡片在内存里原样在。
-+ * 不做 URL 精确匹配——面板服务器的重定向（`…/ui` → `…/ui/`、补 `#/`）会让入口项的
-+ * 实际 URL 和配置串对不上，匹配一失败就退化成整页重载（上一版闪烁的另一半原因）。
-+ * 跳过开头可能残留的 `about:blank` 项；已经在入口项时直接返回。
-+ */
-+internal fun WebView.goHome() {
-+    val list = copyBackForwardList()
-+    val cur = list.currentIndex
-+    if (cur <= 0) return
-+    var homeIdx = 0
-+    while (homeIdx < cur && (list.getItemAtIndex(homeIdx)?.url ?: "about:blank") == "about:blank") {
-+        homeIdx++
-+    }
-+    if (homeIdx >= cur) return
-+    evaluateJavascript("history.go(${homeIdx - cur});", null)
-+}
-+
-+/**
-+ * 外部面板用的 WebView（box.app `ThemedWebView` 的 Mishka 版）。
-+ *
-+ * 几件容易被忽略但必须有的事：
-+ *  1. **mixedContentMode 必须放开**：面板多为 https 站点（metacubexd 等），而控制器在
-+ *     `http://127.0.0.1:<port>`，WebView 默认的 `MIXED_CONTENT_NEVER_ALLOW` 会直接掐掉
-+ *     面板调 API 的请求，表现为「页面能开、数据全空」且只在 logcat 里留一行。
-+ *  2. **[sessionKey] 变了要重建 WebView**：切面板只 `loadUrl` 会保留上一个面板的
-+ *     history 与 JS 全局状态，`key()` 包一层让 Compose 整个换掉实例。
-+ *  3. **文本缩放锁 100**：不锁的话系统字体放大后桌面端面板布局会溢出。
-+ *  4. **返回进入语义对齐 box.app，但重进不整页重载**：进入总是面板首页，返回先退页内
-+ *     历史（[backRequestKey] → `goBack`），退无可退由宿主退出页面。实现上 WebView 实例
-+ *     跨「返回 / 重进」保留（[PanelWebViewCache]）——整页重载正是「闪烁 + 卡片缺失」的
-+ *     根源（box.app 每次进入重新 load，两个症状它同样躲不掉）；重进用 [goHome] 按历史
-+ *     深度回退到入口项（SPA popstate 切回首页，**不整页重载**）。新实例由 [WebViewPreloader]
-+ *     秒建；换 [url] 加载完清 history（box.app `resetHistoryOnUrlChange`），
-+ *     返回不会走进上一个面板的历史。
++ * 与 box.app 的差异（都为修 bug，行为只强不弱）：
++ *  1. `doUpdateVisitedHistory` 转发 canGoBack——SPA 的 pushState/回退不触发 `onPageFinished`，
++ *     没有它「返回先退页内历史」在面板子页里永远不生效（box.app 漏了这个回调）；
++ *  2. http(s) 导航交回 WebView（`return false`，保留 POST 语义），其余 scheme 交系统
++ *     （box.app 是一律 `loadUrl` 重放，POST 会丢）；
++ *  3. `onRelease` 里 `destroy()`（box.app 丢给 GC，顺手防泄漏，对外行为一致）。
 + *
 + * @param reloadKey 自增即触发一次 `reload()`
 + * @param sessionKey 自增即销毁重建 WebView（切面板时用）
-+ * @param backRequestKey 自增即 `goBack()`（供返回手势回调）
++ * @param backRequestKey 自增即 `goBack()`（供返回手势/系统返回回调）
++ * @param hideUntilCommitVisible true 时内容提交前隐藏 WebView（去白闪），默认开启
++ * @param resetHistoryOnUrlChange true 时换 URL 加载完清 history（返回不进上一个面板）
 + */
 +@SuppressLint("SetJavaScriptEnabled")
 +@Composable
@@ -18148,9 +18044,11 @@ index 0000000..b24578b
 +    url: String,
 +    isDark: Boolean,
 +    reloadKey: Int,
-+    sessionKey: Int,
-+    backRequestKey: Int,
++    sessionKey: Int = 0,
++    backRequestKey: Int = 0,
 +    modifier: Modifier = Modifier,
++    hideUntilCommitVisible: Boolean = true,
++    resetHistoryOnUrlChange: Boolean = true,
 +    onPageFinished: ((String?) -> Unit)? = null,
 +    onTitleChange: ((String?) -> Unit)? = null,
 +    onWebError: ((String?) -> Unit)? = null,
@@ -18158,15 +18056,45 @@ index 0000000..b24578b
 +) {
 +    val context = LocalContext.current
 +    val scope = rememberCoroutineScope()
++    val surfaceColor = if (isDark) Color.BLACK else Color.WHITE
 +
++    // 内容是否已提交可见（hideUntilCommitVisible 的开关）。放稳定 holder、key 化重置：
++    // 记忆化 WebViewClient 闭包抓 State 实例，remember(url…) 换实例会让回调写到旧对象上
++    val contentVisible = remember { mutableStateOf(!hideUntilCommitVisible) }
++    LaunchedEffect(url, isDark, hideUntilCommitVisible) {
++        contentVisible.value = !hideUntilCommitVisible
++    }
++    // 换 URL 的加载完成后清一次 history（box.app resetHistoryOnUrlChange）
++    val clearHistoryAfterNextPageFinished = remember { AtomicBoolean(false) }
++
++    // Cookie 持久化（登录态跨会话）
 +    val cookieManager = remember { CookieManager.getInstance() }
 +    DisposableEffect(cookieManager) {
 +        onDispose { runCatching { cookieManager.flush() } }
 +    }
 +
-+    // 回调包一层 rememberUpdatedState：WebViewClient / WebChromeClient 只在 factory 里挂一次，
-+    // 直接闭包捕获的话屏幕重组后就一直调的是首帧那批 lambda（拿到的都是旧快照）
-+    // 这两条是 app 自己的提示，跟 WebView 报的英文错误混在一起显示，所以必须跟着系统语言
++    data class PendingSave(
++        val displayName: String,
++        val mimeType: String,
++        val bytes: ByteArray,
++    )
++
++    data class PendingHttpDownload(
++        val url: String,
++        val fileName: String,
++        val mimeType: String,
++        val userAgent: String,
++        val cookie: String?,
++        val referer: String,
++    )
++
++    var pendingSave by remember { mutableStateOf<PendingSave?>(null) }
++    var pendingHttpDownload by remember { mutableStateOf<PendingHttpDownload?>(null) }
++    var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
++
++    // 回调包一层 rememberUpdatedState：clients 只在 remember 里建一次，直接闭包捕获的话
++    // 屏幕重组后就一直调的是首帧那批 lambda（拿到的都是旧快照）。
++    // 这两条是 app 自己的提示，跟 WebView 报的英文错误混在一起显示，必须跟着系统语言
 +    val currentSaveFailed = rememberUpdatedState(stringResource(R.string.panel_save_failed))
 +    val currentNoFilePicker = rememberUpdatedState(stringResource(R.string.panel_no_file_picker))
 +    val currentOnPageFinished = rememberUpdatedState(onPageFinished)
@@ -18174,51 +18102,58 @@ index 0000000..b24578b
 +    val currentOnWebError = rememberUpdatedState(onWebError)
 +    val currentOnCanGoBack = rememberUpdatedState(onCanGoBackChange)
 +
-+    // SAF 存盘的一次性中转：launcher 回调拿不到别的状态，只能先挂这里
-+    var pendingBytes by remember { mutableStateOf<Triple<String, String, ByteArray>?>(null) }
-+    var pendingDownload by remember { mutableStateOf<PendingDownload?>(null) }
-+    var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
-+
-+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
++    val saveFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
 +        val outUri = result.data?.data
-+        val bytes = pendingBytes
-+        val download = pendingDownload
-+        pendingBytes = null
-+        pendingDownload = null
-+        if (outUri == null) return@rememberLauncherForActivityResult
-+        scope.launch {
-+            val ok = runCatching {
-+                withContext(Dispatchers.IO) {
-+                    when {
-+                        bytes != null -> {
-+                            context.contentResolver.openOutputStream(outUri)?.use { it.write(bytes.third) }
-+                                ?: error("openOutputStream failed")
++        val payload = pendingSave
++        val httpPayload = pendingHttpDownload
++        pendingSave = null
++        pendingHttpDownload = null
++        if (outUri != null && httpPayload != null) {
++            scope.launch {
++                runCatching {
++                    withContext(Dispatchers.IO) {
++                        val conn = (URL(httpPayload.url).openConnection() as HttpURLConnection).apply {
++                            instanceFollowRedirects = true
++                            setRequestProperty("User-Agent", httpPayload.userAgent)
++                            setRequestProperty("Referer", httpPayload.referer)
++                            httpPayload.cookie?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Cookie", it) }
 +                        }
-+                        download != null -> {
-+                            val conn = URL(download.url).openConnection() as HttpURLConnection
-+                            conn.requestMethod = "GET"
-+                            conn.setRequestProperty("User-Agent", download.userAgent)
-+                            if (!download.cookie.isNullOrBlank()) conn.setRequestProperty("Cookie", download.cookie)
-+                            if (download.referer.isNotBlank()) conn.setRequestProperty("Referer", download.referer)
-+                            conn.connect()
-+                            conn.inputStream.use { input ->
-+                                context.contentResolver.openOutputStream(outUri)?.use { output ->
-+                                    input.copyTo(output)
-+                                } ?: error("openOutputStream failed")
-+                            }
-+                            conn.disconnect()
++                        conn.inputStream.use { input ->
++                            context.contentResolver.openOutputStream(outUri)?.use { output ->
++                                input.copyTo(output)
++                            } ?: error("openOutputStream failed")
 +                        }
++                        runCatching { conn.disconnect() }
 +                    }
++                }.onFailure {
++                    currentOnWebError.value?.invoke(currentSaveFailed.value)
 +                }
-+            }.isSuccess
-+            if (!ok) currentOnWebError.value?.invoke(currentSaveFailed.value)
++            }
++            return@rememberLauncherForActivityResult
++        }
++        if (outUri == null || payload == null) return@rememberLauncherForActivityResult
++        runCatching {
++            context.contentResolver.openOutputStream(outUri)?.use { it.write(payload.bytes) }
++        }.onFailure {
++            currentOnWebError.value?.invoke(currentSaveFailed.value)
 +        }
 +    }
 +
++    fun normalizeAcceptType(raw: String?): String {
++        val v = raw?.trim().orEmpty()
++        if (v.isBlank() || v == "*/*") return "*/*"
++        if (v.startsWith(".")) {
++            val ext = v.removePrefix(".").lowercase()
++            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
++            return mime ?: "*/*"
++        }
++        return v
++    }
++
 +    val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-+        val callback = pendingFileCallback
++        val cb = pendingFileCallback
 +        pendingFileCallback = null
-+        if (callback == null) return@rememberLauncherForActivityResult
++        if (cb == null) return@rememberLauncherForActivityResult
 +        val uris = ArrayList<Uri>()
 +        val clip = result.data?.clipData
 +        if (clip != null) {
@@ -18226,8 +18161,10 @@ index 0000000..b24578b
 +        } else {
 +            result.data?.data?.let { uris.add(it) }
 +        }
-+        callback.onReceiveValue(uris.toTypedArray().takeIf { it.isNotEmpty() })
++        cb.onReceiveValue(uris.toTypedArray().takeIf { it.isNotEmpty() })
 +    }
++
++    // 回调的 rememberUpdatedState 见上（在 launcher 之前声明，供其错误提示用）
 +
 +    val jsBridge = remember {
 +        object {
@@ -18245,23 +18182,18 @@ index 0000000..b24578b
 +                    }
 +                val name = if (rawName.contains('.')) rawName.trimEnd('.') else "$rawName.$ext"
 +                val data = runCatching { Base64.decode(base64 ?: return, Base64.DEFAULT) }.getOrNull() ?: return
-+                pendingBytes = Triple(name, mime, data)
++                pendingSave = PendingSave(displayName = name, mimeType = mime, bytes = data)
 +                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
 +                    addCategory(Intent.CATEGORY_OPENABLE)
 +                    type = mime
 +                    putExtra(Intent.EXTRA_TITLE, name)
 +                }
 +                Handler(Looper.getMainLooper()).post {
-+                    runCatching { saveLauncher.launch(intent) }
-+                        .onFailure { currentOnWebError.value?.invoke(currentSaveFailed.value) }
++                    runCatching { saveFileLauncher.launch(intent) }
 +                }
 +            }
 +        }
 +    }
-+
-+    // box.app resetHistoryOnUrlChange 同款：换 URL 加载完清一次 history，
-+    // 返回键不会走进上一个面板 / 上一个入口的历史
-+    val clearHistoryAfterNextPageFinished = remember { AtomicBoolean(false) }
 +
 +    val viewClient = remember {
 +        object : WebViewClient() {
@@ -18278,13 +18210,18 @@ index 0000000..b24578b
 +                }.getOrDefault(false)
 +            }
 +
++            override fun onPageCommitVisible(view: WebView?, url: String?) {
++                // 防白闪的关键帧：真实内容已提交，可以露出来了
++                contentVisible.value = true
++            }
++
 +            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
-+                // SPA 的 pushState / popstate（含 goHome 的历史回退）不触发 onPageFinished，
-+                // canGoBack 只能从这里跟上——否则「系统返回先退页内历史」在面板子页里永远不生效
++                // SPA 的 pushState / popstate 不触发 onPageFinished，canGoBack 只能从这里跟上
 +                currentOnCanGoBack.value?.invoke(view?.canGoBack() == true)
 +            }
 +
 +            override fun onPageFinished(view: WebView?, url: String?) {
++                contentVisible.value = true
 +                // 换 URL 的那次加载完成后清 history：canGoBack 回报的是清完后的值
 +                if (clearHistoryAfterNextPageFinished.getAndSet(false)) {
 +                    runCatching { view?.clearHistory() }
@@ -18329,82 +18266,117 @@ index 0000000..b24578b
 +            ): Boolean {
 +                pendingFileCallback?.onReceiveValue(null)
 +                pendingFileCallback = filePathCallback
-+                val intent = runCatching { fileChooserParams?.createIntent() }.getOrNull()
-+                    ?: Intent(Intent.ACTION_GET_CONTENT).apply {
++
++                val intent = try {
++                    fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
 +                        addCategory(Intent.CATEGORY_OPENABLE)
 +                        type = "*/*"
 +                    }
-+                try {
-+                    filePickerLauncher.launch(intent)
-+                } catch (e: ActivityNotFoundException) {
++                } catch (_: Throwable) {
++                    Intent(Intent.ACTION_GET_CONTENT).apply {
++                        addCategory(Intent.CATEGORY_OPENABLE)
++                        type = "*/*"
++                    }
++                }
++
++                // 有些站点把 ".json" 这类后缀当 type 传，归一成 MIME
++                val accept = normalizeAcceptType(fileChooserParams?.acceptTypes?.firstOrNull())
++                if (intent.type.isNullOrBlank() || intent.type?.startsWith(".") == true) {
++                    intent.type = accept
++                }
++
++                val canHandle = intent.resolveActivity(context.packageManager) != null
++                if (!canHandle) {
 +                    pendingFileCallback?.onReceiveValue(null)
 +                    pendingFileCallback = null
 +                    currentOnWebError.value?.invoke(currentNoFilePicker.value)
++                    return true
++                }
++                try {
++                    filePickerLauncher.launch(intent)
++                } catch (_: Throwable) {
++                    pendingFileCallback?.onReceiveValue(null)
++                    pendingFileCallback = null
 +                }
 +                return true
 +            }
 +        }
 +    }
 +
-+    // 下载监听独立成实例，factory 与 update 共用：复用 WebView 时闭包里必须是当前组合的
-+    // launcher / 状态，否则 SAF 存盘一去不回。referer 跟着 url 参数走
-+    val currentReferer = rememberUpdatedState(url)
 +    val downloadListener = remember {
 +        DownloadListener { downloadUrl, userAgent, contentDisposition, mimeType, _ ->
-+            // blob:/data: 走上面注入的 JS bridge，这里只接真正的 http 下载
++            // DownloadManager 收不到 blob:/data:，那两类走 JS bridge
 +            if (downloadUrl.startsWith("blob:") || downloadUrl.startsWith("data:")) return@DownloadListener
++
++            val fileName = URLUtil.guessFileName(downloadUrl, contentDisposition, mimeType)
 +            val mime = mimeType?.ifBlank { "application/octet-stream" } ?: "application/octet-stream"
-+            val name = URLUtil.guessFileName(downloadUrl, contentDisposition, mimeType)
-+            pendingDownload = PendingDownload(
++            pendingHttpDownload = PendingHttpDownload(
 +                url = downloadUrl,
++                fileName = fileName,
++                mimeType = mime,
 +                userAgent = userAgent ?: "",
 +                cookie = CookieManager.getInstance().getCookie(downloadUrl),
-+                referer = currentReferer.value,
++                referer = url,
 +            )
 +            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
 +                addCategory(Intent.CATEGORY_OPENABLE)
 +                type = mime
-+                putExtra(Intent.EXTRA_TITLE, name)
++                putExtra(Intent.EXTRA_TITLE, fileName)
 +            }
 +            Handler(Looper.getMainLooper()).post {
-+                runCatching { saveLauncher.launch(intent) }
-+                    .onFailure { currentOnWebError.value?.invoke(currentSaveFailed.value) }
++                runCatching { saveFileLauncher.launch(intent) }
 +            }
 +        }
 +    }
 +
-+    // key 只认 sessionKey：切面板才换实例；isDark 变化由 update 就地调节，
-+    // 不必也不能重挂——重挂 AndroidView 意味着重新走一遍 factory
-+    key(sessionKey) {
-+        Box(modifier = modifier.fillMaxSize()) {
++    // key 照 box.app：isDark / sessionKey 变化都重建实例（换面板、换深浅色）
++    key(isDark, sessionKey) {
++        Box(
++            modifier = modifier
++                .fillMaxSize()
++                .background(if (isDark) ComposeColor.Black else ComposeColor.White),
++        ) {
 +            AndroidView(
 +                factory = { ctx ->
 +                    // 先取到面板入口 URL：apply 的 receiver 是 WebView，它自己就有个
 +                    // getUrl() 属性，里面裸写 `url` 会被它遮蔽成「当前页地址」
 +                    val entryUrl = url
-+                    // 实例跨「返回 / 重进」保留（box.app 语义、非 box.app 实现）：
-+                    // 复用实例绝不整页 load——整页重载正是「闪烁 + 卡片缺失」的根源；
-+                    // 重进由 goHome 历史回退到首页，新建实例（预热器秒建）才加载入口
-+                    val (webView, fresh) = PanelWebViewCache.acquire(ctx, sessionKey)
-+                    webView.apply {
++                    // 每次进入都是新实例 + 加载入口（box.app 进入逻辑：重进总是面板首页）；
++                    // 预热器负责把 new WebView() 的 ~500ms 冷启压掉
++                    (WebViewPreloader.take() ?: WebView(ctx)).apply {
 +                        layoutParams = ViewGroup.LayoutParams(
 +                            ViewGroup.LayoutParams.MATCH_PARENT,
 +                            ViewGroup.LayoutParams.MATCH_PARENT,
 +                        )
-+                        if (!fresh) runCatching { onResume() }
++
++                        // 别让外层容器（弹层 / 滑动容器）抢走面板里的纵向滑动手势
++                        setOnTouchListener { v, event ->
++                            when (event.actionMasked) {
++                                MotionEvent.ACTION_DOWN,
++                                MotionEvent.ACTION_MOVE -> v.parent?.requestDisallowInterceptTouchEvent(true)
++                                MotionEvent.ACTION_UP,
++                                MotionEvent.ACTION_CANCEL -> v.parent?.requestDisallowInterceptTouchEvent(false)
++                            }
++                            false
++                        }
++
 +                        cookieManager.setAcceptCookie(true)
 +                        cookieManager.setAcceptThirdPartyCookies(this, true)
 +                        addJavascriptInterface(jsBridge, "MishkaAndroid")
 +                        settings.apply {
 +                            javaScriptEnabled = true
 +                            domStorageEnabled = true
++                            @Suppress("DEPRECATION")
++                            databaseEnabled = true
 +                            cacheMode = WebSettings.LOAD_DEFAULT
 +                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 +                            allowFileAccess = true
 +                            allowContentAccess = true
 +                            javaScriptCanOpenWindowsAutomatically = true
++                            blockNetworkLoads = false
 +                            useWideViewPort = true
 +                            loadWithOverviewMode = true
++                            // 防止系统字体缩放把桌面端面板布局撑爆
 +                            textZoom = 100
 +                            // API 33+ 的算法深色会自动跳过已支持 prefers-color-scheme 的站点；
 +                            // 29-32 只有已废弃的 forceDark 可用，再往下系统 WebView 没有深色能力
@@ -18415,36 +18387,20 @@ index 0000000..b24578b
 +                                forceDark = if (isDark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF
 +                            }
 +                        }
++
 +                        webViewClient = viewClient
 +                        webChromeClient = chromeClient
 +                        setDownloadListener(downloadListener)
-+                        setBackgroundColor(
-+                            if (isDark) Color.BLACK else Color.WHITE,
-+                        )
-+                        if (fresh) {
-+                            // 新建实例加载入口 URL；之后 reload / goBack 由 update 的差值判定接手
-+                            loadUrl(entryUrl)
-+                            tag = WebViewTag(reloadKey = reloadKey, url = entryUrl, backRequestKey = backRequestKey)
-+                        } else {
-+                            // 重进固定回面板首页：goHome 按历史深度回退（SPA popstate），
-+                            // 不整页重载、不白闪、卡片原样在
-+                            // tag 对齐当前键值：导航 pop 式重进时 reloadKey/backRequestKey 都是
-+                            // 新零值，留着上一次会话的 tag 差值会误触发 reload()/goBack()
-+                            tag = WebViewTag(reloadKey = reloadKey, url = entryUrl, backRequestKey = backRequestKey)
-+                            runCatching { goHome() }
-+                            // 重进没有任何加载事件，标题从实例现值同步（post 出组合再写状态）
-+                            post { currentOnTitleChange.value?.invoke(title?.ifBlank { null }) }
-+                        }
++
++                        // 不透明底色，避免导航转场合成路径下的渲染冲突（box.app 同款）
++                        setBackgroundColor(if (isDark) Color.BLACK else Color.WHITE)
++
++                        loadUrl(entryUrl)
++                        tag = TagState(reloadKey = reloadKey, url = entryUrl, backRequestKey = backRequestKey)
 +                    }
 +                },
 +                update = { webView ->
-+                    // 每次组合重新接线：clients / bridge / 下载监听的闭包都指向「当前组合」的
-+                    // 回调与 launcher。复用实例若只在 factory 挂一次，重进后收到的全是上一次
-+                    // 进页面那批死 lambda——标题、错误横幅、转圈、SAF 存盘全部失联
-+                    webView.webViewClient = viewClient
-+                    webView.webChromeClient = chromeClient
-+                    webView.addJavascriptInterface(jsBridge, "MishkaAndroid")
-+                    webView.setDownloadListener(downloadListener)
++                    // 深色模式同步（每次 isDark 变化重新应用；实例本身在 key(isDark,…) 已重建）
 +                    webView.settings.apply {
 +                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
 +                            if (isAlgorithmicDarkeningAllowed != isDark) isAlgorithmicDarkeningAllowed = isDark
@@ -18455,48 +18411,51 @@ index 0000000..b24578b
 +                            if (forceDark != target) forceDark = target
 +                        }
 +                    }
-+                    webView.setBackgroundColor(
-+                        if (isDark) Color.BLACK else Color.WHITE,
-+                    )
-+                    val last = webView.tag as? WebViewTag
++                    webView.setBackgroundColor(if (isDark) Color.BLACK else Color.WHITE)
++
++                    // 防白闪：内容提交前隐藏 WebView（露底色），提交后才露真身
++                    if (hideUntilCommitVisible) {
++                        webView.alpha = if (contentVisible.value) 1f else 0f
++                        webView.visibility = if (contentVisible.value) WebView.VISIBLE else WebView.INVISIBLE
++                    } else {
++                        webView.alpha = 1f
++                        webView.visibility = WebView.VISIBLE
++                    }
++
++                    val last = webView.tag as? TagState
 +                    val urlChanged = last?.url != url
 +                    val needsReload = last?.reloadKey != reloadKey
 +                    val backRequested = last?.backRequestKey != backRequestKey
-+                    when {
-+                        urlChanged -> {
-+                            // box.app resetHistoryOnUrlChange=true 同款：换 URL（切面板）加载完
-+                            // 清 history，返回键不会走进上一个面板的历史
++                    if (urlChanged) {
++                        contentVisible.value = !hideUntilCommitVisible
++                        if (resetHistoryOnUrlChange) {
 +                            clearHistoryAfterNextPageFinished.set(true)
 +                            currentOnCanGoBack.value?.invoke(false)
-+                            webView.loadUrl(url)
 +                        }
-+                        needsReload -> webView.reload()
-+                        backRequested -> {
-+                            if (webView.canGoBack()) webView.goBack()
-+                            currentOnCanGoBack.value?.invoke(webView.canGoBack())
-+                        }
-+                    }
-+                    if (urlChanged || needsReload || backRequested) {
-+                        webView.tag = WebViewTag(reloadKey, url, backRequestKey)
++                        webView.loadUrl(url)
++                        webView.tag = TagState(reloadKey, url, backRequestKey)
++                    } else if (needsReload) {
++                        contentVisible.value = !hideUntilCommitVisible
++                        webView.reload()
++                        webView.tag = TagState(reloadKey, url, backRequestKey)
++                    } else if (backRequested) {
++                        if (webView.canGoBack()) webView.goBack()
++                        currentOnCanGoBack.value?.invoke(webView.canGoBack())
++                        webView.tag = TagState(reloadKey, url, backRequestKey)
 +                    }
 +                },
 +                onRelease = { released ->
-+                    // 实例保留给下次重进，这里只暂挂：停掉 DOM 定时器 / 动画（加载与
-+                    // WebSocket 不受影响）。销毁只发生在切面板 / Activity 销毁（缓存内）
-+                    runCatching { released.onPause() }
++                    // box.app 是丢给 GC；这里顺手 destroy 防泄漏，对外行为一致（退出即弃）
++                    runCatching {
++                        released.stopLoading()
++                        released.destroy()
++                    }
 +                },
 +                modifier = Modifier.fillMaxSize(),
 +            )
 +        }
 +    }
 +}
-+
-+private data class PendingDownload(
-+    val url: String,
-+    val userAgent: String,
-+    val cookie: String?,
-+    val referer: String,
-+)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
 new file mode 100644
 index 0000000..0434c16

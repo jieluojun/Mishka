@@ -208,30 +208,30 @@ assert_not_contains 'forceLightStatusBars' \
 assert_contains 'WebViewPreloader' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
   'panel WebView is prewarmed box.app-style for instant entry'
-assert_contains 'PanelWebViewCache' \
+assert_contains 'hideUntilCommitVisible' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView instance survives back/re-enter instead of reloading'
-assert_contains 'val (webView, fresh) = PanelWebViewCache.acquire' \
+  'panel WebView carries box.app hideUntilCommitVisible anti-flash'
+assert_contains 'onPageCommitVisible' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'only a freshly created WebView loads URL (re-enter never cold-reloads)'
-assert_contains 'cachedHost?.get() === host' \
+  'panel WebView stays hidden until content commit (no white flash)'
+assert_contains 'key(isDark, sessionKey)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'reuse liveness checks recorded host identity, never webView.context (app-context pitfall)'
-assert_contains 'history.go(' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  're-entering returns to the panel home via a history walk, not a page reload'
+  'panel WebView remounts box.app-style on theme/session change'
 assert_contains 'loadUrl(entryUrl)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'a fresh WebView loads the panel entry URL'
+  'each panel entry builds a fresh WebView and loads the panel home URL'
 assert_contains 'clearHistoryAfterNextPageFinished' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
   'URL change clears history so back never walks into the previous panel'
 assert_contains 'doUpdateVisitedHistory' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
   'canGoBack tracks SPA history changes so back dispatch matches box.app'
-assert_contains 'released.onPause()' \
+assert_contains 'released.destroy()' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'leaving the panel only pauses the retained WebView'
+  'leaving the panel disposes the WebView instance (box.app enter/exit lifecycle)'
+assert_not_contains 'PanelWebViewCache' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'no WebView retention across re-enter (box.app lifecycle, rebuilt each entry)'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"
