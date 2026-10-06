@@ -2429,10 +2429,10 @@ index 0000000000000000000000000000000000000000..44c20972a2ecb1d97174a1979fef1df1
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..fd65e1f0fabb80c0470254695309869a77ad3580
+index 0000000000000000000000000000000000000000..2226ff053ace7242f3fcf47a3213faf7e1ea82ee
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
-@@ -0,0 +1,752 @@
+@@ -0,0 +1,761 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -2942,6 +2942,7 @@ index 0000000000000000000000000000000000000000..fd65e1f0fabb80c0470254695309869a
 +                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
 +                endActions = {
 +                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditRef(ref) }
++                    Spacer(Modifier.width(RefActionGap))
 +                    CompactTextButton(text = "删行") { onDeleteRef(ref) }
 +                },
 +                onClick = { onLocate(ref.line) },
@@ -3016,6 +3017,7 @@ index 0000000000000000000000000000000000000000..fd65e1f0fabb80c0470254695309869a
 +                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
 +                endActions = {
 +                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditRef(ref) }
++                    Spacer(Modifier.width(RefActionGap))
 +                    CompactTextButton(text = "删行") { onDeleteRef(ref) }
 +                },
 +                onClick = { onLocate(ref.line) },
@@ -3025,6 +3027,13 @@ index 0000000000000000000000000000000000000000..fd65e1f0fabb80c0470254695309869a
 +}
 +
 +// ==================== 小组件 ====================
++
++/**
++ * 引用行两个行内操作之间的间距。miuix 的 BasicComponent 把 endActions 直接塞进一个
++ * **没有 arrangement 的 Row**，两个实心按钮各带 12dp 内边距，贴在一起时看着像一整块
++ * 胶囊、也容易误触。取 8dp 与卡片底部「定位 / 改名 / 删除」那一行的 spacedBy 对齐。
++ */
++private val RefActionGap = 8.dp
 +
 +@Composable
 +private fun CompactTextButton(
@@ -20080,7 +20089,7 @@ index 93088aa5afde73d5211efcbcf89d48ee3868a337..3eeddd12299063087a9a6a410e0f2458
                          verticalAlignment = Alignment.CenterVertically,
                          horizontalArrangement = Arrangement.spacedBy(8.dp),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
-index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d0238169ddb660 100644
+index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..91c33aa312162e29e21ae88ffafe8d90ed1b5469 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 @@ -5,10 +5,12 @@ import androidx.compose.animation.core.animateDpAsState
@@ -20112,16 +20121,18 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
  import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
  import top.yukonga.mishka.ui.component.CardSegment
  import top.yukonga.mishka.ui.component.ListPopupDefaults.MenuPositionProvider
-@@ -76,6 +80,8 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
+@@ -76,7 +80,10 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
  import top.yukonga.mishka.ui.platform.IconLoader
  import top.yukonga.mishka.ui.theme.StatusColors
  import top.yukonga.mishka.ui.util.WideContentBox
 +import top.yukonga.mishka.viewmodel.DelayFailKind
 +import top.yukonga.mishka.viewmodel.DelayTestEvent
  import top.yukonga.mishka.viewmodel.ProxyGroupUi
++import top.yukonga.mishka.viewmodel.isBuiltInOutbound
  import top.yukonga.mishka.viewmodel.ProxyUiState
  import top.yukonga.mishka.viewmodel.ProxyViewModel
-@@ -131,6 +137,28 @@ fun ProxyScreen(
+ import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+@@ -131,6 +138,28 @@ fun ProxyScreen(
          singleColumnAnimating = false
      }
      val showGlobalGroup = viewModel?.showGlobalGroup?.collectAsStateWithLifecycle()?.value != false
@@ -20150,7 +20161,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
      val scrollBehavior = MiuixScrollBehavior()
      // 全局模式下 GLOBAL 是唯一出口，无视开关必须可选
      val globalModeActive = uiState.mode == ProxyViewModel.MODE_GLOBAL
-@@ -198,7 +226,7 @@ fun ProxyScreen(
+@@ -198,7 +227,7 @@ fun ProxyScreen(
  
      // 排序 + 分块上提缓存：content lambda 随 expandedGroups/testingNodes 等任一变化整体重跑，
      // 不缓存则每次重组对每个展开组重排几百节点。key 取 groups 而非 uiState，懒填充跳过收起组
@@ -20159,7 +20170,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
  
      val backdrop = rememberBlurBackdrop()
      val blurActive = backdrop != null
-@@ -298,7 +326,7 @@ fun ProxyScreen(
+@@ -298,7 +327,7 @@ fun ProxyScreen(
                                      ListPopupColumn {
                                          DropdownImpl(
                                              text = stringResource(R.string.proxy_single_column),
@@ -20168,7 +20179,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
                                              isSelected = singleColumn,
                                              index = 0,
                                              onSelectedIndexChange = {
-@@ -308,7 +336,7 @@ fun ProxyScreen(
+@@ -308,7 +337,7 @@ fun ProxyScreen(
                                          )
                                          DropdownImpl(
                                              text = stringResource(R.string.proxy_show_global_group),
@@ -20177,7 +20188,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
                                              // 勾选态跟实际结果走，不是偏好值
                                              isSelected = showGlobalGroup || globalModeActive,
                                              index = 1,
-@@ -320,7 +348,7 @@ fun ProxyScreen(
+@@ -320,7 +349,7 @@ fun ProxyScreen(
                                          )
                                          DropdownImpl(
                                              text = stringResource(R.string.proxy_refresh_icon),
@@ -20186,7 +20197,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
                                              isSelected = false,
                                              index = 2,
                                              onSelectedIndexChange = {
-@@ -329,6 +357,36 @@ fun ProxyScreen(
+@@ -329,6 +358,36 @@ fun ProxyScreen(
                                                  showPopup.value = false
                                              },
                                          )
@@ -20223,12 +20234,16 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
                                      }
                                  }
                              }
-@@ -397,9 +455,14 @@ fun ProxyScreen(
+@@ -397,9 +456,18 @@ fun ProxyScreen(
                          // 收起动画未跑完的组仍产出行 item，靠行高收缩表达收起
                          val rowsPresent = isExpanded || group.name in retainedGroups
                          // 恒按 2 个分行：行数与 key 不随单列开关变化，morph 全在行内部
 +                        val displayNodes = if (hideUnavailable) {
-+                            group.all.filter { group.delays[it] != -1 }
++                            // 内置出站（DIRECT / REJECT / GLOBAL …）从不拨测，延迟恒被记成
++                            // 超时，跟着一起滤掉就没法用了——一律豁免，只滤真正的坏节点
++                            group.all.filter {
++                                isBuiltInOutbound(it, group.nodeTypes[it].orEmpty()) || group.delays[it] != -1
++                            }
 +                        } else {
 +                            group.all
 +                        }
@@ -20239,7 +20254,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
                              }
                          } else {
                              emptyList()
-@@ -422,6 +485,8 @@ fun ProxyScreen(
+@@ -422,6 +490,8 @@ fun ProxyScreen(
                                  ProxyGroupHeader(
                                      group = group,
                                      isExpanded = isExpanded,
@@ -20248,7 +20263,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
                                      iconCacheVersion = iconCacheVersion,
                                      isTesting = group.name in uiState.testingGroups,
                                      onTestDelay = { viewModel?.testGroupDelay(group.name) },
-@@ -511,6 +576,8 @@ private fun HoldDownEffect(holdDown: Boolean, interactionSource: MutableInteract
+@@ -511,6 +581,8 @@ private fun HoldDownEffect(holdDown: Boolean, interactionSource: MutableInteract
  private fun ProxyGroupHeader(
      group: ProxyGroupUi,
      isExpanded: Boolean,
@@ -20257,7 +20272,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
      iconCacheVersion: Int,
      isTesting: Boolean,
      onTestDelay: () -> Unit,
-@@ -539,13 +606,14 @@ private fun ProxyGroupHeader(
+@@ -539,13 +611,14 @@ private fun ProxyGroupHeader(
          verticalAlignment = Alignment.CenterVertically,
      ) {
          // 左侧图标
@@ -20279,7 +20294,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
  
          // 中间：组名 + 当前节点
          Column(modifier = Modifier.weight(1f)) {
-@@ -581,7 +649,7 @@ private fun ProxyGroupHeader(
+@@ -581,7 +654,7 @@ private fun ProxyGroupHeader(
              Spacer(Modifier.width(8.dp))
          }
          Text(
@@ -20288,7 +20303,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
              fontSize = 14.sp,
              color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
          )
-@@ -769,6 +837,7 @@ private fun ProxyNodeRow(
+@@ -769,6 +842,7 @@ private fun ProxyNodeRow(
      }
  }
  
@@ -20296,7 +20311,7 @@ index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..6d582216fefd3bd0a95573cb57d02381
  @Composable
  private fun ProxyNodeCard(
      name: String,
-@@ -803,9 +872,19 @@ private fun ProxyNodeCard(
+@@ -803,9 +877,19 @@ private fun ProxyNodeCard(
                  if (isSelectable) {
                      Modifier
                          .squircleSurface(color = backgroundColor, cornerRadius = 12.dp)
@@ -20888,7 +20903,7 @@ index 4b576a625df5fc5bd0e8709ea02ed4a5fffd15bb..e0a0abe09c2df43d2af99b52b85f5fb3
          if (_uiState.value.refresh != null) return
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
-index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f92b0666c1 100644
+index f684c37f745e67f9f1768c2f5b58327a8119d2aa..1090a26daaee3f5ded2e17b8647ba5f3111916e7 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 @@ -4,6 +4,11 @@ import android.util.Log
@@ -20924,7 +20939,35 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
  import top.yukonga.mishka.data.database.SelectionDao
  import top.yukonga.mishka.data.database.SelectionEntity
  import top.yukonga.mishka.domain.repository.MihomoRepository
-@@ -64,6 +74,32 @@ data class ProxyUiState(
+@@ -30,6 +40,27 @@ import top.yukonga.mishka.platform.PlatformStorage
+ import top.yukonga.mishka.platform.StorageKeys
+ import top.yukonga.mishka.util.describe
+ 
++/**
++ * mihomo 内置出站名：`DIRECT` / `REJECT` / `REJECT-DROP` / `PASS` / `COMPATIBLE`，外加 `GLOBAL` 组。
++ * 内核按全大写注册，但手写配置里混大小写很常见，故一律小写比对。
++ */
++private val BuiltInOutboundNames = setOf("direct", "reject", "reject-drop", "pass", "compatible", "global")
++
++/** 内置出站的类型字段（/proxies 的 `type`）；只在节点被改名、名字兜不住时起作用。 */
++private val BuiltInOutboundTypes = setOf("direct", "reject", "rejectdrop", "pass", "compatible")
++
++/**
++ * 是否 mihomo 内置出站。「隐藏不可用」按 delay == -1（healthcheck 超时）过滤，而内置出站
++ * 从不参与拨测——history 恒为 0，于是一开开关它们就整组消失，偏偏 DIRECT / REJECT / GLOBAL
++ * 是任何配置都得留着的兜底出口，隐藏后只能关掉开关才看得见。
++ *
++ * **只按名字判定**：类型取自 /proxies 的 `type`，而内置出站经常拿不到（GLOBAL 的类型是
++ * Selector，与用户自建的代理组无从区分；部分 provider 视角下类型是空的），纯靠类型判断
++ * 会静默失效——名字是唯一在每条路径上都存在的信号。类型只作改名场景的补充兜底。
++ */
++fun isBuiltInOutbound(name: String, type: String = ""): Boolean =
++    name.trim().lowercase() in BuiltInOutboundNames || type.trim().lowercase() in BuiltInOutboundTypes
++
+ @Immutable
+ data class ProxyGroupUi(
+     val name: String = "",
+@@ -64,6 +95,32 @@ data class ProxyUiState(
      val mode: String = "",
  )
  
@@ -20957,7 +21000,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
  class ProxyViewModel(
      private val selectionDao: SelectionDao? = null,
      private val getActiveUuid: () -> String? = { null },
-@@ -73,6 +109,10 @@ class ProxyViewModel(
+@@ -73,6 +130,10 @@ class ProxyViewModel(
      private val _uiState = MutableStateFlow(ProxyUiState())
      val uiState: StateFlow<ProxyUiState> = _uiState.asStateFlow()
  
@@ -20968,7 +21011,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
      // 节点排序状态：sortKeyIndex * 2 + (if reverse 1 else 0)
      // 0/1=默认 升/降，2/3=名称 升/降，4/5=延迟 升/降
      private val _sortOption = MutableStateFlow(loadInitialSortOption())
-@@ -86,6 +126,14 @@ class ProxyViewModel(
+@@ -86,6 +147,14 @@ class ProxyViewModel(
      private val _showGlobalGroup = MutableStateFlow(loadInitialShowGlobalGroup())
      val showGlobalGroup: StateFlow<Boolean> = _showGlobalGroup.asStateFlow()
  
@@ -20983,7 +21026,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
      private var repository: MihomoRepository? = null
  
      // mihomo 重启切 client 时取消旧的 loadProxies 协程，防止其 HTTP 响应已读完但 UI 写回
-@@ -123,6 +171,30 @@ class ProxyViewModel(
+@@ -123,6 +192,30 @@ class ProxyViewModel(
      private fun loadInitialShowGlobalGroup(): Boolean =
          storage?.getString(StorageKeys.PROXY_SHOW_GLOBAL_GROUP, "true") != "false"
  
@@ -21014,7 +21057,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
      fun setRepository(repo: MihomoRepository?) {
          if (repository === repo) return
          loadJob?.cancel()
-@@ -248,6 +320,7 @@ class ProxyViewModel(
+@@ -248,6 +341,7 @@ class ProxyViewModel(
          val target = groupOf(group) ?: return
          // 不可选组 PUT 必定 400，提前挡下省一个 RTT
          if (!target.isSelectable) return
@@ -21022,7 +21065,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
          viewModelScope.launch {
              repo.selectProxy(group, proxy).onSuccess {
                  if (repository !== repo) return@onSuccess
-@@ -264,6 +337,11 @@ class ProxyViewModel(
+@@ -264,6 +358,11 @@ class ProxyViewModel(
                          .toPersistentList()
                  )
                  saveSelection(group, proxy)
@@ -21034,7 +21077,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
              }
          }
      }
-@@ -302,7 +380,7 @@ class ProxyViewModel(
+@@ -302,7 +401,7 @@ class ProxyViewModel(
              try {
                  // 限并发：上百节点齐发会互抢带宽，测出的延迟失真
                  val semaphore = Semaphore(GROUP_DELAY_CONCURRENCY)
@@ -21043,7 +21086,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
                      nodes.map { nodeName ->
                          async {
                              semaphore.withPermit {
-@@ -318,6 +396,11 @@ class ProxyViewModel(
+@@ -318,6 +417,11 @@ class ProxyViewModel(
                      }.awaitAll()
                  }
                  if (repository !== repo) return@launch
@@ -21055,7 +21098,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
                  loadProxies()
              } finally {
                  // 正常结束、repo 切换、被取消都要摘标记，漏掉哪条路径该组就永久转圈
-@@ -340,11 +423,13 @@ class ProxyViewModel(
+@@ -340,11 +444,13 @@ class ProxyViewModel(
                  // 延迟结果写入节点全局 history.delay，loadProxies 再从 history 读回并分发到
                  // 所有引用该节点的组，保证跨组延迟一致；provider 节点走 provider healthcheck 端点
                  val provider = nodeProviderMap[nodeName]
@@ -21070,7 +21113,7 @@ index f684c37f745e67f9f1768c2f5b58327a8119d2aa..d9961a417dacca8065b8d6cb1a6f31f9
                  if (repository !== repo) return@launch
                  loadProxies()
              } finally {
-@@ -355,6 +440,27 @@ class ProxyViewModel(
+@@ -355,6 +461,27 @@ class ProxyViewModel(
          }
      }
  
