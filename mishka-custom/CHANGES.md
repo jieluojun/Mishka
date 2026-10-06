@@ -64,7 +64,25 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
 顶栏的「清除面板数据」= WebView 缓存 / Cookie / Storage / 表单 / SSL 偏好全清，面板里
 保存的设置与登录态会一起没，弹窗确认后再执行。
 
-## 4. 修 CI 首轮报错（上一版打包后的构建日志）
+## 4. 面板顶栏改成单行（地址与按钮并排）
+
+上一版顶栏用的是 `AdaptiveTopAppBar`，手机上走的是 miuix 的**可折叠大标题** `TopAppBar`：
+大标题自己占一行压在按钮下面，地址只剩两三行的宽度还被折叠动画吃掉。
+
+改成 `PanelTopBar`——照 box.app 的面板顶栏来，一条固定 52dp 的单行：
+
+```
+[返回] [地址，weight(1f)，单行截断] [刷新] [面板清单] [清缓存]
+```
+
+- 地址文字 **15sp**（原来走的是 `main` 17sp，跟三个 40dp 按钮挤一行时会被截得只剩域名开头）。
+- 顶栏自己吃掉状态栏/刘海高度：Scaffold 只在**没有** topBar 时才补 inset，有 topBar 时
+  `innerPadding` 直接等于 topBar 实测高度，所以 inset 得在顶栏里加。
+- 顶栏文字改成**地址优先**（`panelUrl ?: pageTitle ?: R.string.panel_title`）：页面没给
+  `<title>` 时 WebView 会把 URL 当 title 报上来，但各家面板的 title 写得五花八门，
+  这一行本来就是给「我现在连的是哪个面板」看的。
+
+## 5. 修 CI 首轮报错（上一版打包后的构建日志）
 
 日志：`app/src/main/res/values/strings.xml:142` 合并资源时挂掉，
 `panel_clear_cache_message` 里那个 `panel's` 的**裸撇号**没转义，AAPT2 报
@@ -92,7 +110,10 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
   不是代码问题（一个 6 行的正确 Composable 同样崩）。
 - 资源侧额外做了 AAPT 敏感字符扫描（裸撇号 / `&` / 尖括号），四个语言全部干净。
 - `BASELINE.txt` 的 `patch_sha256` 已随新补丁更新为
-  `49ee9229ae5f4413...`（完整值见该文件）。
+  `619912b43ea1b9915ebe90efe15b1d6ce6ccfad515e3cb8f99ebacee5667139c`。
+- 这一轮类型检查又抓到一个必炸的编译错误（也已修）：`PanelScreen.kt` 用了
+  `WindowInsets.systemBars.union(...)` 但没导 `androidx.compose.foundation.layout.union`
+  —— `union` 是顶层中缀扩展函数，跟 `only` 一样得单独 import。
 - 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑到配置阶段就被 OOM 掉了，**本次没有跑通
   编译验证**。落地后请先跑一次：
 

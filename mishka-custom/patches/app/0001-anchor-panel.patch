@@ -17123,21 +17123,29 @@ index 0000000..cbb28a7
 +internal const val PANEL_URL_METACUBEXD = "https://metacubex.github.io/metacubexd"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
 new file mode 100644
-index 0000000..7f901b9
+index 0000000..c405b42
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,401 @@
 +package top.yukonga.mishka.custom.panel
 +
++import androidx.compose.foundation.background
 +import androidx.compose.foundation.layout.Arrangement
 +import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.Column
 +import androidx.compose.foundation.layout.Row
 +import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.WindowInsets
++import androidx.compose.foundation.layout.WindowInsetsSides
++import androidx.compose.foundation.layout.displayCutout
 +import androidx.compose.foundation.layout.fillMaxSize
 +import androidx.compose.foundation.layout.fillMaxWidth
 +import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.only
 +import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.systemBars
++import androidx.compose.foundation.layout.union
++import androidx.compose.foundation.layout.windowInsetsPadding
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.getValue
@@ -17165,14 +17173,12 @@ index 0000000..7f901b9
 +import top.yukonga.mishka.platform.ProxyServiceBridge
 +import top.yukonga.mishka.platform.ProxyState
 +import top.yukonga.mishka.platform.showToast
-+import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
 +import top.yukonga.mishka.ui.theme.StatusColors
 +import top.yukonga.miuix.kmp.basic.ButtonDefaults
 +import top.yukonga.miuix.kmp.basic.Card
 +import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 +import top.yukonga.miuix.kmp.basic.Icon
 +import top.yukonga.miuix.kmp.basic.IconButton
-+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 +import top.yukonga.miuix.kmp.basic.Scaffold
 +import top.yukonga.miuix.kmp.basic.Text
 +import top.yukonga.miuix.kmp.basic.TextButton
@@ -17199,6 +17205,94 @@ index 0000000..7f901b9
 + *
 + * @param isDark 跟随 App 主题，交给 WebView 的算法深色
 + */
++/**
++ * 面板顶栏：一整行排开，不做大标题折叠。
++ *
++ * 用 [AdaptiveTopAppBar] 时手机上标题自己占一行、压在按钮下面（miuix 的 `TopAppBar` 是
++ * 可折叠大标题），地址只剩两三行的宽度；box.app 的面板顶栏是一条固定 52dp 的单行，
++ * 这里照它来：[返回] [地址，占满剩余宽度，单行截断] [刷新] [面板清单] [清缓存]。
++ *
++ * 顶栏高度要自己吃掉状态栏/刘海的高度——Scaffold 只在 **没有** topBar 时才补 inset，
++ * 有 topBar 时 `innerPadding` 直接等于 topBar 实测高度。
++ */
++private val PanelTopBarHeight = 52.dp
++
++@Composable
++private fun PanelTopBar(
++    text: String,
++    refreshing: Boolean,
++    canRefresh: Boolean,
++    canClear: Boolean,
++    onBack: () -> Unit,
++    onRefresh: () -> Unit,
++    onOpenPanels: () -> Unit,
++    onClearCache: () -> Unit,
++) {
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .background(MiuixTheme.colorScheme.surface)
++            .windowInsetsPadding(
++                WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top),
++            )
++            .height(PanelTopBarHeight)
++            .padding(end = 4.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        IconButton(onClick = onBack) {
++            Icon(
++                imageVector = MiuixIcons.Back,
++                contentDescription = stringResource(R.string.common_back),
++                tint = MiuixTheme.colorScheme.onSurface,
++            )
++        }
++        Text(
++            text = text,
++            modifier = Modifier.weight(1f),
++            // 这一行要跟另外三个 40dp 的按钮挤在同一行，字号按地址条处理：
++            // 默认 main(17sp) 太长会一路截到只剩域名开头，15sp 在 360dp 屏上还能显示大半条
++            fontSize = 15.sp,
++            color = MiuixTheme.colorScheme.onSurface,
++            maxLines = 1,
++            overflow = TextOverflow.Ellipsis,
++        )
++        IconButton(
++            onClick = onRefresh,
++            enabled = canRefresh && !refreshing,
++        ) {
++            if (refreshing) {
++                CircularProgressIndicator(
++                    size = 20.dp,
++                    strokeWidth = 2.dp,
++                )
++            } else {
++                Icon(
++                    imageVector = MiuixIcons.Refresh,
++                    contentDescription = stringResource(R.string.common_refresh),
++                    tint = MiuixTheme.colorScheme.onSurface,
++                )
++            }
++        }
++        IconButton(onClick = onOpenPanels) {
++            Icon(
++                imageVector = MiuixIcons.GridView,
++                contentDescription = stringResource(R.string.panel_title),
++                tint = MiuixTheme.colorScheme.onSurface,
++            )
++        }
++        IconButton(
++            onClick = onClearCache,
++            enabled = canClear,
++        ) {
++            Icon(
++                imageVector = MiuixIcons.Delete,
++                contentDescription = stringResource(R.string.panel_clear_cache),
++                tint = MiuixTheme.colorScheme.onSurface,
++            )
++        }
++    }
++}
++
 +@Composable
 +fun PanelScreen(
 +    isDark: Boolean,
@@ -17274,65 +17368,33 @@ index 0000000..7f901b9
 +        onBackCompleted = { backRequestKey += 1 },
 +    )
 +
-+    val scrollBehavior = MiuixScrollBehavior()
 +    val notRunningHint = stringResource(R.string.panel_local_not_running)
 +    val clearedMsg = stringResource(R.string.common_cleared)
 +    val clearFailedMsg = stringResource(R.string.panel_clear_cache_failed)
++    val panelTitleFallback = stringResource(R.string.panel_title)
 +
 +    Scaffold(
 +        topBar = {
-+            AdaptiveTopAppBar(
-+                title = pageTitle?.takeIf { it.isNotBlank() } ?: stringResource(R.string.panel_title),
-+                scrollBehavior = scrollBehavior,
-+                navigationIcon = {
-+                    IconButton(onClick = onBack) {
-+                        Icon(
-+                            imageVector = MiuixIcons.Back,
-+                            contentDescription = stringResource(R.string.common_back),
-+                            tint = MiuixTheme.colorScheme.onSurface,
-+                        )
-+                    }
++            // 一整行排开：返回 · 地址 · 刷新 / 面板清单 / 清缓存。
++            // 这里刻意不用 AdaptiveTopAppBar——手机上它是「大标题折叠」式，标题自己占一行
++            // 压在按钮下面，地址只能截成两三行；box.app 的面板顶栏就是一条 52dp 的单行。
++            PanelTopBar(
++                // 地址优先：页面自己报的 <title> 各家面板写得五花八门（有的就是空串），
++                // 而这一行本来就是给「我现在连的是哪个面板」看的
++                text = panelUrl
++                    ?: pageTitle?.takeIf { it.isNotBlank() }
++                    ?: panelTitleFallback,
++                refreshing = refreshing,
++                canRefresh = panelUrl != null,
++                canClear = !clearing,
++                onBack = onBack,
++                onRefresh = {
++                    webError = null
++                    refreshing = true
++                    reloadKey += 1
 +                },
-+                actions = {
-+                    IconButton(
-+                        onClick = {
-+                            webError = null
-+                            refreshing = true
-+                            reloadKey += 1
-+                        },
-+                        enabled = panelUrl != null,
-+                    ) {
-+                        if (refreshing) {
-+                            CircularProgressIndicator(
-+                                size = 20.dp,
-+                                strokeWidth = 2.dp,
-+                            )
-+                        } else {
-+                            Icon(
-+                                imageVector = MiuixIcons.Refresh,
-+                                contentDescription = stringResource(R.string.common_refresh),
-+                                tint = MiuixTheme.colorScheme.onSurface,
-+                            )
-+                        }
-+                    }
-+                    IconButton(onClick = { showSheet = true }) {
-+                        Icon(
-+                            imageVector = MiuixIcons.GridView,
-+                            contentDescription = stringResource(R.string.panel_title),
-+                            tint = MiuixTheme.colorScheme.onSurface,
-+                        )
-+                    }
-+                    IconButton(
-+                        onClick = { showClearDialog = true },
-+                        enabled = !clearing,
-+                    ) {
-+                        Icon(
-+                            imageVector = MiuixIcons.Delete,
-+                            contentDescription = stringResource(R.string.panel_clear_cache),
-+                            tint = MiuixTheme.colorScheme.onSurface,
-+                        )
-+                    }
-+                },
++                onOpenPanels = { showSheet = true },
++                onClearCache = { showClearDialog = true },
 +            )
 +        },
 +    ) { innerPadding ->

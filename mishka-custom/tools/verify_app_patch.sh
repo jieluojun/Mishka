@@ -177,6 +177,9 @@ assert_contains 'mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW' \
 assert_contains 'NavigationBackHandler(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
   'system back is routed into the panel page history first'
+assert_contains 'private val PanelTopBarHeight = 52.dp' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'panel top bar is a compact single row (address beside the action buttons)'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"
