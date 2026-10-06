@@ -198,6 +198,21 @@ assert_contains 'private const val BATCH_DELAY_TIMEOUT_MS = 2000' \
 assert_contains 'fun noteUserInteraction()' \
   app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
   'batch speed test yields to list scrolling'
+assert_contains 'webView.destroy()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'panel WebView is destroyed on dispose (leaking one per entry starves Chromium renderers)'
+assert_contains 'private const val PANEL_URL_SETTLE_MS = 400L' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'controller address must settle before the panel page is reloaded (entry flicker)'
+assert_contains 'settledUrl ?: PanelStore.cachedLocalUrl(context)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'panel keeps the last known URL instead of tearing the WebView down when the address blips'
+assert_contains 'text = pageTitle?.takeIf { it.isNotBlank() }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'panel top bar shows the page title like box.app (not a permanent URL)'
+assert_contains '(delays[name] ?: 0) <= 0' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
+  'group-delay fast path counts failed nodes too (otherwise no summary toast)'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"

@@ -17123,10 +17123,10 @@ index 0000000..cbb28a7
 +internal const val PANEL_URL_METACUBEXD = "https://metacubex.github.io/metacubexd"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
 new file mode 100644
-index 0000000..c405b42
+index 0000000..2aca9c0
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
-@@ -0,0 +1,401 @@
+@@ -0,0 +1,442 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import androidx.compose.foundation.background
@@ -17168,6 +17168,7 @@ index 0000000..c405b42
 +import androidx.navigationevent.NavigationEventInfo
 +import androidx.navigationevent.compose.NavigationBackHandler
 +import androidx.navigationevent.compose.rememberNavigationEventState
++import kotlinx.coroutines.delay
 +import kotlinx.coroutines.launch
 +import top.yukonga.mishka.R
 +import top.yukonga.mishka.platform.ProxyServiceBridge
@@ -17209,13 +17210,27 @@ index 0000000..c405b42
 + * 面板顶栏：一整行排开，不做大标题折叠。
 + *
 + * 用 [AdaptiveTopAppBar] 时手机上标题自己占一行、压在按钮下面（miuix 的 `TopAppBar` 是
-+ * 可折叠大标题），地址只剩两三行的宽度；box.app 的面板顶栏是一条固定 52dp 的单行，
-+ * 这里照它来：[返回] [地址，占满剩余宽度，单行截断] [刷新] [面板清单] [清缓存]。
++ * 可折叠大标题）；box.app 的面板顶栏是一条固定 52dp 的单行，这里照它来：
++ * [返回] [页面标题，占满剩余宽度，单行截断] [刷新] [面板清单] [清缓存]。
++ *
++ * 标题是面板页面自己报的 `<title>`，随面板内导航变化——mihomo_box 这类面板会把它设成
++ * 「地址 | 代理」这样的「当前 top 页」，比常驻一条 URL 更能说明「我现在在哪一页」。
 + *
 + * 顶栏高度要自己吃掉状态栏/刘海的高度——Scaffold 只在 **没有** topBar 时才补 inset，
 + * 有 topBar 时 `innerPadding` 直接等于 topBar 实测高度。
 + */
 +private val PanelTopBarHeight = 52.dp
++
++/**
++ * 控制器地址的稳定窗口（ms）。
++ *
++ * 服务起停 / 重启时 `ProxyServiceBridge.status` 会在 Stopped ↔ Starting ↔ Running 之间来回
++ * 抖，端口也可能先给默认值。`panelUrl` 每抖一次，[PanelWebView] 的 `update` 判定 urlChanged
++ * 就 `loadUrl` 整页重灌一次——进面板连闪几下、卡片渲染到一半就停住，都是这么来的。
++ * 所以「已经有一个能用的地址」时，新地址要先稳定 [PANEL_URL_SETTLE_MS] 才换；
++ * 首次取值（还没有任何地址）不用等，直接上。
++ */
++private const val PANEL_URL_SETTLE_MS = 400L
 +
 +@Composable
 +private fun PanelTopBar(
@@ -17249,9 +17264,10 @@ index 0000000..c405b42
 +        Text(
 +            text = text,
 +            modifier = Modifier.weight(1f),
-+            // 这一行要跟另外三个 40dp 的按钮挤在同一行，字号按地址条处理：
-+            // 默认 main(17sp) 太长会一路截到只剩域名开头，15sp 在 360dp 屏上还能显示大半条
-+            fontSize = 15.sp,
++            // 与 box.app 的 `MiuixTheme.textStyles.title2` 对齐（miuix 的 title2 ≈ 17sp）。
++            // 这里不直接引 textStyles：Mishka 用的是 miuix 0.9.4、box.app 是 0.9.0，
++            // 字段名跨小版本不敢保证，而字号是写死的、视觉等价
++            fontSize = 17.sp,
 +            color = MiuixTheme.colorScheme.onSurface,
 +            maxLines = 1,
 +            overflow = TextOverflow.Ellipsis,
@@ -17342,12 +17358,32 @@ index 0000000..c405b42
 +        liveLocalUrl?.let { PanelStore.cacheLocalUrl(context, it) }
 +    }
 +
++    /**
++     * 稳定后的本地面板地址。见 [PANEL_URL_SETTLE_MS]。
++     *
++     * 另外：地址暂时算不出来时**沿用上一个**，而不是回落到 null。回落 null 会把
++     * [PanelWebView] 从组合里摘掉（销毁重建＝整页重来一次），等地址回来再建一个，
++     * 于是进面板先闪一下白/黑；不回落就没有这次销毁。
++     */
++    var settledUrl by rememberSaveable { mutableStateOf<String?>(null) }
++    LaunchedEffect(liveLocalUrl) {
++        val target = liveLocalUrl ?: return@LaunchedEffect
++        if (settledUrl == null || settledUrl == target) {
++            settledUrl = target
++            return@LaunchedEffect
++        }
++        delay(PANEL_URL_SETTLE_MS)
++        settledUrl = target
++    }
++
 +    val selectedPanel = panels.firstOrNull { it.id == selectedId } ?: localPanel
 +    val panelUrl = if (selectedPanel.id == PANEL_ID_LOCAL) {
-+        liveLocalUrl ?: PanelStore.cachedLocalUrl(context)
++        settledUrl ?: PanelStore.cachedLocalUrl(context)
 +    } else {
 +        selectedPanel.url
 +    }
++    // 本地面板且代理没在跑：把提示盖在 WebView 上，而不是撤掉 WebView
++    val showNotRunning = selectedPanel.id == PANEL_ID_LOCAL && status.state != ProxyState.Running
 +
 +    fun applySelected(panel: PanelEntry) {
 +        if (selectedId != panel.id) {
@@ -17375,14 +17411,13 @@ index 0000000..c405b42
 +
 +    Scaffold(
 +        topBar = {
-+            // 一整行排开：返回 · 地址 · 刷新 / 面板清单 / 清缓存。
++            // 一整行排开：返回 · 页面标题 · 刷新 / 面板清单 / 清缓存。
 +            // 这里刻意不用 AdaptiveTopAppBar——手机上它是「大标题折叠」式，标题自己占一行
-+            // 压在按钮下面，地址只能截成两三行；box.app 的面板顶栏就是一条 52dp 的单行。
++            // 压在按钮下面；box.app 的面板顶栏就是一条 52dp 的单行。
 +            PanelTopBar(
-+                // 地址优先：页面自己报的 <title> 各家面板写得五花八门（有的就是空串），
-+                // 而这一行本来就是给「我现在连的是哪个面板」看的
-+                text = panelUrl
-+                    ?: pageTitle?.takeIf { it.isNotBlank() }
++                // 与 box.app 一致：显示页面自己报的 <title>，拿不到（面板还没加载完、
++                // 或它压根不设 title）才退回「面板」；地址不常驻顶栏
++                text = pageTitle?.takeIf { it.isNotBlank() }
 +                    ?: panelTitleFallback,
 +                refreshing = refreshing,
 +                canRefresh = panelUrl != null,
@@ -17414,11 +17449,16 @@ index 0000000..c405b42
 +                    onWebError = { webError = it },
 +                    onCanGoBackChange = { canGoBack = it },
 +                )
-+            } else {
++            }
++
++            // 提示画在 WebView 之上：以前这里是「二选一」，地址一抖就把 WebView 拆了重建，
++            // 那次销毁/重建就是进面板时看到的那一下闪烁。
++            if (showNotRunning) {
 +                Column(
 +                    modifier = Modifier
 +                        .fillMaxSize()
-+                        .padding(top = innerPadding.calculateTopPadding()),
++                        .padding(top = innerPadding.calculateTopPadding())
++                        .background(MiuixTheme.colorScheme.surface),
 +                    horizontalAlignment = Alignment.CenterHorizontally,
 +                    verticalArrangement = Arrangement.Center,
 +                ) {
@@ -17432,7 +17472,8 @@ index 0000000..c405b42
 +
 +            // 错误横幅浮在内容上：面板自己的报错页常常是一片空白，不给提示就是「点了没反应」
 +            val errorMessage = webError
-+            if (!errorMessage.isNullOrBlank()) {
++            // 未运行提示已经盖住了 WebView，底下那个连不上的报错不该再压上来
++            if (!errorMessage.isNullOrBlank() && !showNotRunning) {
 +                Card(
 +                    modifier = Modifier
 +                        .padding(top = innerPadding.calculateTopPadding())
@@ -17801,10 +17842,10 @@ index 0000000..fb1c8a6
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 new file mode 100644
-index 0000000..a36a56a
+index 0000000..007e8bd
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,457 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import android.annotation.SuppressLint
@@ -18136,6 +18177,25 @@ index 0000000..a36a56a
 +    }
 +
 +    key(isDark, sessionKey) {
++        // AndroidView 只把 view 从视图树上摘下来，**不会** destroy WebView。进出面板一次就漏
++        // 一个带着渲染进程的实例，连着进几次 Chromium 的渲染进程被挤满，新页面只能渲染出一半
++        // （表现为「卡片缺失」）。所以离开组合时手动销毁。
++        // 用数组而不是 State 存引用：factory 在组合期间跑，写快照状态会有额外重组。
++        val viewRef = remember { arrayOfNulls<WebView>(1) }
++        DisposableEffect(isDark, sessionKey) {
++            onDispose {
++                val webView = viewRef[0] ?: return@onDispose
++                viewRef[0] = null
++                runCatching {
++                    webView.stopLoading()
++                    // 先摘掉 client，避免销毁过程中还有回调打回已经死掉的 ViewModel
++                    webView.webViewClient = WebViewClient()
++                    webView.webChromeClient = WebChromeClient()
++                    (webView.parent as? ViewGroup)?.removeView(webView)
++                    webView.destroy()
++                }
++            }
++        }
 +        Box(modifier = modifier.fillMaxSize()) {
 +            AndroidView(
 +                factory = { ctx ->
@@ -18195,6 +18255,7 @@ index 0000000..a36a56a
 +                        )
 +                        loadUrl(url)
 +                        tag = WebViewTag(reloadKey = reloadKey, url = url, backRequestKey = backRequestKey)
++                        viewRef[0] = this
 +                    }
 +                },
 +                update = { webView ->
@@ -22439,7 +22500,7 @@ index 4b576a6..e0a0abe 100644
          if (_uiState.value.refresh != null) return
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
-index f684c37..115879e 100644
+index f684c37..60594a4 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 @@ -4,6 +4,12 @@ import android.util.Log
@@ -22620,7 +22681,7 @@ index f684c37..115879e 100644
              }
          }
      }
-@@ -286,40 +391,63 @@ class ProxyViewModel(
+@@ -286,40 +391,77 @@ class ProxyViewModel(
      }
  
      /**
@@ -22636,6 +22697,8 @@ index f684c37..115879e 100644
 +     *     拖住整组，2s 判超时即可。
 +     *  3. **给滑动让路**：用户在滑动 / 触摸列表时暂停发起新探测，滚动流畅度优先。
 +     *  4. **边测边刷新**：每 700ms 把已出的结果刷一次，不必等整组跑完才有反馈。
++     *  5. 两条路径都要统计失败数并汇总提示（[DelayTestEvent.GroupSummary]），
++     *     否则走了组接口就没有「几个节点失败」的 toast。
       */
      fun testGroupDelay(group: String) {
          val repo = repository ?: return
@@ -22671,23 +22734,34 @@ index f684c37..115879e 100644
 -                                    repo.getProxyDelay(nodeName)
 -                                }
 -                            }
--                        }
--                    }.awaitAll()
 +                var failed = 0
 +                var total = nodes.size
-+                val fastPathOk =
++                // 组接口一次返回整组的延迟表；拿不到表（非 Selector 组 / 接口不支持 / 超时 /
++                // 返回空表）就退回并发池逐节点测
++                val delays: Map<String, Int>? =
 +                    if (!target.isSelector) {
-+                        false
++                        null
 +                    } else {
 +                        withTimeoutOrNull(GROUP_DELAY_BUDGET_MS) {
 +                            repo.getGroupProxyDelay(
 +                                group,
 +                                MihomoApiClient.DEFAULT_DELAY_TEST_URL,
 +                                BATCH_DELAY_TIMEOUT_MS,
-+                            ).isSuccess
-+                        } == true
++                            ).getOrNull()
+                         }
+-                    }.awaitAll()
 +                    }
-+                if (!fastPathOk) {
++                if (!delays.isNullOrEmpty()) {
++                    // 快路径也必须自己数失败：内核对测不通的节点不写正数——要么不出现在
++                    // 表里、要么记 0。只判断接口成不成功的话，走快路径就一条失败提示都不弹，
++                    // 看上去像「测完了但什么都没发生」。
++                    // 组接口只测真正的节点，组里嵌的子组名不会出现在表里；这类名字既不算
++                    // 成功也不算失败，否则「组套组」的配置会被误报成一堆失败。
++                    val nestedGroups = _uiState.value.groups.mapTo(HashSet()) { it.name }
++                    failed = nodes.count { name ->
++                        name !in nestedGroups && (delays[name] ?: 0) <= 0
++                    }
++                } else {
 +                    val (t, f) = runBatchPool(repo, nodes)
 +                    total = t
 +                    failed = f
@@ -22703,7 +22777,7 @@ index f684c37..115879e 100644
                  // 正常结束、repo 切换、被取消都要摘标记，漏掉哪条路径该组就永久转圈
                  _uiState.value = _uiState.value.copy(
                      testingGroups = (_uiState.value.testingGroups - group).toPersistentSet(),
-@@ -328,6 +456,55 @@ class ProxyViewModel(
+@@ -328,6 +470,55 @@ class ProxyViewModel(
          }
      }
  
@@ -22759,7 +22833,7 @@ index f684c37..115879e 100644
      fun testNodeDelay(nodeName: String) {
          val repo = repository ?: return
          if (nodeName in _uiState.value.testingNodes) return
-@@ -340,11 +517,13 @@ class ProxyViewModel(
+@@ -340,11 +531,13 @@ class ProxyViewModel(
                  // 延迟结果写入节点全局 history.delay，loadProxies 再从 history 读回并分发到
                  // 所有引用该节点的组，保证跨组延迟一致；provider 节点走 provider healthcheck 端点
                  val provider = nodeProviderMap[nodeName]
@@ -22774,7 +22848,7 @@ index f684c37..115879e 100644
                  if (repository !== repo) return@launch
                  loadProxies()
              } finally {
-@@ -355,6 +534,27 @@ class ProxyViewModel(
+@@ -355,6 +548,27 @@ class ProxyViewModel(
          }
      }
  
@@ -22802,7 +22876,7 @@ index f684c37..115879e 100644
      private suspend fun saveSelection(group: String, proxy: String) {
          val uuid = getActiveUuid() ?: return
          val dao = selectionDao ?: return
-@@ -403,7 +603,27 @@ class ProxyViewModel(
+@@ -403,7 +617,27 @@ class ProxyViewModel(
      }
  
      companion object {

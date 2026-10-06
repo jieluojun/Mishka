@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874
 patch_file=mishka-custom/patches/app/0001-anchor-panel.patch
-patch_sha256=dcc2e7504fd7651534a75d2adedf0f9d018048a528ce9c3668ae523a94fed9d7
+patch_sha256=329b8836815eb17cfa94b7174362f9faf6c0bacbe6e940a8e6f4f3d001c3d64f
 # blob_after = 上游已存在、本次被改动的文件；blob_new = 本次新增的文件
 blob_after=0ebf6af7fb0238b52e41188f5bb8897f86dc07a4 app/build.gradle.kts
 blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
@@ -29,10 +29,10 @@ blob_new=2cc26a62cb3ea7d785990ba92b5ef396f3d612a0 app/src/main/kotlin/top/yukong
 blob_new=1796296a18858516030ff9bbe5fbe596a2a46e5e app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 blob_new=cbb28a7f36a90fd48c4d6e3f1590acfbf7948335 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt
-blob_new=c405b427035e941084c26b4347ab7984153bb382 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+blob_new=2aca9c05b9758132cba8f5824fb40677806238fe app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
 blob_new=72d26bb0d16291d7e6aad0b58b1d49bb9c745884 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt
 blob_new=fb1c8a630c9c650d2d0ac68895a70b946987119a app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelStore.kt
-blob_new=a36a56aae9e287cc41c30268c675ec670505d4a7 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+blob_new=007e8bdbc7ef01d5217d8148d8a0cc6e83d6908b app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 blob_new=0434c16bf9738c5e408ae3d00bde1e953ddeec65 app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
 blob_after=3e04b12e138424cdff6c2d3e87ccd04910eefbd6 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 blob_after=14ebcdc0fde29fd9aae21d9d09e9186b95ef527c app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
@@ -69,7 +69,7 @@ blob_after=f4fe9ce13cce83f719a3116402a46055599717e3 app/src/main/kotlin/top/yuko
 blob_after=eeb582a1cd60330ca660e31a25ee0ad2ef9ab6a9 app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
 blob_after=0372bc349289dc2011f418dbef2d008ee22ade76 app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 blob_after=e0a0abe09c2df43d2af99b52b85f5fb31a1fd875 app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
-blob_after=115879e0936d9a5e055a9c7782adcd15e4cf9e2b app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
+blob_after=60594a4384562b8c25c13be39cf6d657156e3170 app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 blob_after=91a7411f1c2f09ae2c86ca25c789565ba10d0dfd app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 blob_after=987a093b9df3b34e3da6a3868c8d9ca1ef1defbd app/src/main/native/mishka_core/runtime_test.go
 blob_after=2c11db737a7c10e7b1a78f4d7206e3be97eecd16 app/src/main/native/mishka_core/transform_bridge.go

@@ -159,10 +159,83 @@ val result = repository?.getProxyDelay("GLOBAL", probe.url, ...)
 - `ProxyViewModel` 新增 `noteUserInteraction()`，`ProxyScreen.kt` 用
   `rememberLazyListState()` + `snapshotFlow { isScrollInProgress }` 在滑动时通知它。
 
+## 8. 外部面板：进入时闪烁 / 反复进出后卡片缺失
+
+两个问题同一次修，都出在 WebView 的生命周期上。
+
+### 8.1 卡片缺失 —— WebView 泄漏
+
+`AndroidView` 只把 view 从视图树上摘下来，**不会** `destroy()` WebView。每进出一次面板就漏
+一个带着渲染进程的实例，连着进几次 Chromium 的渲染进程被挤满，新页面就只能渲染出一半——
+这就是「卡片缺失」。
+
+改动：`PanelWebView.kt` 在 `key(isDark, sessionKey)` 里加 `DisposableEffect`，离开组合时
+`stopLoading()` → 摘掉 client → `removeView` → `destroy()`。引用用数组存（`factory` 在组合
+期间跑，写快照状态会多出重组）。
+
+### 8.2 进入时闪烁几下 —— 地址抖动触发整页重灌
+
+`ProxyServiceBridge.status` 在服务起停 / 重启期间会在 `Stopped ↔ Starting ↔ Running` 之间
+来回抖，端口也可能先给默认值。而 `PanelWebView` 的 `update` 里 `urlChanged` 就 `loadUrl`，
+于是：
+
+1. 首帧 `status` 还不是 Running → `panelUrl` 回落到缓存地址（第一次甚至为 `null`）；
+2. 下一帧拿到真实地址 → `urlChanged` → 整页重灌一次；
+3. `panelUrl` 变 `null` 的那一下更糟：`PanelWebView` 直接被摘出组合（销毁），地址回来再建
+   一个 —— 一次销毁 + 重建 + 重灌，看到的就是「闪一下 / 闪几下」。
+
+改动（`PanelScreen.kt`）：
+
+- 新增 `settledUrl`：**已经有可用地址时**，新地址要先稳定 `PANEL_URL_SETTLE_MS = 400ms`
+  才换；首次取值（手上还没有任何地址）不用等，直接上，不增加首次进面板的等待。
+- 地址暂时算不出时**沿用上一个**，不再回落到 `null`。WebView 因此不会被拆掉重建。
+- 「代理未运行」提示从「和 WebView 二选一」改成**盖在 WebView 上**的覆盖层：视觉不变，
+  但 WebView 不再因为提示的出现 / 消失被销毁重建。未运行时也不再叠一条「连不上」的报错横幅。
+
+## 9. 外部面板顶栏：改回 box.app 的样式（显示页面标题）
+
+顶栏文字从「常驻 URL」改成 box.app 的写法：
+
+```kotlin
+text = pageTitle?.takeIf { it.isNotBlank() } ?: panelTitleFallback
+```
+
+`pageTitle` 是面板页面自己报的 `<title>`，随面板内导航变化——mihomo_box 这类面板会把它设成
+「地址 \| 代理」这样的「当前 top 页」，比常驻一条 URL 更能说明「我现在在哪一页」；拿不到
+（还没加载完、或压根不设 title）才退回「面板」。字号 15sp → 17sp（对齐 box.app 的
+`MiuixTheme.textStyles.title2`；这里不直接引 `textStyles`，Mishka 用 miuix 0.9.4、box.app
+是 0.9.0，字段名不敢跨小版本保证，字号写死视觉等价）。
+
+`PanelTopBar` 本身没动：仍是 52dp 单行、自己吃掉状态栏 / 刘海 inset。
+
+## 10. 批量测速的汇总 toast 回来了（组接口快路径漏统计失败数）
+
+上一版把整组测速改成「Selector 组先打 `/group/{name}/delay`」后，失败汇总提示没了。
+
+原因：快路径只判断了接口本身成不成功（`.isSuccess`），**没有去看返回的延迟表**，
+`failed` 恒为 0，`DelayTestEvent.GroupSummary` 于是一条都不发。而绝大多数手动切换的组
+都是 Selector，正好全走快路径，于是「批量测速完了一声不吭」。
+
+改动（`ProxyViewModel.testGroupDelay`）：把「接口成功」换成「拿到延迟表」，自己数失败数：
+
+```kotlin
+val nestedGroups = _uiState.value.groups.mapTo(HashSet()) { it.name }
+failed = nodes.count { name -> name !in nestedGroups && (delays[name] ?: 0) <= 0 }
+```
+
+两个细节：
+
+- 内核对测不通的节点**不写正数**——要么不出现在表里、要么记 0，所以 `<= 0` 和「表里没有」
+  都得算失败，只看 `isSuccess` 是数不出来的。
+- 组接口只测真正的节点，**组里嵌的子组名不会出现在表里**。这类名字既不算成功也不算失败，
+  否则「组套组」的配置会被误报成一堆失败。
+- 拿不到表（非 Selector 组 / 接口不支持 / 7s 超时 / 返回空表）仍退回并发池逐节点测，
+  那条路径的统计逻辑不变。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 74 个 blob 逐文件一致（新增 20 条断言，覆盖外部面板、主页延迟、批量测速）。
+  应用结果与 `BASELINE.txt` 的 74 个 blob 逐文件一致（新增 25 条断言，覆盖外部面板、主页延迟、批量测速、面板 WebView 生命周期）。
 - **Kotlin 类型检查通过（本版新增）**：沙箱里装了 kotlinc，把真实依赖拉齐
   （Compose 1.9.4 / miuix 0.9.4 / androidx.activity / lifecycle / navigationevent /
   Robolectric 的 `android-all` 当 android.jar），对 `custom/panel/` 五个文件做了完整
@@ -173,7 +246,7 @@ val result = repository?.getProxyDelay("GLOBAL", probe.url, ...)
   不是代码问题（一个 6 行的正确 Composable 同样崩）。
 - 资源侧额外做了 AAPT 敏感字符扫描（裸撇号 / `&` / 尖括号），四个语言全部干净。
 - `BASELINE.txt` 的 `patch_sha256` 已随新补丁更新为
-  `dcc2e7504fd7651534a75d2adedf0f9d018048a528ce9c3668ae523a94fed9d7`。
+  `329b8836815eb17cfa94b7174362f9faf6c0bacbe6e940a8e6f4f3d001c3d64f`。
 - 这一轮类型检查又抓到一个必炸的编译错误（也已修）：`PanelScreen.kt` 用了
   `WindowInsets.systemBars.union(...)` 但没导 `androidx.compose.foundation.layout.union`
   —— `union` 是顶层中缀扩展函数，跟 `only` 一样得单独 import。
