@@ -38,6 +38,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local needle="$1" path="$2" label="$3"
+  if grep -Fq -- "$needle" "$REPO/$path"; then
+    echo "FAIL $label" >&2
+    fail=1
+  else
+    echo "ok  $label"
+  fi
+}
+
 [[ "$actual_sha" == "$expected_sha" ]] && echo "ok  补丁文件 sha256 与基线一致" || {
   echo "FAIL 补丁 sha256 与基线不一致：$actual_sha != $expected_sha" >&2; fail=1; }
 
@@ -183,15 +193,27 @@ assert_contains 'MiuixIcons.ChevronBackward' \
 assert_contains 'MiuixIcons.Tune' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
   'panel list opens from the box.app sliders icon (right-2 slot)'
-assert_contains 'Color(0xFFF7F7F7)' \
+assert_contains 'MiuixTheme.colorScheme.surface' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel top bar background matches the box.app light bar #F7F7F7'
-assert_contains 'PanelChrome.forceLightStatusBars' \
+  'panel top bar background follows the app theme surface color'
+assert_contains 'MiuixTheme.colorScheme.onSurface' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'panel top bar title and icons use the theme on-surface color'
+assert_not_contains 'forceLightStatusBars' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'panel screen leaves status-bar appearance to the app theme'
+assert_not_contains 'forceLightStatusBars' \
   app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt \
-  'status bar appearance honors the fixed-light panel top bar'
-assert_contains 'PanelChrome.forceLightStatusBars = true' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel screen pins dark status-bar icons while the light top bar is shown'
+  'main activity enforces status-bar appearance from theme only'
+assert_contains 'PanelWebViewCache' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'panel WebView instance survives back/re-enter instead of cold-reloading'
+assert_contains 'val (webView, fresh) = PanelWebViewCache.acquire' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'only a freshly created WebView loads URL'
+assert_contains 'goHome(entryUrl)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  're-entering the panel returns to the panel home page'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"

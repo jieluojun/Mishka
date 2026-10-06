@@ -108,23 +108,66 @@ MainActivity 在 `onWindowFocusChanged` / `onResume` / 配置变化 / 主题 rec
 都会重排系统栏外观，面板页自己的「清除数据」确认框一关（弹窗收回焦点）就会把图标
 翻回白色。进面板置 true，退面板复位并按当前主题恢复。
 
+## 6. 修「返回重进面板页闪烁、卡片缺失」
+
+**症状**：每次返回退出外部面板、再重进，页面整块白闪一次，代理卡片要重新冒，偶尔像缺卡。
+
+**根因**：返回会把 `AndroidView` 连同 WebView 一起从组合里拆掉，重进再 `WebView(ctx)` + `loadUrl`
+冷启动一次——白闪就是重载的空白帧，「卡片缺失」是面板 SPA 重新初始化、重新拉数据的
+中间态。另外 `refreshing` / `webError` 用 `rememberSaveable` 跨离开保存，重进时可能恢复出
+一个转不完的圈（加载结束事件在离开期间已经发给死组合了）和滞留的错误横幅。
+
+**改动**（`PanelWebView.kt` / `PanelScreen.kt` / `PanelChrome.kt`）：
+
+1. **WebView 实例跨「返回 / 重进」保留**（新增 `PanelWebViewCache`）：退出面板页只拆视图树，
+   重进把**同一个实例**挂回去——不重载、不白闪、面板 SPA 的路由 / 卡片 / 滚动位置原样在。
+   只有两个销毁点：切面板（`sessionKey` 变，防串 history / 登录态）与 Activity 销毁
+   （`ActivityLifecycleCallbacks` 盯 `recreate()` / finish，外加 acquire 时 context 判活兜底）。
+2. **复用实例绝不再 `loadUrl`**：`factory` 只对新建实例加载；URL 变化 / reload / goBack 仍由
+   `update` 里的 tag 差值判定兜着。
+3. **每次组合重新接线**：WebViewClient / WebChromeClient / JS bridge / 下载监听的闭包都指向
+   「当前组合」的回调与 `rememberLauncherForActivityResult`。复用实例若只在 factory 挂一次，
+   重进后标题、错误横幅、转圈、SAF 存盘全会失联（收到的是上一次进页面那批死 lambda）。
+4. **入场对齐**：重进后从 WebView 现值读回标题 / `canGoBack`（离开期间页面可能已变），
+   快照过期不再显示错。`refreshing` / `webError` 改成不跨离开保存的 `remember`。
+5. **页面暂挂**：离开面板页 `WebView.onPause()`（只停 DOM 定时器 / 动画，加载与 WebSocket
+   不受影响），重进 `onResume()`——SPA 留在后台不该一直烧电。
+
+## 7. 顶栏颜色改用主题色；重进固定回面板首页
+
+用户反馈两点：① web 界面顶栏颜色没有使用主题颜色（固定 `#F7F7F7`，深色主题下白得刺眼、
+和 App 其它页面脱节）；② 要求重进总是回面板首页，而不是停在上次浏览到的子页。
+
+**改动**：
+
+- `PanelTopBar` 颜色全部改从 `MiuixTheme.colorScheme` 取：底色 `surface`、标题与图标
+  `onSurface`——和 `AdaptiveTopAppBar` 同一套 token，深浅色主题自动跟随（box.app 的
+  单行布局与像素间距保留）。删掉 `#F7F7F7` / 纯黑常量。
+- 状态栏不再强制深色图标：删掉 `PanelChrome.forceLightStatusBars` 整套机制（PanelScreen
+  的挂钩 / `MainActivity.enforceSystemBarsAppearance` 里的 `||` / 整个 `PanelChrome`
+  object），外观交给 MainActivity 按主题 enforce——顶栏已随主题，状态栏图标天然配套。
+- **重进固定回面板首页**：新增 `WebView.goHome(homeUrl)`——优先 `history.go()` 一步退回
+  历史里的入口项（SPA 走 popstate 把路由切回首页，**不整页重载、不白闪**）；历史里找不到
+  入口项（整页刷新截断过历史、入口被服务器重定向到别处等）才退化为整页加载入口，
+  保证「回首页」永远成立。复用实例在 factory 挂回视图树时调用。
+- 顺手修一个遮蔽 bug：`factory` 里 `webView.apply { loadUrl(url) }` 的 `url` 会被
+  WebView 自己的 `getUrl()` 属性遮蔽，整段加载逻辑实际一直空转（页面能载全靠 `update`
+  差值兜底）。入口 URL 改为先取 `entryUrl` 再用，「只有新建实例才整页 loadUrl」从此名实相符。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 72 个 blob 逐文件一致（较上版 +1：`PanelChrome.kt`；
-  顶栏相关断言新增 5 条）。
+  应用结果与 `BASELINE.txt` 的 72 个 blob 逐文件一致（面板相关断言共 9 条：布局 2 +
+  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ WebView 保留 / 回首页 3）。
 - **Kotlin 类型检查通过**：kotlinc 2.4.20 + 真实依赖（miuix 0.9.4 / JetBrains Compose
   1.12.0 族（miuix 0.9.4 的实际传递版本）/ androidx.activity 1.13.0 / lifecycle 2.11.0 /
   navigationevent 1.1.2 / Robolectric `android-all` 当 android.jar），对 `custom/panel/`
-  六个文件（含新的 `PanelChrome.kt`）做完整前端类型检查，**0 错误**。
-  项目侧引用（`ProxyServiceBridge` / `StatusColors` / `sheetContentSafePadding` / `R`）
-  用的是照真实声明写的桩。
-  **本轮类型检查真抓出一个必炸的编译错误**：状态栏外观覆盖最初写成
-  `panelView.findActivityOrNull()`——`LocalView.current` 是 `View` 不是 `Context`，
-  扩展解析不了，已改为 `panelView.context.findActivityOrNull()`。
+  六个文件做完整前端类型检查，**0 错误**（本轮改的 PanelWebView / PanelScreen / PanelChrome
+  都在内）。项目侧引用（`ProxyServiceBridge` / `StatusColors` / `sheetContentSafePadding` /
+  `R`）用的是照真实声明写的桩。
+  前两轮类型检查各抓出过一个必炸的编译错误（`LocalView` 当 `Context` 用），本轮 0。
   Compose 编译器插件没装，后端 IR lowering 依旧会崩——缺插件的已知表现，不是代码问题。
-- `BASELINE.txt` 的 `patch_sha256` 已随新补丁更新为
-  `46705cf03ee6276f...`（完整值见该文件）。
+- `BASELINE.txt` 的 `patch_sha256` 随新补丁更新（完整值见该文件）。
 - 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑不动，**本次没有跑通 Gradle 编译验证**。
   落地后请先跑一次：
 
