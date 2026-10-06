@@ -156,82 +156,30 @@ assert_contains '0.0.0.0' \
   app/src/main/res/values-zh-rCN/strings.xml \
   'Chinese external-control hint warns about wildcard unauthenticated exposure'
 
-# --- 外部面板（Web 界面）---
-assert_contains 'entry<Route.Panel>(swipeDismiss = NavSwipeDirection.None)' \
+# --- web 界面已完全移除（防回归）---
+assert_not_contains 'PanelScreen' \
   app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \
-  'external panel route is registered without swipe-to-dismiss'
-assert_contains 'onNavigatePanel = { navigator.push(Route.Panel) }' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \
-  'home screen can navigate to the external panel'
-assert_contains 'onNavigatePanel = onNavigatePanel' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt \
-  'home screen forwards the external panel callback'
-assert_contains '<string name="home_panel">' \
+  'web panel is fully removed from navigation'
+assert_not_contains 'onNavigatePanel' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt \
+  'web panel quick entry is fully removed from home'
+assert_not_contains 'home_panel' \
   app/src/main/res/values/strings.xml \
-  'external panel quick-entry string exists in the default locale'
-assert_contains '<string name="panel_title">' \
+  'web panel strings are fully removed (default locale)'
+assert_not_contains 'home_panel' \
   app/src/main/res/values-zh-rCN/strings.xml \
-  'external panel strings exist in the Chinese locale'
-assert_contains 'PANEL_URL_ZASHBOARD = "http://board.zash.run.place"' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt \
-  'built-in Zashboard panel URL matches box.app'
-assert_contains 'PANEL_URL_METACUBEXD = "https://metacubex.github.io/metacubexd"' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt \
-  'built-in MetaCubeXD panel URL matches box.app'
-assert_contains '"http://${status.externalController}/ui"' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'local panel URL is resolved from the running controller address'
-assert_contains 'mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView allows http calls from https panel pages'
-assert_contains 'NavigationBackHandler(' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'system back is routed into the panel page history first'
-assert_contains 'MiuixIcons.ChevronBackward' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel top bar back icon is the box.app chevron'
-assert_contains 'MiuixIcons.Tune' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel list opens from the box.app sliders icon (right-2 slot)'
-assert_contains 'MiuixTheme.colorScheme.surface' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel top bar background follows the app theme surface color'
-assert_contains 'MiuixTheme.colorScheme.onSurface' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel top bar title and icons use the theme on-surface color'
-assert_not_contains 'forceLightStatusBars' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel screen leaves status-bar appearance to the app theme'
-assert_not_contains 'forceLightStatusBars' \
-  app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt \
-  'main activity enforces status-bar appearance from theme only'
-assert_contains 'WebViewPreloader' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView is prewarmed box.app-style for instant entry'
-assert_contains 'hideUntilCommitVisible' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView carries box.app hideUntilCommitVisible anti-flash'
-assert_contains 'onPageCommitVisible' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView stays hidden until content commit (no white flash)'
-assert_contains 'key(isDark, sessionKey)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView remounts box.app-style on theme/session change'
-assert_contains 'loadUrl(entryUrl)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'each panel entry builds a fresh WebView and loads the panel home URL'
-assert_contains 'clearHistoryAfterNextPageFinished' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'URL change clears history so back never walks into the previous panel'
-assert_contains 'doUpdateVisitedHistory' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'canGoBack tracks SPA history changes so back dispatch matches box.app'
-assert_contains 'released.destroy()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'leaving the panel disposes the WebView instance (box.app enter/exit lifecycle)'
-assert_not_contains 'PanelWebViewCache' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'no WebView retention across re-enter (box.app lifecycle, rebuilt each entry)'
+  'web panel strings are fully removed (Chinese locale)'
+assert_not_contains 'home_panel' \
+  app/src/main/res/values-zh-rTW/strings.xml \
+  'web panel strings are fully removed (Taiwan locale)'
+assert_not_contains 'home_panel' \
+  app/src/main/res/values-ru/strings.xml \
+  'web panel strings are fully removed (Russian locale)'
+if [ -d "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel" ]; then
+  echo "FAIL web panel package still exists" >&2; fail=1
+else
+  echo "ok  web panel package (custom/panel) is gone"
+fi
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"

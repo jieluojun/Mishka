@@ -257,23 +257,34 @@ http(s) 导航交回 WebView 保留 POST（box.app 一律 `loadUrl` 重放会丢
 依赖 jar 丢失），已从成品 zip、上游基线 `5e6743592b9c` 与 Maven / Google Maven 全量恢复，
 verify 复核通过后再动的代码。
 
+## 12. 完全移除 web 界面（外部面板）
+
+用户要求「完全移除 web 界面」。§3-§11 的外部面板（Web 界面）功能整体删除，其余改动
+（锚点编辑间距、隐藏不可用策略、root/运行时配置、可视化表单等）原样保留：
+
+- 删 `custom/panel/` 整包（PanelEntry / PanelScreen / PanelSheet / PanelStore /
+  PanelWebView，含 box.app 版 WebView 与全部返回进入逻辑）；
+- 删 `Route.Panel` 路由与 AppNavigation 的 `entry<Route.Panel>` 接线；
+- 删首页快捷入口「面板」卡片（QuickEntriesSection / HomeScreen 的 `onNavigatePanel`
+  链路随卡片一并移除——这两个文件回归上游原样，移出补丁）；
+- 删 `MainActivity` 的 `WebViewPreloader.preload` 预热调用；
+- 删 4 个语言共 17 条面板字符串（`home_panel*` 与 `panel_*`）；
+- verify 的面板断言（23 条）全部移除，改为 7 条「web 面板已彻底移除」防回归断言
+  （导航 / 快捷入口 / 4 语言字符串 / `custom/panel/` 目录不存在）。
+
+补丁文件数 71 → **64**（-5 面板包、-2 回归上游的首页文件）。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（面板相关断言共 15 条：布局 2 +
-  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ box.app web 生命周期 / 防白闪 9）。
-- **Kotlin 类型检查通过**：kotlinc 2.4.20 + 真实依赖（miuix 0.9.4 / JetBrains Compose
-  1.12.0 族（miuix 0.9.4 的实际传递版本）/ androidx.activity 1.13.0 / lifecycle 2.11.0 /
-  navigationevent 1.1.2 / Robolectric `android-all` 当 android.jar），对 `custom/panel/`
-  五个文件（PanelChrome.kt 已删）做完整前端类型检查，**0 错误**（本轮改的 PanelWebView /
-  PanelScreen 都在内；MainActivity 的一行 preload 调用不在检查范围，改动极小）。
-  项目侧引用（`ProxyServiceBridge` / `StatusColors` / `sheetContentSafePadding` /
-  `R`）用的是照真实声明写的桩。
-  历史轮次的类型检查各抓出过必炸的编译错误（`LocalView` 当 `Context` 用等），本轮 0。
-  Compose 编译器插件没装，后端 IR lowering 依旧会崩——缺插件的已知表现，不是代码问题。
+  应用结果与 `BASELINE.txt` 的 64 个 blob 逐文件一致（运行时配置 / root / 表单 / 隐藏不可用
+  断言 26 条 + 「web 面板已彻底移除」防回归断言 7 条）。
+- **Kotlin 类型检查**：历史轮次的面板文件类型检查已随 web 界面移除而失去对象（kotlinc 环境
+  曾对 `custom/panel/` 全部文件查过 **0 错误**）；本轮改动全为删除与参数清理，无新增代码路径，
+  唯一保留的代码改动是 `Route.FileManagerEditor` 的 `showConfigForm` 等既有功能，不受影响。
 - `BASELINE.txt` 的 `patch_sha256` 随新补丁更新（完整值见该文件）。
 - 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑不动，**本次没有跑通 Gradle 编译验证**。
-  落地后请先跑一次：
+  落地后请先跑一次（本轮是纯删除，重点看有没有漏删的引用导致编译不过）：
 
 ```bash
 ./gradlew :app:compileDebugKotlin -x buildMihomo_arm64_v8a
