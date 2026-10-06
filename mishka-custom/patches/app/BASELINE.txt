@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=770435ec0a7f6487d3d426a4586bb55d27e985115b7cba14e58a0fa8219b4c15
+patch_sha256=828f61ca0339176901a3e4f2e9b99403835eaab0b34544849ec52ae54bc7e61f
 blob_after=0ebf6af7fb0238b52e41188f5bb8897f86dc07a4 app/build.gradle.kts
 blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
 blob_after=9bdb76c45fc0b1666eb0354bbf4feaafeab94e85 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -28,10 +28,10 @@ blob_new=2cc26a62cb3ea7d785990ba92b5ef396f3d612a0 app/src/main/kotlin/top/yukong
 blob_new=1796296a18858516030ff9bbe5fbe596a2a46e5e app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 blob_new=cbb28a7f36a90fd48c4d6e3f1590acfbf7948335 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt
-blob_new=ca3ccc7e79d07987159ae20a5f80f4ffa6d26380 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+blob_new=785625ddc42450f0edeff47af682f11f01b5da62 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
 blob_new=72d26bb0d16291d7e6aad0b58b1d49bb9c745884 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt
 blob_new=fb1c8a630c9c650d2d0ac68895a70b946987119a app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelStore.kt
-blob_new=ff47be2c75243787f216a8b54380e513b77c8e7d app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+blob_new=e3feb4b03830fc80459bad2fbf7e017a8717fced app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 blob_new=0434c16bf9738c5e408ae3d00bde1e953ddeec65 app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
 blob_after=0fdd5de0f18e4b946aa2f9f97a1e6e71f4f4f535 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 blob_after=14ebcdc0fde29fd9aae21d9d09e9186b95ef527c app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt

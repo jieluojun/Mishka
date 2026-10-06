@@ -17141,10 +17141,10 @@ index 0000000..cbb28a7
 +internal const val PANEL_URL_METACUBEXD = "https://metacubex.github.io/metacubexd"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
 new file mode 100644
-index 0000000..ca3ccc7
+index 0000000..785625d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
-@@ -0,0 +1,410 @@
+@@ -0,0 +1,413 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import androidx.compose.foundation.background
@@ -17229,8 +17229,10 @@ index 0000000..ca3ccc7
 + * 、标题与图标用 `onSurface`，和 App 其它顶栏同色系、随深浅色主题走。顶栏铺到状态栏后面，
 + * 状态栏图标外观交给 MainActivity 的主题化 enforce，不再强制。
 + *
-+ * **返回进入逻辑对齐 box.app**：每次进入都是**新 WebView + 加载入口 URL**（重进总是面板
-+ * 首页），返回先退页内历史、退无可退退出页面；退出即弃实例，重建靠 [WebViewPreloader] 秒建。
++ * **返回进入语义对齐 box.app**：进入总是面板首页，返回先退页内历史、退无可退退出页面。
++ * 实现上 WebView 实例跨「返回 / 重进」保留、重进**不整页重载**（整页重载正是「闪烁 +
++ * 卡片缺失」的根源，box.app 每次进入重新 load 也躲不掉），重进由 [goHome] 按历史深度
++ * 回退到首页；新实例由 [WebViewPreloader] 秒建。
 + *
 + * @param isDark 跟随 App 主题，交给 WebView 的算法深色
 + */
@@ -17263,8 +17265,9 @@ index 0000000..ca3ccc7
 +    var backRequestKey by rememberSaveable { mutableIntStateOf(0) }
 +    var pageTitle by rememberSaveable { mutableStateOf<String?>(null) }
 +    // 瞬态状态不跨「返回 / 重进」保存（box.app openSubpage 进入即清零的等价语义）：
-+    // 每次进入都是新 WebView 重新加载，恢复一个 true 的 refreshing 会让顶栏转圈永远
-+    // 停不下来；canGoBack 也要从「不能返回」起步，等新实例回报真实值
++    // 重进不重新加载，离开期间的加载结束事件送不进新组合，恢复一个 true 的 refreshing
++    // 会让顶栏转圈永远停不下来；canGoBack 从「不能返回」起步，等 goHome 落地后由
++    // doUpdateVisitedHistory 回报真实值
 +    var webError by remember { mutableStateOf<String?>(null) }
 +    var refreshing by remember { mutableStateOf(false) }
 +    var canGoBack by remember { mutableStateOf(false) }
@@ -17828,19 +17831,23 @@ index 0000000..fb1c8a6
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 new file mode 100644
-index 0000000..ff47be2
+index 0000000..e3feb4b
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
-@@ -0,0 +1,534 @@
+@@ -0,0 +1,651 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import android.annotation.SuppressLint
++import android.app.Activity
++import android.app.Application
 +import android.content.ActivityNotFoundException
 +import android.content.Context
++import android.content.ContextWrapper
 +import android.content.Intent
 +import android.graphics.Color
 +import android.net.Uri
 +import android.os.Build
++import android.os.Bundle
 +import android.os.Handler
 +import android.os.Looper
 +import android.util.Base64
@@ -18007,6 +18014,106 @@ index 0000000..ff47be2
 +    }
 +}
 +
++/** Compose 视图的 context 可能是 ContextWrapper 链，逐层解包找宿主 Activity。 */
++private tailrec fun Context.findActivityOrNull(): Activity? = when (this) {
++    is Activity -> this
++    is ContextWrapper -> baseContext.findActivityOrNull()
++    else -> null
++}
++
++/**
++ * 跨「返回 / 重进」保留面板 WebView 实例。
++ *
++ * 返回退出面板页时 [androidx.compose.ui.viewinterop.AndroidView] 被拆掉，但 WebView 本身
++ * 不销毁、不丢弃：重进把**同一个实例**挂回视图树。没有这一层，每次重进都整页重载——
++ * 白闪（闪烁）+ 面板 SPA 重新初始化拉数据（卡片逐个冒出来，看着像缺卡），这两个症状
++ * 正是「重新加载」本身，box.app 的「每次进入新建 + loadUrl」也躲不掉。
++ *
++ * 语义仍按 box.app 的返回进入逻辑：重进用 [goHome] 回面板首页（历史回退，不重载）。
++ * 销毁点只有两个：
++ *  - [sessionKey] 变化（切面板）→ 销毁重建，避免带上一个面板的 history / JS 全局 / 登录态；
++ *  - Activity 销毁（recreate / finish）→ 销毁，WebView 持有 Activity 的 Context，留着就是泄漏。
++ */
++internal object PanelWebViewCache {
++    private var cached: WebView? = null
++    private var cachedSessionKey = Int.MIN_VALUE
++    private var watcherInstalled = false
++
++    /**
++     * 取复用实例；返回 `webView` 与「是否新建」。新建的调用方要 `loadUrl(入口)`；
++     * 复用的**绝不能**再整页 load（那正是闪烁/缺卡的来源），重进回首页交给 [goHome]。
++     */
++    fun acquire(context: Context, sessionKey: Int): Pair<WebView, Boolean> {
++        installWatcher(context)
++        val host = context.findActivityOrNull()
++        val existing = cached
++        if (existing != null && host != null &&
++            existing.context.findActivityOrNull() === host && cachedSessionKey == sessionKey
++        ) {
++            (existing.parent as? ViewGroup)?.removeView(existing)
++            return existing to false
++        }
++        destroy()
++        return (WebViewPreloader.take() ?: WebView(context)).also {
++            cached = it
++            cachedSessionKey = sessionKey
++        } to true
++    }
++
++    /** 销毁缓存实例（幂等）。 */
++    fun destroy() {
++        cached?.let { webView ->
++            (webView.parent as? ViewGroup)?.removeView(webView)
++            runCatching {
++                webView.stopLoading()
++                webView.destroy()
++            }
++        }
++        cached = null
++        cachedSessionKey = Int.MIN_VALUE
++    }
++
++    private fun installWatcher(context: Context) {
++        if (watcherInstalled) return
++        val app = context.applicationContext as? Application ?: return
++        watcherInstalled = true
++        app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
++            override fun onActivityDestroyed(activity: Activity) {
++                // 只认持有 WebView 的那个宿主；ExternalImportActivity 收尾不应误杀面板
++                if (cached?.context?.findActivityOrNull() === activity) destroy()
++            }
++
++            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
++            override fun onActivityStarted(activity: Activity) {}
++            override fun onActivityResumed(activity: Activity) {}
++            override fun onActivityPaused(activity: Activity) {}
++            override fun onActivityStopped(activity: Activity) {}
++            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
++        })
++    }
++}
++
++/**
++ * 回到面板首页（入口项）——「重进总是面板首页」，但**不能**整页 `loadUrl`（那是白闪本体）。
++ *
++ * 按**历史深度**回退 `history.go(-currentIndex)`：一步退回会话的第一个真实入口项，
++ * SPA 走 popstate 把路由切回首页，不重新下载、不白闪、卡片在内存里原样在。
++ * 不做 URL 精确匹配——面板服务器的重定向（`…/ui` → `…/ui/`、补 `#/`）会让入口项的
++ * 实际 URL 和配置串对不上，匹配一失败就退化成整页重载（上一版闪烁的另一半原因）。
++ * 跳过开头可能残留的 `about:blank` 项；已经在入口项时直接返回。
++ */
++internal fun WebView.goHome() {
++    val list = copyBackForwardList()
++    val cur = list.currentIndex
++    if (cur <= 0) return
++    var homeIdx = 0
++    while (homeIdx < cur && (list.getItemAtIndex(homeIdx)?.url ?: "about:blank") == "about:blank") {
++        homeIdx++
++    }
++    if (homeIdx >= cur) return
++    evaluateJavascript("history.go(${homeIdx - cur});", null)
++}
++
 +/**
 + * 外部面板用的 WebView（box.app `ThemedWebView` 的 Mishka 版）。
 + *
@@ -18017,11 +18124,13 @@ index 0000000..ff47be2
 + *  2. **[sessionKey] 变了要重建 WebView**：切面板只 `loadUrl` 会保留上一个面板的
 + *     history 与 JS 全局状态，`key()` 包一层让 Compose 整个换掉实例。
 + *  3. **文本缩放锁 100**：不锁的话系统字体放大后桌面端面板布局会溢出。
-+ *  4. **返回进入逻辑对齐 box.app**：每次进入都是**新实例 + `loadUrl(入口 URL)`**——重进
-+ *     总是面板首页；返回先退页内历史（[backRequestKey] → `goBack`），退无可退由宿主退出
-+ *     页面。退出即弃实例（`onRelease` 销毁），重建靠 [WebViewPreloader] 秒建；
-+ *     换 [url] 加载完清 history（box.app `resetHistoryOnUrlChange`），返回不会走进
-+ *     上一个面板的历史。
++ *  4. **返回进入语义对齐 box.app，但重进不整页重载**：进入总是面板首页，返回先退页内
++ *     历史（[backRequestKey] → `goBack`），退无可退由宿主退出页面。实现上 WebView 实例
++ *     跨「返回 / 重进」保留（[PanelWebViewCache]）——整页重载正是「闪烁 + 卡片缺失」的
++ *     根源（box.app 每次进入重新 load，两个症状它同样躲不掉）；重进用 [goHome] 按历史
++ *     深度回退到入口项（SPA popstate 切回首页，**不整页重载**）。新实例由 [WebViewPreloader]
++ *     秒建；换 [url] 加载完清 history（box.app `resetHistoryOnUrlChange`），
++ *     返回不会走进上一个面板的历史。
 + *
 + * @param reloadKey 自增即触发一次 `reload()`
 + * @param sessionKey 自增即销毁重建 WebView（切面板时用）
@@ -18163,6 +18272,12 @@ index 0000000..ff47be2
 +                }.getOrDefault(false)
 +            }
 +
++            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
++                // SPA 的 pushState / popstate（含 goHome 的历史回退）不触发 onPageFinished，
++                // canGoBack 只能从这里跟上——否则「系统返回先退页内历史」在面板子页里永远不生效
++                currentOnCanGoBack.value?.invoke(view?.canGoBack() == true)
++            }
++
 +            override fun onPageFinished(view: WebView?, url: String?) {
 +                // 换 URL 的那次加载完成后清 history：canGoBack 回报的是清完后的值
 +                if (clearHistoryAfterNextPageFinished.getAndSet(false)) {
@@ -18261,13 +18376,16 @@ index 0000000..ff47be2
 +                    // 先取到面板入口 URL：apply 的 receiver 是 WebView，它自己就有个
 +                    // getUrl() 属性，里面裸写 `url` 会被它遮蔽成「当前页地址」
 +                    val entryUrl = url
-+                    // box.app 的返回进入逻辑：每次进入都是新实例 + 加载入口（重进总是面板
-+                    // 首页）；预热器负责把 new WebView() 的 ~500ms 冷启压掉，退出销毁见 onRelease
-+                    (WebViewPreloader.take() ?: WebView(ctx)).apply {
++                    // 实例跨「返回 / 重进」保留（box.app 语义、非 box.app 实现）：
++                    // 复用实例绝不整页 load——整页重载正是「闪烁 + 卡片缺失」的根源；
++                    // 重进由 goHome 历史回退到首页，新建实例（预热器秒建）才加载入口
++                    val (webView, fresh) = PanelWebViewCache.acquire(ctx, sessionKey)
++                    webView.apply {
 +                        layoutParams = ViewGroup.LayoutParams(
 +                            ViewGroup.LayoutParams.MATCH_PARENT,
 +                            ViewGroup.LayoutParams.MATCH_PARENT,
 +                        )
++                        if (!fresh) runCatching { onResume() }
 +                        cookieManager.setAcceptCookie(true)
 +                        cookieManager.setAcceptThirdPartyCookies(this, true)
 +                        addJavascriptInterface(jsBridge, "MishkaAndroid")
@@ -18297,10 +18415,15 @@ index 0000000..ff47be2
 +                        setBackgroundColor(
 +                            if (isDark) Color.BLACK else Color.WHITE,
 +                        )
-+                        // 新实例一律加载入口 URL（box.app ThemedWebView factory 同款）；
-+                        // 之后 reload / goBack 由 update 的差值判定接手
-+                        loadUrl(entryUrl)
-+                        tag = WebViewTag(reloadKey = reloadKey, url = entryUrl, backRequestKey = backRequestKey)
++                        if (fresh) {
++                            // 新建实例加载入口 URL；之后 reload / goBack 由 update 的差值判定接手
++                            loadUrl(entryUrl)
++                            tag = WebViewTag(reloadKey = reloadKey, url = entryUrl, backRequestKey = backRequestKey)
++                        } else {
++                            // 重进固定回面板首页：goHome 按历史深度回退（SPA popstate），
++                            // 不整页重载、不白闪、卡片原样在。旧 tag 保留，update 的差值不会误触发
++                            runCatching { goHome() }
++                        }
 +                    }
 +                },
 +                update = { webView ->
@@ -18347,12 +18470,9 @@ index 0000000..ff47be2
 +                    }
 +                },
 +                onRelease = { released ->
-+                    // box.app 的返回进入逻辑：退出即弃实例（它丢给 GC，这里顺手 destroy 防泄漏），
-+                    // 下次进入由 factory 新建 + 加载入口
-+                    runCatching {
-+                        released.stopLoading()
-+                        released.destroy()
-+                    }
++                    // 实例保留给下次重进，这里只暂挂：停掉 DOM 定时器 / 动画（加载与
++                    // WebSocket 不受影响）。销毁只发生在切面板 / Activity 销毁（缓存内）
++                    runCatching { released.onPause() }
 +                },
 +                modifier = Modifier.fillMaxSize(),
 +            )

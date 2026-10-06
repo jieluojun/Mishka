@@ -183,11 +183,37 @@ MainActivity 在 `onWindowFocusChanged` / `onResume` / 配置变化 / 主题 rec
 - **行为说明**：重进会重新加载面板入口（box.app 原生行为，§6 的「重进保留页面状态」就此
   撤销），加载期显示 WebView 底色。
 
+## 9. 修「重进仍闪烁、卡片缺失」：重进不整页重载（box.app 语义 + 实例保留实现）
+
+用户问为什么返回重进还是闪烁和卡片缺失。**根因就是 §8 的方案本身**：box.app 的返回进入
+实现是「每次进入 = 新 WebView + `loadUrl(入口)`」，即**重进整页重新加载**——闪烁=重载空白帧，
+卡片缺失=面板 SPA 重新初始化拉数据的中间态。box.app 重进面板同样如此，它并没有解决这两个
+症状（`WebViewPreloader` 只压掉 WebView 构造耗时，压不掉页面加载）。另外 §7 的 goHome 用
+**精确 URL 匹配**找历史入口项，面板服务器一重定向（`…/ui` → `…/ui/`、补 `#/`）就匹配不到、
+退化成整页重载——这是当时仍见闪烁的另一半原因。
+
+**方案**：box.app 的返回进入**语义**保留（进入=面板首页、系统返回先退页内历史、退无可退退出
+页面），但实现改为**实例保留 + 重进不重载**——这是同时满足「重进=首页」和「不闪、卡片不丢」
+的唯一解：
+
+- 恢复 `PanelWebViewCache`：WebView 跨「返回 / 重进」保留复用，重进**绝不**整页 load；
+  销毁点仍只有切面板（sessionKey）与 Activity 销毁（ActivityLifecycleCallbacks 盯 recreate）。
+- `goHome()` 改为**按历史深度回退** `history.go(-currentIndex)`：一步退回会话第一个入口项，
+  SPA 走 popstate 切回首页——不重新下载、不白闪、卡片在内存里原样在。不再做 URL 匹配
+  （重定向使入口项实际 URL 与配置串对不上是 §7 失败的原因）；跳过开头可能残留的
+  `about:blank` 项。
+- `doUpdateVisitedHistory` 补上 canGoBack 转发（公开方法名就是 `do*`，不是 `on*`）：
+  SPA 的 pushState / popstate 不触发 `onPageFinished`，没有它「系统返回先退页内历史」
+  在面板子页里永远不生效（box.app 漏了这个回调，其返回分发的意图是历史优先）。
+- 保留 §8 引入的配套：`WebViewPreloader`（新实例秒建）、换 URL 加载完 `clearHistory`、
+  `canGoBack` 不跨进入保存、顶栏返回直接退出 / 系统返回历史优先。
+- `onRelease` 回到「暂挂」语义（`onPause()` 停 DOM 定时器），不再销毁。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（面板相关断言共 11 条：布局 2 +
-  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ box.app 返回进入逻辑 5）。
+  应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（面板相关断言共 14 条：布局 2 +
+  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ 返回进入 / 不重载 8）。
 - **Kotlin 类型检查通过**：kotlinc 2.4.20 + 真实依赖（miuix 0.9.4 / JetBrains Compose
   1.12.0 族（miuix 0.9.4 的实际传递版本）/ androidx.activity 1.13.0 / lifecycle 2.11.0 /
   navigationevent 1.1.2 / Robolectric `android-all` 当 android.jar），对 `custom/panel/`
