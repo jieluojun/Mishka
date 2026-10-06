@@ -177,9 +177,21 @@ assert_contains 'mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW' \
 assert_contains 'NavigationBackHandler(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
   'system back is routed into the panel page history first'
-assert_contains 'SmallTopAppBar(' \
+assert_contains 'PanelCompactTopAppBar(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel page title/address uses a compact single-row app bar'
+  'panel page title/address uses a left-aligned single-row app bar'
+assert_contains 'fontSize = 16.sp' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'panel page title/address uses compact 16sp typography'
+assert_contains 'Lifecycle.Event.ON_RESUME' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'panel WebView is resumed and its responsive layout refreshed on re-entry'
+assert_contains 'webView.destroy()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'released panel WebViews are destroyed instead of leaving stale surfaces'
+assert_contains "window.dispatchEvent(new Event('resize'))" \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'panel page recalculates responsive layout after restore and initial load'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"

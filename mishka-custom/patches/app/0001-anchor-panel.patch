@@ -17123,21 +17123,30 @@ index 0000000..cbb28a7
 +internal const val PANEL_URL_METACUBEXD = "https://metacubex.github.io/metacubexd"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
 new file mode 100644
-index 0000000..28eac78
+index 0000000..e3158e8
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
-@@ -0,0 +1,337 @@
+@@ -0,0 +1,397 @@
 +package top.yukonga.mishka.custom.panel
 +
++import androidx.compose.foundation.background
 +import androidx.compose.foundation.layout.Arrangement
 +import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.Column
 +import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.RowScope
 +import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.WindowInsets
++import androidx.compose.foundation.layout.WindowInsetsSides
++import androidx.compose.foundation.layout.displayCutout
++import androidx.compose.foundation.layout.navigationBars
++import androidx.compose.foundation.layout.only
++import androidx.compose.foundation.layout.systemBars
 +import androidx.compose.foundation.layout.fillMaxSize
 +import androidx.compose.foundation.layout.fillMaxWidth
 +import androidx.compose.foundation.layout.height
 +import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.windowInsetsPadding
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.getValue
@@ -17153,6 +17162,7 @@ index 0000000..28eac78
 +import androidx.compose.ui.Modifier
 +import androidx.compose.ui.platform.LocalContext
 +import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.font.FontWeight
 +import androidx.compose.ui.text.style.TextOverflow
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.unit.sp
@@ -17172,7 +17182,7 @@ index 0000000..28eac78
 +import top.yukonga.miuix.kmp.basic.Icon
 +import top.yukonga.miuix.kmp.basic.IconButton
 +import top.yukonga.miuix.kmp.basic.Scaffold
-+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
++import top.yukonga.miuix.kmp.basic.TopAppBarDefaults
 +import top.yukonga.miuix.kmp.basic.Text
 +import top.yukonga.miuix.kmp.basic.TextButton
 +import top.yukonga.miuix.kmp.icon.MiuixIcons
@@ -17279,9 +17289,8 @@ index 0000000..28eac78
 +
 +    Scaffold(
 +        topBar = {
-+            SmallTopAppBar(
++            PanelCompactTopAppBar(
 +                title = pageTitle?.takeIf { it.isNotBlank() } ?: stringResource(R.string.panel_title),
-+                color = MiuixTheme.colorScheme.surface,
 +                navigationIcon = {
 +                    IconButton(onClick = onBack) {
 +                        Icon(
@@ -17464,6 +17473,57 @@ index 0000000..28eac78
 +        }
 +    }
 +}
++
++/**
++ * Web 页面标题在 SmallTopAppBar 中默认居中；地址类长标题会被截断，且与返回键留白过大。
++ * 这里保留相同的 Miuix 颜色与操作区尺寸，标题改为 16sp 左对齐，适配手机窄屏。
++ */
++@Composable
++private fun PanelCompactTopAppBar(
++    title: String,
++    navigationIcon: @Composable () -> Unit,
++    actions: @Composable RowScope.() -> Unit,
++) {
++    Column(
++        modifier = Modifier
++            .fillMaxWidth()
++            .background(MiuixTheme.colorScheme.surface)
++            .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
++            .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal))
++            .windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Top)),
++    ) {
++        Row(
++            modifier = Modifier
++                .fillMaxWidth()
++                .height(TopAppBarDefaults.CollapsedHeight),
++            verticalAlignment = Alignment.CenterVertically,
++        ) {
++            Box(
++                modifier = Modifier.padding(start = TopAppBarDefaults.NavigationIconPadding),
++                contentAlignment = Alignment.Center,
++            ) {
++                navigationIcon()
++            }
++            Text(
++                text = title,
++                modifier = Modifier.weight(1f),
++                color = MiuixTheme.colorScheme.onSurface,
++                fontSize = 16.sp,
++                fontWeight = FontWeight.Medium,
++                maxLines = 1,
++                overflow = TextOverflow.Ellipsis,
++                softWrap = false,
++            )
++            Row(
++                modifier = Modifier.padding(end = TopAppBarDefaults.ActionIconPadding),
++                horizontalArrangement = Arrangement.End,
++                verticalAlignment = Alignment.CenterVertically,
++                content = actions,
++            )
++        }
++    }
++}
++
 
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt
 new file mode 100644
@@ -17738,10 +17798,10 @@ index 0000000..fb1c8a6
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 new file mode 100644
-index 0000000..a36a56a
+index 0000000..fe82bde
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,483 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import android.annotation.SuppressLint
@@ -17785,6 +17845,9 @@ index 0000000..a36a56a
 +import androidx.compose.ui.platform.LocalContext
 +import androidx.compose.ui.res.stringResource
 +import androidx.compose.ui.viewinterop.AndroidView
++import androidx.lifecycle.Lifecycle
++import androidx.lifecycle.LifecycleEventObserver
++import androidx.lifecycle.compose.LocalLifecycleOwner
 +import top.yukonga.mishka.R
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.launch
@@ -17898,6 +17961,30 @@ index 0000000..a36a56a
 +) {
 +    val context = LocalContext.current
 +    val scope = rememberCoroutineScope()
++    val lifecycleOwner = LocalLifecycleOwner.current
++    val activeWebView = remember { mutableStateOf<WebView?>(null) }
++
++    // Nav 页面可能保留在回退栈中而不是销毁；显式暂停/恢复 WebView，并在恢复时触发布局重算，
++    // 避免再次进入后 Chromium 复用旧合成帧，出现闪烁或网格卡片留白。
++    DisposableEffect(lifecycleOwner) {
++        val observer = LifecycleEventObserver { _, event ->
++            when (event) {
++                Lifecycle.Event.ON_RESUME -> activeWebView.value?.let { webView ->
++                    webView.onResume()
++                    webView.requestLayout()
++                    webView.postInvalidateOnAnimation()
++                    webView.evaluateJavascript("window.dispatchEvent(new Event('resize'));", null)
++                }
++                Lifecycle.Event.ON_PAUSE -> activeWebView.value?.onPause()
++                else -> Unit
++            }
++        }
++        lifecycleOwner.lifecycle.addObserver(observer)
++        onDispose {
++            lifecycleOwner.lifecycle.removeObserver(observer)
++            activeWebView.value?.onPause()
++        }
++    }
 +
 +    val cookieManager = remember { CookieManager.getInstance() }
 +    DisposableEffect(cookieManager) {
@@ -18020,6 +18107,9 @@ index 0000000..a36a56a
 +                currentOnPageFinished.value?.invoke(url)
 +                currentOnCanGoBack.value?.invoke(view?.canGoBack() == true)
 +                runCatching { cookieManager.flush() }
++                view?.requestLayout()
++                view?.postInvalidateOnAnimation()
++                view?.evaluateJavascript("window.dispatchEvent(new Event('resize'));", null)
 +                view?.evaluateJavascript(DOWNLOAD_HOOK_JS, null)
 +            }
 +
@@ -18077,6 +18167,10 @@ index 0000000..a36a56a
 +            AndroidView(
 +                factory = { ctx ->
 +                    WebView(ctx).apply {
++                        activeWebView.value = this
++                        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
++                            onResume()
++                        }
 +                        layoutParams = ViewGroup.LayoutParams(
 +                            ViewGroup.LayoutParams.MATCH_PARENT,
 +                            ViewGroup.LayoutParams.MATCH_PARENT,
@@ -18168,6 +18262,18 @@ index 0000000..a36a56a
 +                    }
 +                },
 +                modifier = Modifier.fillMaxSize(),
++                onRelease = { webView ->
++                    if (activeWebView.value === webView) activeWebView.value = null
++                    runCatching {
++                        webView.stopLoading()
++                        webView.onPause()
++                        webView.removeJavascriptInterface("MishkaAndroid")
++                        webView.webChromeClient = null
++                        webView.webViewClient = null
++                        webView.removeAllViews()
++                        webView.destroy()
++                    }
++                },
 +            )
 +        }
 +    }
@@ -18179,6 +18285,7 @@ index 0000000..a36a56a
 +    val cookie: String?,
 +    val referer: String,
 +)
+
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
 new file mode 100644
 index 0000000..0434c16

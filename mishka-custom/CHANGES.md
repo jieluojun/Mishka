@@ -80,15 +80,19 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
 
 ## 5. 面板顶栏：地址改为紧凑单行
 
-手机端原来走 `AdaptiveTopAppBar` 的大标题样式，网页标题（例如 `127.0.0.1:9090 | 代理`）会落在图标行下方，
-字号也偏大。现在只把 Web 面板页改为 Miuix `SmallTopAppBar`：保留 WebView 返回的标题文本和现有主题/图标，
-由紧凑标题字号显示，并让地址与返回、刷新、面板列表、清除按钮处于同一行；其它页面顶栏不变。
+手机端原来走 Miuix `SmallTopAppBar`，标题居中而且过长会被截断。现改为自定义紧凑单行布局：保留 WebView
+返回的标题文本、主题色与图标，地址左对齐到返回按钮之后并设为 **16sp**，与返回、刷新、面板列表、清除按钮并排；
+其它页面顶栏不变。
 
-`verify_app_patch.sh` 已增加断言，确保面板继续使用紧凑单行顶栏。
+## 6. WebView 重进时刷新生命周期与布局
+
+为嵌入面板的 WebView 监听 `ON_PAUSE` / `ON_RESUME`。恢复时调用 `onResume()`、重新测量/绘制，并向页面发出
+`resize` 事件，让响应式代理组网格重算尺寸；页面完成加载后也触发一次布局刷新。WebView 真正离开组合树时停止加载、
+清理客户端与 JS bridge 并 `destroy()`，避免反复进入时留下旧的 Chromium 合成视图。
 
 ## 验证
 
-- 本次已检查 patch diff 语法、`PanelScreen.kt` blob 与 `BASELINE.txt` 一致，并同步更新 `patch_sha256`；
+- 本次已检查 patch diff 语法、`PanelScreen.kt` / `PanelWebView.kt` blob 与 `BASELINE.txt` 一致，并同步更新 `patch_sha256`；
   完整的 apply / 反向 apply 和 71 个 blob 逐文件校验，需在基线 Mishka 仓库执行
   `mishka-custom/tools/verify_app_patch.sh --repo <仓库>`（工具现已含紧凑顶栏断言）。
 - **此前一版的 Kotlin 类型检查结果**：沙箱里装了 kotlinc，把真实依赖拉齐
@@ -100,7 +104,7 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
   Compose 编译器插件没装，所以后端 IR lowering 会崩——这是缺插件的已知表现，
   不是代码问题（一个 6 行的正确 Composable 同样崩）。
 - 资源侧额外做了 AAPT 敏感字符扫描（裸撇号 / `&` / 尖括号），四个语言全部干净。
-- 本次补丁哈希：`3d866b510266440edb5ac4692af317c1b38dd124fa0120040435baff86f6ca71`。
+- 本次补丁哈希：`de84decd5aad9adb4e2466ebecdd4ecb22971e0cb02a97f255b034f4c49d408e`。
 - 当前运行环境只有定制包，没有 Mishka 源码仓库，因此**本次没有运行 Gradle / Kotlin 编译**。落地后请先跑一次：
 
 ```bash
