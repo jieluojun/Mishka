@@ -96,10 +96,73 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
   读取走的是 `State.getValue` 扩展，只导 `setValue` 不够，委托直接解析失败。
 - `PanelSheet.kt` 清理未用 import 时把 `Column` 一起删了，而外层容器还在用。
 
+## 6. 主页测延迟：不再把「国外节点的延迟」当成 Baidu 的延迟
+
+**现象**：主页三个延迟探测（Baidu / Cloudflare / Google）里，Baidu 的延迟明显偏高。
+
+**根因**（读代码确认，不是节点慢）：`HomeViewModel.testLatency()` 先让
+`RuleLatencyTester` 走 `mixed-port` 拨测——这是唯一真正经过规则引擎的测法。但
+`SubscriptionProxyResolver` 要拿到 `mixed-port`，得
+`overrideStore.load().mixedPort ?: MihomoApiClient.getConfig().mixedPort` 大于 0；
+而 `ConfigGenerator` 只是**读**订阅里本来就有的 `mixed-port`（`readSubscriptionMixedPort`），
+从不注入。典型订阅不带这一项 → 解析成 0 → `resolve()` 返回 null → 测速降级到
+
+```kotlin
+// 改动前
+val result = repository?.getProxyDelay("GLOBAL", probe.url, ...)
+```
+
+`GLOBAL` 组当前选中的几乎总是国外节点，于是 `www.baidu.com` 被绕到国外出口再测一次，
+测出来的是「绕地球一圈的 RTT」，不是 Baidu 的真实延迟。
+
+**改动**：不动内核、不动 CLI（按你的要求，没有注入 `mixed-port`、也没有加
+`--mixed-port` 启动参数），只改降级策略。
+
+- 新增 `domain/rule/RuleMatchResolver.kt`：纯字符串层面的 mihomo 规则匹配器。
+  拿内核 `GET /rules` 返回的规则表，按 `DOMAIN` / `DOMAIN-SUFFIX` / `DOMAIN-KEYWORD` /
+  `DOMAIN-REGEX` / `HOST*` / `MATCH` 逐条判定该 URL 会命中哪条规则、走哪个出口。
+  `IP-CIDR` 等规则对域名必然不匹配，可以安全跳过。
+- `HomeViewModel.fallbackProbe()` 从「拨 GLOBAL」改成「拨规则真正指定的出口」：
+  - 规则能在字符串层面判定 → 测那个出口（配置用 `DOMAIN-SUFFIX,baidu.com,DIRECT`
+    这类的，Baidu 现在会直接测 `DIRECT`，数字才对得上）；
+  - 中途遇到 `GEOSITE` / `GEOIP` / `RULE-SET` / `SUB-RULE` / 脚本等**只有内核能判定**的
+    规则 → 判定不出，返回 `RuleLatencyTester.Unavailable`，UI 显示 `—`，
+    **不再给一个看似精确、实则误导的数字**。
+- `LatencySection.kt` 把原来的「未走规则」拆成两种：只是没走规则引擎显示 `未走规则`；
+  三个站点全都判不出路由时显示 `路由不可判定`（新增
+  `home_latency_route_undecided` / `home_latency_not_via_rules` 两处文案，中英已对齐）。
+
+> **需要你知道的边界**：按你选的「不动内核」方案，只要订阅的规则靠 `GEOSITE`/`GEOIP`
+> 分流（绝大多数机场订阅都是），字符串层面就判不出来，结果会是 `路由不可判定`。
+> 想要 Baidu 显示真实的、确实走过规则的延迟，唯一办法还是让内核开 `mixed-port`——
+> 你自己的配置编辑器里已经有 `mixed-port` 这一项（`FormSpecs.kt`，在「覆盖」里填也行），
+> 填上后主页探测会自动走规则引擎，无需改代码。
+
+## 7. 代理页批量测速：对齐 mihomo_box
+
+参照 `mihomo_box` 的 `webroot/ui/js/page-proxies.js`（`testGroupAll`），把常量与流程整套搬过来：
+
+| 项 | 改前 | 改后（对齐 mihomo_box） |
+| --- | --- | --- |
+| 并发数 | 5 | **8**（`BATCH_CONCURRENCY`） |
+| 批量单节点超时 | 5000ms | **2000ms**（`BATCH_TIMEOUT`；单节点手点测速仍是 5000ms） |
+| 组接口优先 | 无 | **有**：Selector 组先打一次 `/group/{name}/delay`，预算 7s（`GROUP_DELAY_BUDGET`） |
+| 滑动让路 | 无 | **有**：滑动/触摸后 900ms 内暂停发起新探测，最多让 3s（`waitForBatchIdle`） |
+| 结果刷新 | 整组跑完才刷一次 | **每 700ms 刷一次**，边测边出（对齐其 rAF 合并绘制） |
+
+- 新增 `MihomoApiClient.getGroupProxyDelay()`（`GET /group/{name}/delay`），并补到
+  `MihomoRepository` / `MihomoRepositoryImpl`。
+- **组接口只对 Selector 组用**：mihomo 的 `hub/route/groups.go` 在处理该端点时，对非
+  Selector 组会先 `ForceSet("")` 解除固定——那会把用户手动选中的节点冲掉。所以
+  URLTest / Fallback / LoadBalance 等组直接走并发池逐节点测，行为与改前一致。
+  （mihomo_box 对所有组都打组接口，这里是有意保留的差异。）
+- `ProxyViewModel` 新增 `noteUserInteraction()`，`ProxyScreen.kt` 用
+  `rememberLazyListState()` + `snapshotFlow { isScrollInProgress }` 在滑动时通知它。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（新增 11 条外部面板相关的断言）。
+  应用结果与 `BASELINE.txt` 的 74 个 blob 逐文件一致（新增 20 条断言，覆盖外部面板、主页延迟、批量测速）。
 - **Kotlin 类型检查通过（本版新增）**：沙箱里装了 kotlinc，把真实依赖拉齐
   （Compose 1.9.4 / miuix 0.9.4 / androidx.activity / lifecycle / navigationevent /
   Robolectric 的 `android-all` 当 android.jar），对 `custom/panel/` 五个文件做了完整
@@ -110,7 +173,7 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
   不是代码问题（一个 6 行的正确 Composable 同样崩）。
 - 资源侧额外做了 AAPT 敏感字符扫描（裸撇号 / `&` / 尖括号），四个语言全部干净。
 - `BASELINE.txt` 的 `patch_sha256` 已随新补丁更新为
-  `619912b43ea1b9915ebe90efe15b1d6ce6ccfad515e3cb8f99ebacee5667139c`。
+  `dcc2e7504fd7651534a75d2adedf0f9d018048a528ce9c3668ae523a94fed9d7`。
 - 这一轮类型检查又抓到一个必炸的编译错误（也已修）：`PanelScreen.kt` 用了
   `WindowInsets.systemBars.union(...)` 但没导 `androidx.compose.foundation.layout.union`
   —— `union` 是顶层中缀扩展函数，跟 `only` 一样得单独 import。

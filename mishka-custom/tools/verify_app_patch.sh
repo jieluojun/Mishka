@@ -180,6 +180,24 @@ assert_contains 'NavigationBackHandler(' \
 assert_contains 'private val PanelTopBarHeight = 52.dp' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
   'panel top bar is a compact single row (address beside the action buttons)'
+assert_contains 'object RuleMatchResolver' \
+  app/src/main/kotlin/top/yukonga/mishka/domain/rule/RuleMatchResolver.kt \
+  'home latency fallback resolves the rule target instead of probing GLOBAL'
+assert_contains 'RuleMatchResolver.resolve(host, rules)' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt \
+  'home latency fallback no longer reports a GLOBAL (foreign node) delay as the probe result'
+assert_contains 'suspend fun getGroupProxyDelay(' \
+  app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
+  'group delay endpoint exists (whole-group test in one request)'
+assert_contains 'private const val GROUP_DELAY_CONCURRENCY = 8' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
+  'batch speed test uses mihomo_box concurrency (8)'
+assert_contains 'private const val BATCH_DELAY_TIMEOUT_MS = 2000' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
+  'batch speed test uses the short 2s batch timeout (5s only for single node taps)'
+assert_contains 'fun noteUserInteraction()' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
+  'batch speed test yields to list scrolling'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"

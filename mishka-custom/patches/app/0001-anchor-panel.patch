@@ -18557,7 +18557,7 @@ index 0000000..0434c16
 +    private fun leadingIndent(value: String): Int = value.takeWhile { it == ' ' }.length
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-index 33aa9cc..0fdd5de 100644
+index 33aa9cc..3e04b12 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 @@ -29,6 +29,7 @@ import top.yukonga.mishka.domain.model.ProvidersResponse
@@ -18592,7 +18592,7 @@ index 33aa9cc..0fdd5de 100644
  
      /**
       * 测试 proxy-provider 内单节点延迟。provider 节点不在 /proxies 命名空间，
-@@ -105,15 +109,46 @@ class MihomoApiClient(
+@@ -105,15 +109,72 @@ class MihomoApiClient(
      suspend fun getProviderProxyDelay(
          provider: String,
          name: String,
@@ -18601,11 +18601,6 @@ index 33aa9cc..0fdd5de 100644
          timeout: Int = 5000,
      ): DelayResult =
 -        client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
--            url {
--                parameters.append("url", testUrl)
--                parameters.append("timeout", timeout.toString())
--            }
--        }.body()
 +        delayBodyOrThrow(
 +            client.get("$baseUrl/providers/proxies/${pathSeg(provider)}/${pathSeg(name)}/healthcheck") {
 +                url {
@@ -18615,6 +18610,33 @@ index 33aa9cc..0fdd5de 100644
 +            },
 +            name,
 +        )
++
++    /**
++     * 整组测速：`GET /group/{name}/delay`，一次请求由内核并发测完全组。
++     *
++     * 与逐节点 `/proxies/{name}/delay` 的差别（mihomo hub/route/groups.go）：它对非
++     * Selector 组会先 `ForceSet("")` 解除固定，所以这条快路径只对 Selector 组使用，
++     * 其余组仍逐节点测，避免把用户手动固定的节点冲掉。
++     */
++    suspend fun getGroupProxyDelay(
++        name: String,
++        testUrl: String = DEFAULT_DELAY_TEST_URL,
++        timeout: Int = 5000,
++    ): Map<String, Int> {
++        val response = client.get("$baseUrl/group/${pathSeg(name)}/delay") {
+             url {
+                 parameters.append("url", testUrl)
+                 parameters.append("timeout", timeout.toString())
+             }
+-        }.body()
++        }
++        if (!response.status.isSuccess()) {
++            val detail = runCatching { response.bodyAsText() }.getOrNull().orEmpty()
++            val summary = extractErrorMessage(detail) ?: response.status.description
++            throw DelayTestFailedException(name, response.status.value, summary)
++        }
++        return response.body()
++    }
 +
 +    /**
 +     * 延迟测试端点的响应处理：测速失败时 mihomo 返回 503 + `{"message":…}`，而 [DelayResult]
@@ -18646,7 +18668,7 @@ index 33aa9cc..0fdd5de 100644
  
      suspend fun getRules(): RulesResponse =
          client.get("$baseUrl/rules").body()
-@@ -219,4 +254,8 @@ class MihomoApiClient(
+@@ -219,4 +280,8 @@ class MihomoApiClient(
      }
  }
  
@@ -18761,6 +18783,24 @@ index 76eb0a2..14ebcdc 100644
      @JvmStatic
      private external fun nativeValidateTransform(
          workDir: String,
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt b/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
+index c961fd8..cbcb473 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
+@@ -56,6 +56,13 @@ class MihomoRepositoryImpl(
+     ): Result<DelayResult> =
+         runCatching { apiClient.getProviderProxyDelay(provider, name, testUrl, timeout) }
+ 
++    override suspend fun getGroupProxyDelay(
++        name: String,
++        testUrl: String,
++        timeout: Int,
++    ): Result<Map<String, Int>> =
++        runCatching { apiClient.getGroupProxyDelay(name, testUrl, timeout) }
++
+     override suspend fun getRules(): Result<RulesResponse> = runCatching { apiClient.getRules() }
+     override fun connectionsFlow(): Flow<ConnectionsResponse> = webSocket.connectionsFlow()
+     override suspend fun getConnections(): Result<ConnectionsResponse> = runCatching { apiClient.getConnections() }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt b/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
 index af3418a..d3332ed 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
@@ -18834,10 +18874,10 @@ index 9a996f2..e9179c2 100644
  fun ConfigurationOverride.resolveSecretOrNull(): String? =
      secret?.trim()?.takeIf { it.isNotEmpty() }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
-index 1eaec7e..4219bd9 100644
+index 1eaec7e..49c2067 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
-@@ -36,14 +36,14 @@ interface MihomoRepository {
+@@ -36,17 +36,24 @@ interface MihomoRepository {
      suspend fun unfixProxy(group: String): Result<Unit>
      suspend fun getProxyDelay(
          name: String,
@@ -18854,6 +18894,118 @@ index 1eaec7e..4219bd9 100644
          timeout: Int = 5000,
      ): Result<DelayResult>
  
++    /** 整组测速；仅对 Selector 组安全，见 [top.yukonga.mishka.data.api.MihomoApiClient.getGroupProxyDelay] */
++    suspend fun getGroupProxyDelay(
++        name: String,
++        testUrl: String = "https://www.gstatic.com/generate_204",
++        timeout: Int = 5000,
++    ): Result<Map<String, Int>>
++
+     suspend fun getRules(): Result<RulesResponse>
+     suspend fun getConnections(): Result<ConnectionsResponse>
+     suspend fun closeAllConnections(): Result<Unit>
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/rule/RuleMatchResolver.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/rule/RuleMatchResolver.kt
+new file mode 100644
+index 0000000..017e9e1
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/domain/rule/RuleMatchResolver.kt
+@@ -0,0 +1,96 @@
++package top.yukonga.mishka.domain.rule
++
++import top.yukonga.mishka.domain.model.RuleInfo
++
++/**
++ * 纯字符串层面的 mihomo 规则匹配，用于 mixed-port 不可用时推断某个 URL 会命中哪条规则。
++ *
++ * 只处理不需要内核（GEOIP / GEOSITE / RULE-SET / 脚本 / 进程名…）就能判定的规则类型：
++ * DOMAIN* / HOST* / IP-*（host 不是 IP 时必然不匹配）/ MATCH。
++ * 其余类型一律记为「不可判定」，因为跳过它们会让结果与内核真实路由不一致。
++ *
++ * 内置表 + 订阅里的 `mixed-port` 为 0 时，主页延迟只能退到 GLOBAL 拨测，
++ * 于是国内外站点统统走国外节点、Baidu 延迟虚高。这个类把「降级」从
++ * 「测 GLOBAL」改成「测规则真正指定的出口」，并在判不出来时拒绝给数字。
++ */
++object RuleMatchResolver {
++
++    sealed interface Outcome {
++        /**
++         * 命中规则，[name] 为该规则的出口名。
++         * [trustworthy] = false 表示为了得到它跳过了一条内核才能判定的规则，结果可能与实际路由不同。
++         */
++        data class Target(val name: String, val trustworthy: Boolean) : Outcome
++
++        /** 规则在内核态才能判定，且无法在跳过后给出可信结论 */
++        data object Undecidable : Outcome
++
++        /** 内核没有返回任何规则 */
++        data object NoRules : Outcome
++    }
++
++    fun resolve(host: String, rules: List<RuleInfo>): Outcome {
++        if (rules.isEmpty()) return Outcome.NoRules
++        val target = host.trim().lowercase().trimEnd('.')
++        if (target.isEmpty()) return Outcome.NoRules
++
++        var skippedUndecidable = false
++        for (rule in rules) {
++            val type = rule.type.trim().uppercase()
++            val payload = rule.payload.trim()
++            val proxy = rule.proxy.trim()
++            when {
++                type == "MATCH" -> return Outcome.Target(proxy, !skippedUndecidable)
++                matches(type, payload, target) -> return Outcome.Target(proxy, !skippedUndecidable)
++                // IP-* 对域名必然不匹配（内核要先解析），可以安全地当没命中
++                isSkippable(type) -> Unit
++                // 其余（GEOSITE / GEOIP / RULE-SET / SUB-RULE / SCRIPT / 逻辑组合 / 进程名…）
++                // 命中与否只有内核知道，记下来并在最后判定结果是否可信
++                else -> skippedUndecidable = true
++            }
++        }
++        // 全部规则都可判定却没有命中：mihomo 会走 FINAL，等价于直连
++        return if (skippedUndecidable) Outcome.Undecidable
++        else Outcome.Target("DIRECT", trustworthy = true)
++    }
++
++    private fun isSkippable(type: String): Boolean = when (type) {
++        "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-KEYWORD", "DOMAIN-REGEX",
++        "HOST", "HOST-SUFFIX", "HOST-KEYWORD", "HOST-REGEX", "HOST-WILDCARD",
++        "IP-CIDR", "IP-CIDR6", "IP-SUFFIX", "IP-ASN",
++        "DST-PORT", "SRC-PORT", "IN-PORT", "PORT",
++        -> true
++
++        else -> false
++    }
++
++    private fun matches(type: String, payload: String, host: String): Boolean {
++        if (payload.isEmpty()) return false
++        val p = payload.lowercase()
++        return when (type) {
++            "DOMAIN", "HOST" -> host == p
++            "DOMAIN-SUFFIX", "HOST-SUFFIX" -> host == p || host.endsWith(".$p")
++            "DOMAIN-KEYWORD", "HOST-KEYWORD" -> host.contains(p)
++            "DOMAIN-REGEX", "HOST-REGEX" ->
++                runCatching { Regex(payload).containsMatchIn(host) }.getOrDefault(false)
++
++            "HOST-WILDCARD" -> wildcard(payload).containsMatchIn(host)
++            else -> false
++        }
++    }
++
++    private fun wildcard(pattern: String): Regex = runCatching {
++        Regex(
++            buildString {
++                pattern.forEach { ch ->
++                    when (ch) {
++                        '*' -> append(".*")
++                        '?' -> append('.')
++                        else -> append(Regex.escape(ch.toString()))
++                    }
++                }
++            },
++            RegexOption.IGNORE_CASE,
++        )
++    }.getOrDefault(Regex(""))
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 index bfb7c72..255efc2 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
@@ -20932,6 +21084,41 @@ index f3a7a58..e2ce35a 100644
                  )
              }
          }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/LatencySection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/LatencySection.kt
+index e4cdac2..803315d 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/LatencySection.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/LatencySection.kt
+@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.data.api.RuleLatencyTester
+ import top.yukonga.mishka.ui.theme.StatusColors
+ import top.yukonga.mishka.util.FormatUtils
+ import top.yukonga.mishka.viewmodel.HomeUiState
+@@ -66,6 +67,9 @@ private fun LatencyHeader(
+     onTestLatency: () -> Unit,
+ ) {
+     val allTested = state.latencyBaidu >= 0 || state.latencyCloudflare >= 0 || state.latencyGoogle >= 0
++    val allUndecided = state.latencyBaidu == RuleLatencyTester.Unavailable &&
++        state.latencyCloudflare == RuleLatencyTester.Unavailable &&
++        state.latencyGoogle == RuleLatencyTester.Unavailable
+     val statusColor = when {
+         !allTested -> StatusColors.neutral
+         state.latencyGoogle >= 0 -> StatusColors.healthy
+@@ -93,7 +97,11 @@ private fun LatencyHeader(
+             // 本轮未经规则引擎，明确标注而非静默给数字
+             if (state.isRunning && !state.latencyViaRules) {
+                 Text(
+-                    text = stringResource(R.string.home_latency_not_via_rules),
++                    text = stringResource(
++                        // 三个站点都判不出路由：不是「延迟高」，而是根本没走规则、给不出可信数字
++                        if (allUndecided) R.string.home_latency_route_undecided
++                        else R.string.home_latency_not_via_rules,
++                    ),
+                     fontSize = 12.sp,
+                     color = StatusColors.warning,
+                 )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
 index ce37f91..678189b 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
@@ -21346,7 +21533,7 @@ index 93088aa..3eeddd1 100644
                          verticalAlignment = Alignment.CenterVertically,
                          horizontalArrangement = Arrangement.spacedBy(8.dp),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
-index d3f9631..91c33aa 100644
+index d3f9631..4ab6257 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 @@ -5,10 +5,12 @@ import androidx.compose.animation.core.animateDpAsState
@@ -21362,7 +21549,16 @@ index d3f9631..91c33aa 100644
  import androidx.compose.foundation.interaction.MutableInteractionSource
  import androidx.compose.foundation.layout.Arrangement
  import androidx.compose.foundation.layout.Box
-@@ -50,6 +52,7 @@ import androidx.compose.ui.graphics.ImageBitmap
+@@ -24,6 +26,8 @@ import androidx.compose.foundation.layout.size
+ import androidx.compose.foundation.layout.sizeIn
+ import androidx.compose.foundation.layout.width
+ import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.rememberLazyListState
++import androidx.compose.runtime.snapshotFlow
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.DisposableEffect
+ import androidx.compose.runtime.FloatState
+@@ -50,6 +54,7 @@ import androidx.compose.ui.graphics.ImageBitmap
  import androidx.compose.ui.graphics.graphicsLayer
  import androidx.compose.ui.input.nestedscroll.nestedScroll
  import androidx.compose.ui.layout.Layout
@@ -21370,7 +21566,12 @@ index d3f9631..91c33aa 100644
  import androidx.compose.ui.platform.LocalLayoutDirection
  import androidx.compose.ui.res.stringResource
  import androidx.compose.ui.text.font.FontFamily
-@@ -68,6 +71,7 @@ import kotlinx.coroutines.Job
+@@ -64,10 +69,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import kotlinx.collections.immutable.ImmutableSet
+ import kotlinx.collections.immutable.persistentSetOf
+ import kotlinx.collections.immutable.toPersistentList
++import kotlinx.coroutines.flow.collect
+ import kotlinx.coroutines.Job
  import kotlinx.coroutines.delay
  import kotlinx.coroutines.launch
  import top.yukonga.mishka.R
@@ -21378,7 +21579,7 @@ index d3f9631..91c33aa 100644
  import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
  import top.yukonga.mishka.ui.component.CardSegment
  import top.yukonga.mishka.ui.component.ListPopupDefaults.MenuPositionProvider
-@@ -76,7 +80,10 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
+@@ -76,7 +83,10 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
  import top.yukonga.mishka.ui.platform.IconLoader
  import top.yukonga.mishka.ui.theme.StatusColors
  import top.yukonga.mishka.ui.util.WideContentBox
@@ -21389,7 +21590,7 @@ index d3f9631..91c33aa 100644
  import top.yukonga.mishka.viewmodel.ProxyUiState
  import top.yukonga.mishka.viewmodel.ProxyViewModel
  import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
-@@ -131,6 +138,28 @@ fun ProxyScreen(
+@@ -131,6 +141,28 @@ fun ProxyScreen(
          singleColumnAnimating = false
      }
      val showGlobalGroup = viewModel?.showGlobalGroup?.collectAsStateWithLifecycle()?.value != false
@@ -21418,7 +21619,7 @@ index d3f9631..91c33aa 100644
      val scrollBehavior = MiuixScrollBehavior()
      // 全局模式下 GLOBAL 是唯一出口，无视开关必须可选
      val globalModeActive = uiState.mode == ProxyViewModel.MODE_GLOBAL
-@@ -198,7 +227,7 @@ fun ProxyScreen(
+@@ -198,7 +230,7 @@ fun ProxyScreen(
  
      // 排序 + 分块上提缓存：content lambda 随 expandedGroups/testingNodes 等任一变化整体重跑，
      // 不缓存则每次重组对每个展开组重排几百节点。key 取 groups 而非 uiState，懒填充跳过收起组
@@ -21427,7 +21628,7 @@ index d3f9631..91c33aa 100644
  
      val backdrop = rememberBlurBackdrop()
      val blurActive = backdrop != null
-@@ -298,7 +327,7 @@ fun ProxyScreen(
+@@ -298,7 +330,7 @@ fun ProxyScreen(
                                      ListPopupColumn {
                                          DropdownImpl(
                                              text = stringResource(R.string.proxy_single_column),
@@ -21436,7 +21637,7 @@ index d3f9631..91c33aa 100644
                                              isSelected = singleColumn,
                                              index = 0,
                                              onSelectedIndexChange = {
-@@ -308,7 +337,7 @@ fun ProxyScreen(
+@@ -308,7 +340,7 @@ fun ProxyScreen(
                                          )
                                          DropdownImpl(
                                              text = stringResource(R.string.proxy_show_global_group),
@@ -21445,7 +21646,7 @@ index d3f9631..91c33aa 100644
                                              // 勾选态跟实际结果走，不是偏好值
                                              isSelected = showGlobalGroup || globalModeActive,
                                              index = 1,
-@@ -320,7 +349,7 @@ fun ProxyScreen(
+@@ -320,7 +352,7 @@ fun ProxyScreen(
                                          )
                                          DropdownImpl(
                                              text = stringResource(R.string.proxy_refresh_icon),
@@ -21454,7 +21655,7 @@ index d3f9631..91c33aa 100644
                                              isSelected = false,
                                              index = 2,
                                              onSelectedIndexChange = {
-@@ -329,6 +358,36 @@ fun ProxyScreen(
+@@ -329,6 +361,36 @@ fun ProxyScreen(
                                                  showPopup.value = false
                                              },
                                          )
@@ -21491,7 +21692,23 @@ index d3f9631..91c33aa 100644
                                      }
                                  }
                              }
-@@ -397,9 +456,18 @@ fun ProxyScreen(
+@@ -360,7 +422,15 @@ fun ProxyScreen(
+                     )
+                 }
+             } else {
++                val listState = rememberLazyListState()
++                // 批量测速期间给滚动让路：滑动时通知 ViewModel 暂停发起新的探测
++                LaunchedEffect(listState, viewModel) {
++                    snapshotFlow { listState.isScrollInProgress }
++                        .collect { if (it) viewModel?.noteUserInteraction() }
++                }
++
+                 LazyColumn(
++                    state = listState,
+                     modifier = Modifier
+                         .fillMaxSize()
+                         .scrollEndHaptic()
+@@ -397,9 +467,18 @@ fun ProxyScreen(
                          // 收起动画未跑完的组仍产出行 item，靠行高收缩表达收起
                          val rowsPresent = isExpanded || group.name in retainedGroups
                          // 恒按 2 个分行：行数与 key 不随单列开关变化，morph 全在行内部
@@ -21511,7 +21728,7 @@ index d3f9631..91c33aa 100644
                              }
                          } else {
                              emptyList()
-@@ -422,6 +490,8 @@ fun ProxyScreen(
+@@ -422,6 +501,8 @@ fun ProxyScreen(
                                  ProxyGroupHeader(
                                      group = group,
                                      isExpanded = isExpanded,
@@ -21520,7 +21737,7 @@ index d3f9631..91c33aa 100644
                                      iconCacheVersion = iconCacheVersion,
                                      isTesting = group.name in uiState.testingGroups,
                                      onTestDelay = { viewModel?.testGroupDelay(group.name) },
-@@ -511,6 +581,8 @@ private fun HoldDownEffect(holdDown: Boolean, interactionSource: MutableInteract
+@@ -511,6 +592,8 @@ private fun HoldDownEffect(holdDown: Boolean, interactionSource: MutableInteract
  private fun ProxyGroupHeader(
      group: ProxyGroupUi,
      isExpanded: Boolean,
@@ -21529,7 +21746,7 @@ index d3f9631..91c33aa 100644
      iconCacheVersion: Int,
      isTesting: Boolean,
      onTestDelay: () -> Unit,
-@@ -539,13 +611,14 @@ private fun ProxyGroupHeader(
+@@ -539,13 +622,14 @@ private fun ProxyGroupHeader(
          verticalAlignment = Alignment.CenterVertically,
      ) {
          // 左侧图标
@@ -21551,7 +21768,7 @@ index d3f9631..91c33aa 100644
  
          // 中间：组名 + 当前节点
          Column(modifier = Modifier.weight(1f)) {
-@@ -581,7 +654,7 @@ private fun ProxyGroupHeader(
+@@ -581,7 +665,7 @@ private fun ProxyGroupHeader(
              Spacer(Modifier.width(8.dp))
          }
          Text(
@@ -21560,7 +21777,7 @@ index d3f9631..91c33aa 100644
              fontSize = 14.sp,
              color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
          )
-@@ -769,6 +842,7 @@ private fun ProxyNodeRow(
+@@ -769,6 +853,7 @@ private fun ProxyNodeRow(
      }
  }
  
@@ -21568,7 +21785,7 @@ index d3f9631..91c33aa 100644
  @Composable
  private fun ProxyNodeCard(
      name: String,
-@@ -803,9 +877,19 @@ private fun ProxyNodeCard(
+@@ -803,9 +888,19 @@ private fun ProxyNodeCard(
                  if (isSelectable) {
                      Modifier
                          .squircleSurface(color = backgroundColor, cornerRadius = 12.dp)
@@ -21963,7 +22180,7 @@ index cef7fbf..eeb582a 100644
                  TextButton(
                      text = stringResource(R.string.common_save),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
-index b112741..74194d3 100644
+index b112741..0372bc3 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 @@ -1,11 +1,13 @@
@@ -21991,15 +22208,24 @@ index b112741..74194d3 100644
  import top.yukonga.mishka.data.api.MihomoConnectionManager
  import top.yukonga.mishka.data.api.RuleLatencyTester
  import top.yukonga.mishka.data.repository.OverrideJsonStore
-@@ -33,6 +38,7 @@ import top.yukonga.mishka.platform.ProxyServiceController
+@@ -28,12 +33,16 @@ import top.yukonga.mishka.domain.model.Subscription
+ import top.yukonga.mishka.domain.model.SubscriptionInfo
+ import top.yukonga.mishka.domain.model.TunOverride
+ import top.yukonga.mishka.domain.repository.MihomoRepository
++import top.yukonga.mishka.domain.rule.RuleMatchResolver
+ import top.yukonga.mishka.platform.PlatformSystemInfo
+ import top.yukonga.mishka.platform.ProxyServiceController
  import top.yukonga.mishka.platform.ProxyState
  import top.yukonga.mishka.platform.TunMode
  import top.yukonga.mishka.platform.showToast
 +import top.yukonga.mishka.service.ActiveProfileRuntimeConfig
  import top.yukonga.mishka.util.FormatUtils
++import java.net.URL
++
  import kotlin.time.Clock
  import kotlin.time.Duration
-@@ -140,6 +146,7 @@ class HomeViewModel(
+ import kotlin.time.Duration.Companion.milliseconds
+@@ -140,6 +149,7 @@ class HomeViewModel(
      private val overrideStore: OverrideJsonStore,
      private val connectionManager: MihomoConnectionManager,
      private val latencyTester: RuleLatencyTester,
@@ -22007,7 +22233,7 @@ index b112741..74194d3 100644
      private val getActiveSubscriptionId: () -> String? = { null },
      private val activeSubscription: StateFlow<Subscription?> = MutableStateFlow(null).asStateFlow(),
      private val onLiveProviderInfo: (subscriptionId: String?, info: SubscriptionInfo?) -> Unit = { _, _ -> },
-@@ -189,6 +196,8 @@ class HomeViewModel(
+@@ -189,6 +199,8 @@ class HomeViewModel(
      private var uptimeJob: Job? = null
      private var mihomoPid: Int = -1
      private val systemInfo = PlatformSystemInfo()
@@ -22016,7 +22242,7 @@ index b112741..74194d3 100644
  
      /** UI 是否在前台，由 MainActivity 的 onStart/onStop 驱动，门控各轮询循环 */
      private val uiVisible = MutableStateFlow(true)
-@@ -694,14 +703,79 @@ class HomeViewModel(
+@@ -694,14 +706,79 @@ class HomeViewModel(
          serviceController.restartWhenReady(getActiveSubscriptionId())
      }
  
@@ -22102,6 +22328,59 @@ index b112741..74194d3 100644
      }
  
      fun reloadConfig() {
+@@ -739,10 +816,49 @@ class HomeViewModel(
+         }
+     }
+ 
+-    /** mixed-port 不可用时的降级：GLOBAL 组拨测，至少能反映节点本身通不通 */
++    /**
++     * mixed-port 不可用时的降级拨测。
++     *
++     * 以前这里直接拨 GLOBAL：GLOBAL 当前选中的几乎总是国外节点，于是国内外站点
++     * 一律绕国外出口，Baidu 被测出几百毫秒、看起来像「节点很慢」，其实是路由不对。
++     *
++     * 现在改成先按内核返回的规则表推断该 URL 的真正出口：
++     *  - 规则能在字符串层面判定（DOMAIN/HOST/MATCH 等）→ 测那个出口，数字才对得上；
++     *  - 中途遇到 GEOSITE/GEOIP/RULE-SET 等内核态规则 → 判定不出，返回 Unavailable，
++     *    让 UI 显示「— / 未走规则」而不再给出一个看似精确、实则误导的数字。
++     */
+     private suspend fun fallbackProbe(probe: LatencyProbe) {
+-        val result = repository?.getProxyDelay("GLOBAL", probe.url, LATENCY_TIMEOUT_MILLIS.toInt())
+-        applyLatency(probe, result?.getOrNull()?.delay ?: -1)
++        val repo = repository
++        if (repo == null) {
++            applyLatency(probe, RuleLatencyTester.Failed)
++            return
++        }
++        val host = runCatching { URL(probe.url).host }.getOrNull()?.orEmpty().orEmpty()
++        if (host.isBlank()) {
++            applyLatency(probe, RuleLatencyTester.Failed)
++            return
++        }
++        val rules = repo.getRules().getOrNull()?.rules
++        if (rules.isNullOrEmpty()) {
++            applyLatency(probe, RuleLatencyTester.Unavailable)
++            return
++        }
++        when (val outcome = RuleMatchResolver.resolve(host, rules)) {
++            is RuleMatchResolver.Outcome.Target -> {
++                // 跳过过内核态规则时结果不可信，宁可不给数字
++                if (!outcome.trustworthy || outcome.name.isBlank()) {
++                    applyLatency(probe, RuleLatencyTester.Unavailable)
++                    return
++                }
++                val delay = repo.getProxyDelay(outcome.name, probe.url, LATENCY_TIMEOUT_MILLIS.toInt())
++                    .getOrNull()?.delay ?: RuleLatencyTester.Failed
++                applyLatency(probe, delay)
++            }
++
++            RuleMatchResolver.Outcome.Undecidable,
++            RuleMatchResolver.Outcome.NoRules,
++                -> applyLatency(probe, RuleLatencyTester.Unavailable)
++        }
+     }
+ 
+     private fun applyLatency(probe: LatencyProbe, delay: Int) {
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
 index 4b576a6..e0a0abe 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
@@ -22160,10 +22439,10 @@ index 4b576a6..e0a0abe 100644
          if (_uiState.value.refresh != null) return
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
-index f684c37..1090a26 100644
+index f684c37..115879e 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
-@@ -4,6 +4,11 @@ import android.util.Log
+@@ -4,6 +4,12 @@ import android.util.Log
  import androidx.compose.runtime.Immutable
  import androidx.lifecycle.ViewModel
  import androidx.lifecycle.viewModelScope
@@ -22172,17 +22451,22 @@ index f684c37..1090a26 100644
 +import java.net.SocketTimeoutException
 +import java.net.UnknownHostException
 +import kotlin.coroutines.cancellation.CancellationException
++import java.util.concurrent.atomic.AtomicInteger
  import kotlinx.collections.immutable.ImmutableList
  import kotlinx.collections.immutable.ImmutableMap
  import kotlinx.collections.immutable.ImmutableSet
-@@ -14,15 +19,20 @@ import kotlinx.collections.immutable.toPersistentList
+@@ -13,16 +19,26 @@ import kotlinx.collections.immutable.persistentSetOf
+ import kotlinx.collections.immutable.toPersistentList
  import kotlinx.collections.immutable.toPersistentMap
  import kotlinx.collections.immutable.toPersistentSet
++import android.os.SystemClock
  import kotlinx.coroutines.Job
 +import kotlinx.coroutines.TimeoutCancellationException
  import kotlinx.coroutines.async
  import kotlinx.coroutines.awaitAll
  import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.isActive
 +import kotlinx.coroutines.flow.MutableSharedFlow
  import kotlinx.coroutines.flow.MutableStateFlow
 +import kotlinx.coroutines.flow.SharedFlow
@@ -22192,11 +22476,13 @@ index f684c37..1090a26 100644
  import kotlinx.coroutines.launch
  import kotlinx.coroutines.sync.Semaphore
  import kotlinx.coroutines.sync.withPermit
++import kotlinx.coroutines.withTimeoutOrNull
 +import top.yukonga.mishka.data.api.DelayTestFailedException
++import top.yukonga.mishka.data.api.MihomoApiClient
  import top.yukonga.mishka.data.database.SelectionDao
  import top.yukonga.mishka.data.database.SelectionEntity
  import top.yukonga.mishka.domain.repository.MihomoRepository
-@@ -30,6 +40,27 @@ import top.yukonga.mishka.platform.PlatformStorage
+@@ -30,6 +46,27 @@ import top.yukonga.mishka.platform.PlatformStorage
  import top.yukonga.mishka.platform.StorageKeys
  import top.yukonga.mishka.util.describe
  
@@ -22224,7 +22510,7 @@ index f684c37..1090a26 100644
  @Immutable
  data class ProxyGroupUi(
      val name: String = "",
-@@ -64,6 +95,32 @@ data class ProxyUiState(
+@@ -64,6 +101,32 @@ data class ProxyUiState(
      val mode: String = "",
  )
  
@@ -22257,7 +22543,7 @@ index f684c37..1090a26 100644
  class ProxyViewModel(
      private val selectionDao: SelectionDao? = null,
      private val getActiveUuid: () -> String? = { null },
-@@ -73,6 +130,10 @@ class ProxyViewModel(
+@@ -73,6 +136,10 @@ class ProxyViewModel(
      private val _uiState = MutableStateFlow(ProxyUiState())
      val uiState: StateFlow<ProxyUiState> = _uiState.asStateFlow()
  
@@ -22268,7 +22554,7 @@ index f684c37..1090a26 100644
      // 节点排序状态：sortKeyIndex * 2 + (if reverse 1 else 0)
      // 0/1=默认 升/降，2/3=名称 升/降，4/5=延迟 升/降
      private val _sortOption = MutableStateFlow(loadInitialSortOption())
-@@ -86,6 +147,14 @@ class ProxyViewModel(
+@@ -86,6 +153,14 @@ class ProxyViewModel(
      private val _showGlobalGroup = MutableStateFlow(loadInitialShowGlobalGroup())
      val showGlobalGroup: StateFlow<Boolean> = _showGlobalGroup.asStateFlow()
  
@@ -22283,7 +22569,7 @@ index f684c37..1090a26 100644
      private var repository: MihomoRepository? = null
  
      // mihomo 重启切 client 时取消旧的 loadProxies 协程，防止其 HTTP 响应已读完但 UI 写回
-@@ -123,6 +192,30 @@ class ProxyViewModel(
+@@ -123,6 +198,30 @@ class ProxyViewModel(
      private fun loadInitialShowGlobalGroup(): Boolean =
          storage?.getString(StorageKeys.PROXY_SHOW_GLOBAL_GROUP, "true") != "false"
  
@@ -22314,7 +22600,7 @@ index f684c37..1090a26 100644
      fun setRepository(repo: MihomoRepository?) {
          if (repository === repo) return
          loadJob?.cancel()
-@@ -248,6 +341,7 @@ class ProxyViewModel(
+@@ -248,6 +347,7 @@ class ProxyViewModel(
          val target = groupOf(group) ?: return
          // 不可选组 PUT 必定 400，提前挡下省一个 RTT
          if (!target.isSelectable) return
@@ -22322,7 +22608,7 @@ index f684c37..1090a26 100644
          viewModelScope.launch {
              repo.selectProxy(group, proxy).onSuccess {
                  if (repository !== repo) return@onSuccess
-@@ -264,6 +358,11 @@ class ProxyViewModel(
+@@ -264,6 +364,11 @@ class ProxyViewModel(
                          .toPersistentList()
                  )
                  saveSelection(group, proxy)
@@ -22334,28 +22620,146 @@ index f684c37..1090a26 100644
              }
          }
      }
-@@ -302,7 +401,7 @@ class ProxyViewModel(
+@@ -286,40 +391,63 @@ class ProxyViewModel(
+     }
+ 
+     /**
+-     * 逐节点而非 `/group/{name}/delay`：后者会先对非 Selector 组 `ForceSet("")`
+-     * 解除固定（hub/route/groups.go）。两者都写全局 history.delay，结果等价
++     * 整组测速，逻辑对齐 mihomo_box 参考实现（webroot/ui/js/page-proxies.js 的 testGroupAll）：
++     *
++     *  1. **组接口优先**：Selector 组先打一次 `/group/{name}/delay`，一次请求由内核并发测完
++     *     全组，预算 7s。非 Selector 组（URLTest / Fallback / LoadBalance…）不能走这条路——
++     *     内核会先 `ForceSet("")` 解除固定，把用户手动选中的节点冲掉，所以直接进第 2 步。
++     *  2. **并发池兜底**：组接口不可用或超时，就逐节点测，并发 8、单节点超时 2s。
++     *     单节点手点测速用 5s（用户盯着一个结果，给足时间）；批量时不值得为个别慢节点
++     *     拖住整组，2s 判超时即可。
++     *  3. **给滑动让路**：用户在滑动 / 触摸列表时暂停发起新探测，滚动流畅度优先。
++     *  4. **边测边刷新**：每 700ms 把已出的结果刷一次，不必等整组跑完才有反馈。
+      */
+     fun testGroupDelay(group: String) {
+         val repo = repository ?: return
+         if (group in _uiState.value.testingGroups) return
+-        val nodes = groupOf(group)?.all ?: return
++        val target = groupOf(group) ?: return
++        val nodes = target.all
+         if (nodes.isEmpty()) return
+         _uiState.value = _uiState.value.copy(
+             testingGroups = (_uiState.value.testingGroups + group).toPersistentSet(),
+         )
+ 
+         viewModelScope.launch {
++            // 结果到达即刷新：对齐 mihomo_box 用 requestAnimationFrame 合并绘制的做法
++            val flushJob = launch {
++                while (isActive) {
++                    delay(BATCH_FLUSH_INTERVAL_MS)
++                    loadProxies()
++                }
++            }
              try {
-                 // 限并发：上百节点齐发会互抢带宽，测出的延迟失真
-                 val semaphore = Semaphore(GROUP_DELAY_CONCURRENCY)
+-                // 限并发：上百节点齐发会互抢带宽，测出的延迟失真
+-                val semaphore = Semaphore(GROUP_DELAY_CONCURRENCY)
 -                coroutineScope {
-+                val results = coroutineScope {
-                     nodes.map { nodeName ->
-                         async {
-                             semaphore.withPermit {
-@@ -318,6 +417,11 @@ class ProxyViewModel(
-                     }.awaitAll()
+-                    nodes.map { nodeName ->
+-                        async {
+-                            semaphore.withPermit {
+-                                // 单节点失败是正常结果，不能让它终止整组
+-                                val provider = nodeProviderMap[nodeName]
+-                                if (provider != null) {
+-                                    repo.getProviderProxyDelay(provider, nodeName)
+-                                } else {
+-                                    repo.getProxyDelay(nodeName)
+-                                }
+-                            }
+-                        }
+-                    }.awaitAll()
++                var failed = 0
++                var total = nodes.size
++                val fastPathOk =
++                    if (!target.isSelector) {
++                        false
++                    } else {
++                        withTimeoutOrNull(GROUP_DELAY_BUDGET_MS) {
++                            repo.getGroupProxyDelay(
++                                group,
++                                MihomoApiClient.DEFAULT_DELAY_TEST_URL,
++                                BATCH_DELAY_TIMEOUT_MS,
++                            ).isSuccess
++                        } == true
++                    }
++                if (!fastPathOk) {
++                    val (t, f) = runBatchPool(repo, nodes)
++                    total = t
++                    failed = f
                  }
                  if (repository !== repo) return@launch
 +                // 汇总失败数：整组测速逐节点弹提示会刷屏，只在有失败时给一条汇总
-+                val failed = results.count { it.isFailure }
 +                if (failed > 0) {
-+                    _delayTestEvents.tryEmit(DelayTestEvent.GroupSummary(group, results.size, failed))
++                    _delayTestEvents.tryEmit(DelayTestEvent.GroupSummary(group, total, failed))
 +                }
                  loadProxies()
              } finally {
++                flushJob.cancel()
                  // 正常结束、repo 切换、被取消都要摘标记，漏掉哪条路径该组就永久转圈
-@@ -340,11 +444,13 @@ class ProxyViewModel(
+                 _uiState.value = _uiState.value.copy(
+                     testingGroups = (_uiState.value.testingGroups - group).toPersistentSet(),
+@@ -328,6 +456,55 @@ class ProxyViewModel(
+         }
+     }
+ 
++    /** 并发池逐节点测速，返回 (总数, 失败数) */
++    private suspend fun runBatchPool(
++        repo: MihomoRepository,
++        nodes: List<String>,
++    ): Pair<Int, Int> {
++        // 限并发：上百节点齐发会互抢带宽，测出的延迟失真
++        val semaphore = Semaphore(GROUP_DELAY_CONCURRENCY)
++        val failed = AtomicInteger()
++        coroutineScope {
++            nodes.map { nodeName ->
++                async {
++                    semaphore.withPermit {
++                        awaitInteractionIdle()
++                        // 单节点失败是正常结果，不能让它终止整组
++                        val provider = nodeProviderMap[nodeName]
++                        val result = if (provider != null) {
++                            repo.getProviderProxyDelay(provider, nodeName)
++                        } else {
++                            repo.getProxyDelay(
++                                nodeName,
++                                MihomoApiClient.DEFAULT_DELAY_TEST_URL,
++                                BATCH_DELAY_TIMEOUT_MS,
++                            )
++                        }
++                        if (result.isFailure) failed.incrementAndGet()
++                    }
++                }
++            }.awaitAll()
++        }
++        return nodes.size to failed.get()
++    }
++
++    /**
++     * 用户正在滑动 / 触摸列表时把探测让给 UI，最多让 3s。
++     * 对齐 mihomo_box 的 waitForBatchIdle：批量探测与列表滚动抢资源时，滚动优先。
++     */
++    private suspend fun awaitInteractionIdle() {
++        val deadline = SystemClock.elapsedRealtime() + BATCH_INTERACTION_MAX_PAUSE_MS
++        while (SystemClock.elapsedRealtime() - lastUserInteractionAt < BATCH_INTERACTION_PAUSE_MS) {
++            if (SystemClock.elapsedRealtime() >= deadline) return
++            delay(BATCH_INTERACTION_PAUSE_STEP_MS)
++        }
++    }
++
++    /** 代理页在滑动 / 触摸时调用；批量测速据此让路，见 [awaitInteractionIdle]。 */
++    fun noteUserInteraction() {
++        lastUserInteractionAt = SystemClock.elapsedRealtime()
++    }
++
+     fun testNodeDelay(nodeName: String) {
+         val repo = repository ?: return
+         if (nodeName in _uiState.value.testingNodes) return
+@@ -340,11 +517,13 @@ class ProxyViewModel(
                  // 延迟结果写入节点全局 history.delay，loadProxies 再从 history 读回并分发到
                  // 所有引用该节点的组，保证跨组延迟一致；provider 节点走 provider healthcheck 端点
                  val provider = nodeProviderMap[nodeName]
@@ -22370,7 +22774,7 @@ index f684c37..1090a26 100644
                  if (repository !== repo) return@launch
                  loadProxies()
              } finally {
-@@ -355,6 +461,27 @@ class ProxyViewModel(
+@@ -355,6 +534,27 @@ class ProxyViewModel(
          }
      }
  
@@ -22398,6 +22802,35 @@ index f684c37..1090a26 100644
      private suspend fun saveSelection(group: String, proxy: String) {
          val uuid = getActiveUuid() ?: return
          val dao = selectionDao ?: return
+@@ -403,7 +603,27 @@ class ProxyViewModel(
+     }
+ 
+     companion object {
+-        private const val GROUP_DELAY_CONCURRENCY = 5
++        /** 批量测速并发数（对齐 mihomo_box BATCH_CONCURRENCY） */
++        private const val GROUP_DELAY_CONCURRENCY = 8
++
++        /** 批量测速单节点超时：宁可判超时也不拖慢整组（对齐 mihomo_box BATCH_TIMEOUT） */
++        private const val BATCH_DELAY_TIMEOUT_MS = 2000
++
++        /** 组接口预算：超过就转并发池逐节点测（对齐 mihomo_box GROUP_DELAY_BUDGET） */
++        private const val GROUP_DELAY_BUDGET_MS = 7000L
++
++        /** 批量测速期间刷新界面的间隔，让结果边测边出 */
++        private const val BATCH_FLUSH_INTERVAL_MS = 700L
++
++        /** 用户交互后让路时长（对齐 mihomo_box waitForBatchIdle 的 900ms 静默窗口） */
++        private const val BATCH_INTERACTION_PAUSE_MS = 900L
++
++        private const val BATCH_INTERACTION_MAX_PAUSE_MS = 3000L
++        private const val BATCH_INTERACTION_PAUSE_STEP_MS = 120L
++
++        /** 用户最近一次滑动 / 触摸时间戳，见 [noteUserInteraction] */
++        @Volatile
++        private var lastUserInteractionAt = 0L
+ 
+         const val GLOBAL_GROUP = "GLOBAL"
+         const val MODE_GLOBAL = "global"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 index ef9b641..91a7411 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
@@ -23054,7 +23487,7 @@ index 78fcd87..10ac610 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..a4ce6ad 100644
+index cba1bbb..474b635 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -23091,7 +23524,15 @@ index cba1bbb..a4ce6ad 100644
  
      <!-- Home - Latency -->
      <string name="home_latency">延迟</string>
-@@ -167,6 +187,9 @@
+@@ -134,6 +154,7 @@
+     <string name="home_latency_partial">部分</string>
+     <string name="home_latency_abnormal">异常</string>
+     <string name="home_latency_not_via_rules">未走规则</string>
++    <string name="home_latency_route_undecided">路由不可判定</string>
+ 
+     <!-- Home - Overview -->
+     <string name="home_overview">概览</string>
+@@ -167,6 +188,9 @@
      <string name="proxy_mode_direct_hint">当前为直连模式，所有流量不经代理。此处的选择会被保存，切回规则模式后生效。</string>
      <string name="proxy_mode_global_hint">当前为全局模式，仅 GLOBAL 组决定出口。其他代理组的选择切回规则模式后生效。</string>
      <string name="proxy_refresh_icon">刷新图标</string>
@@ -23101,7 +23542,7 @@ index cba1bbb..a4ce6ad 100644
      <string name="proxy_single_column">单列显示</string>
      <string name="proxy_show_global_group">GLOBAL 组</string>
      <string name="proxy_timeout">超时</string>
-@@ -177,6 +200,11 @@
+@@ -177,6 +201,11 @@
      <string name="proxy_sort_reverse">倒序</string>
      <string name="proxy_test_group_delay">测试延迟</string>
      <string name="proxy_test_node_delay">测试节点延迟</string>
@@ -23113,7 +23554,7 @@ index cba1bbb..a4ce6ad 100644
      <string name="proxy_fixed">已固定到此节点</string>
      <string name="proxy_unfix">解除固定，恢复自动选择</string>
  
-@@ -278,6 +306,7 @@
+@@ -278,6 +307,7 @@
      <string name="provider_updating_single">正在更新 %1$s…</string>
      <string name="provider_updating_progress">%1$d / %2$d</string>
      <string name="provider_update_failed">更新 %1$s 失败: %2$s</string>
@@ -23121,7 +23562,7 @@ index cba1bbb..a4ce6ad 100644
  
      <!-- Settings -->
      <string name="settings_title">设置</string>
-@@ -287,9 +316,11 @@
+@@ -287,9 +317,11 @@
      <string name="settings_tun_vpn_summary">通过 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 设备</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -23133,7 +23574,7 @@ index cba1bbb..a4ce6ad 100644
      <string name="settings_vpn_settings">VPN 设置</string>
      <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
      <string name="settings_tun_device">TUN 设备名称</string>
-@@ -331,7 +362,7 @@
+@@ -331,7 +363,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">顶栏整体均匀模糊</string>
      <string name="settings_theme_blur_style_progressive_summary">顶部渐强模糊</string>
      <string name="settings_theme_density_scale">界面缩放</string>
@@ -23142,7 +23583,7 @@ index cba1bbb..a4ce6ad 100644
      <string name="settings_theme_floating_bottom_bar">悬浮底栏</string>
      <string name="settings_theme_floating_bottom_bar_summary">在手机布局中使用悬浮底部导航栏</string>
      <string name="settings_theme_floating_bottom_bar_style">悬浮底栏样式</string>
-@@ -404,8 +435,12 @@
+@@ -404,8 +436,12 @@
      <string name="root_tether_scan_result_title">检测到以下接口</string>
      <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有热点流量由内核规则自动代理，无需切换「绕过 / 走代理」。</string>
@@ -23155,7 +23596,7 @@ index cba1bbb..a4ce6ad 100644
      <string name="root_attach_force_reapply_title">重连时强制重建规则</string>
      <string name="root_attach_force_reapply_summary">诊断开关：每次应用重新连接到正在运行的 mihomo 时强制重建 iptables 规则。仅当重连后热点规则丢失时开启。</string>
  
-@@ -504,10 +539,10 @@
+@@ -504,10 +540,10 @@
      <!-- External Control -->
      <string name="external_control_title">外部控制器</string>
      <string name="external_control_ip">API 地址</string>
@@ -23169,7 +23610,7 @@ index cba1bbb..a4ce6ad 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">文件管理</string>
-@@ -610,4 +645,6 @@
+@@ -610,4 +646,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -23300,7 +23741,7 @@ index f6895e0..1498692 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..ac5f6ff 100644
+index d1acc59..2b01013 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
@@ -23337,7 +23778,15 @@ index d1acc59..ac5f6ff 100644
  
      <!-- Home - Latency -->
      <string name="home_latency">Latency</string>
-@@ -169,6 +189,9 @@
+@@ -136,6 +156,7 @@
+     <string name="home_latency_partial">Partial</string>
+     <string name="home_latency_abnormal">Abnormal</string>
+     <string name="home_latency_not_via_rules">Not via rules</string>
++    <string name="home_latency_route_undecided">Route undecidable</string>
+ 
+     <!-- Home - Overview -->
+     <string name="home_overview">Overview</string>
+@@ -169,6 +190,9 @@
      <string name="proxy_mode_direct_hint">Direct mode is active: all traffic bypasses the proxy. Group selections are saved but only take effect after switching back to rule mode.</string>
      <string name="proxy_mode_global_hint">Global mode is active: only the GLOBAL group routes traffic. Selections in other groups take effect after switching back to rule mode.</string>
      <string name="proxy_refresh_icon">Refresh Icons</string>
@@ -23347,7 +23796,7 @@ index d1acc59..ac5f6ff 100644
      <string name="proxy_single_column">Single Column</string>
      <string name="proxy_show_global_group">GLOBAL Group</string>
      <string name="proxy_timeout">Timeout</string>
-@@ -179,6 +202,11 @@
+@@ -179,6 +203,11 @@
      <string name="proxy_sort_reverse">Reverse</string>
      <string name="proxy_test_group_delay">Test latency</string>
      <string name="proxy_test_node_delay">Test node delay</string>
@@ -23359,7 +23808,7 @@ index d1acc59..ac5f6ff 100644
      <string name="proxy_fixed">Fixed to this node</string>
      <string name="proxy_unfix">Unfix, restore automatic selection</string>
  
-@@ -280,6 +308,7 @@
+@@ -280,6 +309,7 @@
      <string name="provider_updating_single">Updating %1$s…</string>
      <string name="provider_updating_progress">%1$d / %2$d</string>
      <string name="provider_update_failed">Failed to update %1$s: %2$s</string>
@@ -23367,7 +23816,7 @@ index d1acc59..ac5f6ff 100644
  
      <!-- Settings -->
      <string name="settings_title">Settings</string>
-@@ -289,9 +318,11 @@
+@@ -289,9 +319,11 @@
      <string name="settings_tun_vpn_summary">via VpnService</string>
      <string name="settings_tun_root_tun_summary">owns TUN device</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -23379,7 +23828,7 @@ index d1acc59..ac5f6ff 100644
      <string name="settings_vpn_settings">VPN Settings</string>
      <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
      <string name="settings_tun_device">TUN Device Name</string>
-@@ -333,7 +364,7 @@
+@@ -333,7 +365,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">Uniform frosted blur across the top bar</string>
      <string name="settings_theme_blur_style_progressive_summary">Gradient blur, strongest at the top edge</string>
      <string name="settings_theme_density_scale">Interface Scale</string>
@@ -23388,7 +23837,7 @@ index d1acc59..ac5f6ff 100644
      <string name="settings_theme_floating_bottom_bar">Floating Bottom Bar</string>
      <string name="settings_theme_floating_bottom_bar_summary">Use a floating bottom navigation bar on phones</string>
      <string name="settings_theme_floating_bottom_bar_style">Floating Bottom Bar Style</string>
-@@ -406,8 +437,12 @@
+@@ -406,8 +438,12 @@
      <string name="root_tether_scan_result_title">Detected interfaces</string>
      <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
      <string name="root_tproxy_tether_note">TPROXY mode proxies all hotspot traffic via kernel rules; no Bypass/Through toggle needed.</string>
@@ -23401,7 +23850,7 @@ index d1acc59..ac5f6ff 100644
      <string name="root_attach_force_reapply_title">Force re-apply on reconnect</string>
      <string name="root_attach_force_reapply_summary">Diagnostic: re-apply iptables rules every time the app reattaches to a running mihomo. Leave off unless tether rules disappear after reconnect.</string>
  
-@@ -506,10 +541,10 @@
+@@ -506,10 +542,10 @@
      <!-- External Control -->
      <string name="external_control_title">External Controller</string>
      <string name="external_control_ip">API Address</string>
@@ -23415,7 +23864,7 @@ index d1acc59..ac5f6ff 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">File Manager</string>
-@@ -613,4 +648,6 @@
+@@ -613,4 +649,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>
