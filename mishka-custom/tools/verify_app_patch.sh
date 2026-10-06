@@ -214,6 +214,9 @@ assert_contains 'PanelWebViewCache' \
 assert_contains 'val (webView, fresh) = PanelWebViewCache.acquire' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
   'only a freshly created WebView loads URL (re-enter never cold-reloads)'
+assert_contains 'cachedHost?.get() === host' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'reuse liveness checks recorded host identity, never webView.context (app-context pitfall)'
 assert_contains 'history.go(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
   're-entering returns to the panel home via a history walk, not a page reload'

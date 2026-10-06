@@ -209,11 +209,32 @@ MainActivity 在 `onWindowFocusChanged` / `onResume` / 配置变化 / 主题 rec
   `canGoBack` 不跨进入保存、顶栏返回直接退出 / 系统返回历史优先。
 - `onRelease` 回到「暂挂」语义（`onPause()` 停 DOM 定时器），不再销毁。
 
+## 10. 修「杀后台重进：第一次进正常、返回再进闪烁」
+
+用户报告：杀后台重进 App，**第一次**进 web 界面正常，返回后再进就闪烁复现。
+
+**根因**：`WebViewPreloader` 按 box.app 用 `applicationContext` 预建 WebView，而
+`PanelWebViewCache.acquire` 的复用判定拿 `webView.context.findActivityOrNull()` 反查宿主
+Activity——app context 反查**永远是 null**，被判成「宿主已死」→ 销毁好实例 →
+`WebViewPreloader.take()` 此时已是一次性取空 → 冷建 + `loadUrl(入口)` = 整页重载闪烁。
+第一次进恰好是纯加载（用户预期之内）才显得正常；每次杀后台测试都固定复现「一进正常、
+再进闪烁」。
+
+**改动**（`PanelWebView.kt`）：
+
+- 复用判活改为 **acquire 时记下的宿主 Activity 身份**（`cachedHost: WeakReference<Activity>`，
+  `cachedHost?.get() === host`），watcher 的销毁匹配同步改身份比对；不再拿
+  `webView.context` 反查（预热器的 app context 实例从此可正常复用）。
+- 连带修 pop 式导航重进的差值误触发：重进时 `reloadKey`/`backRequestKey` 是新零值，
+  上一次会话留在 tag 里的旧值会误触发 `reload()`/`goBack()`——复用分支现在把 tag 对齐
+  当前键值。
+- 重进没有任何加载事件，标题会卡在占位符：复用分支 `post` 从实例现值同步一次标题。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（面板相关断言共 14 条：布局 2 +
-  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ 返回进入 / 不重载 8）。
+  应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（面板相关断言共 15 条：布局 2 +
+  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ 返回进入 / 不重载 9）。
 - **Kotlin 类型检查通过**：kotlinc 2.4.20 + 真实依赖（miuix 0.9.4 / JetBrains Compose
   1.12.0 族（miuix 0.9.4 的实际传递版本）/ androidx.activity 1.13.0 / lifecycle 2.11.0 /
   navigationevent 1.1.2 / Robolectric `android-all` 当 android.jar），对 `custom/panel/`

@@ -17831,10 +17831,10 @@ index 0000000..fb1c8a6
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 new file mode 100644
-index 0000000..e3feb4b
+index 0000000..b24578b
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
-@@ -0,0 +1,651 @@
+@@ -0,0 +1,662 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import android.annotation.SuppressLint
@@ -18033,10 +18033,16 @@ index 0000000..e3feb4b
 + * 销毁点只有两个：
 + *  - [sessionKey] 变化（切面板）→ 销毁重建，避免带上一个面板的 history / JS 全局 / 登录态；
 + *  - Activity 销毁（recreate / finish）→ 销毁，WebView 持有 Activity 的 Context，留着就是泄漏。
++ *
++ * **宿主判活必须用 acquire 时记下的 Activity 身份**（[cachedHost]），不能拿
++ * `webView.context` 反查：预热器按 box.app 的做法给的是 application context，反查永远
++ * 是 null，会被误判「宿主已死」而销毁重建——现象就是「杀后台重进后第一次进正常、
++ * 返回再进就闪烁」（重建 + 整页 loadUrl）。
 + */
 +internal object PanelWebViewCache {
 +    private var cached: WebView? = null
 +    private var cachedSessionKey = Int.MIN_VALUE
++    private var cachedHost: java.lang.ref.WeakReference<Activity>? = null
 +    private var watcherInstalled = false
 +
 +    /**
@@ -18047,9 +18053,7 @@ index 0000000..e3feb4b
 +        installWatcher(context)
 +        val host = context.findActivityOrNull()
 +        val existing = cached
-+        if (existing != null && host != null &&
-+            existing.context.findActivityOrNull() === host && cachedSessionKey == sessionKey
-+        ) {
++        if (existing != null && host != null && cachedHost?.get() === host && cachedSessionKey == sessionKey) {
 +            (existing.parent as? ViewGroup)?.removeView(existing)
 +            return existing to false
 +        }
@@ -18057,6 +18061,7 @@ index 0000000..e3feb4b
 +        return (WebViewPreloader.take() ?: WebView(context)).also {
 +            cached = it
 +            cachedSessionKey = sessionKey
++            cachedHost = host?.let { h -> java.lang.ref.WeakReference(h) }
 +        } to true
 +    }
 +
@@ -18071,6 +18076,7 @@ index 0000000..e3feb4b
 +        }
 +        cached = null
 +        cachedSessionKey = Int.MIN_VALUE
++        cachedHost = null
 +    }
 +
 +    private fun installWatcher(context: Context) {
@@ -18079,8 +18085,8 @@ index 0000000..e3feb4b
 +        watcherInstalled = true
 +        app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
 +            override fun onActivityDestroyed(activity: Activity) {
-+                // 只认持有 WebView 的那个宿主；ExternalImportActivity 收尾不应误杀面板
-+                if (cached?.context?.findActivityOrNull() === activity) destroy()
++                // 只认持有 WebView 的那个宿主；用 acquire 时记下的身份比对（见类型 KDoc）
++                if (cachedHost?.get() === activity) destroy()
 +            }
 +
 +            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
@@ -18421,8 +18427,13 @@ index 0000000..e3feb4b
 +                            tag = WebViewTag(reloadKey = reloadKey, url = entryUrl, backRequestKey = backRequestKey)
 +                        } else {
 +                            // 重进固定回面板首页：goHome 按历史深度回退（SPA popstate），
-+                            // 不整页重载、不白闪、卡片原样在。旧 tag 保留，update 的差值不会误触发
++                            // 不整页重载、不白闪、卡片原样在
++                            // tag 对齐当前键值：导航 pop 式重进时 reloadKey/backRequestKey 都是
++                            // 新零值，留着上一次会话的 tag 差值会误触发 reload()/goBack()
++                            tag = WebViewTag(reloadKey = reloadKey, url = entryUrl, backRequestKey = backRequestKey)
 +                            runCatching { goHome() }
++                            // 重进没有任何加载事件，标题从实例现值同步（post 出组合再写状态）
++                            post { currentOnTitleChange.value?.invoke(title?.ifBlank { null }) }
 +                        }
 +                    }
 +                },
