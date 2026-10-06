@@ -1,10 +1,10 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=06e7c3b6286ad41246689877984cd655b03cb517fe95fc999fa272edae7ad8c3
+patch_sha256=770435ec0a7f6487d3d426a4586bb55d27e985115b7cba14e58a0fa8219b4c15
 blob_after=0ebf6af7fb0238b52e41188f5bb8897f86dc07a4 app/build.gradle.kts
 blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
-blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
+blob_after=9bdb76c45fc0b1666eb0354bbf4feaafeab94e85 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 blob_new=48b879f20a3cb57945e783d12c8ec262f42a401b app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 blob_new=44c20972a2ecb1d97174a1979fef1df11f1f6a63 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
@@ -27,12 +27,11 @@ blob_new=b24e4c4aae90e72f4abfb977c3b33163ebe9d1a3 app/src/main/kotlin/top/yukong
 blob_new=2cc26a62cb3ea7d785990ba92b5ef396f3d612a0 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
 blob_new=1796296a18858516030ff9bbe5fbe596a2a46e5e app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
-blob_new=cf23d3b6d793fa127b6247c6a47a9ea597483701 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelChrome.kt
 blob_new=cbb28a7f36a90fd48c4d6e3f1590acfbf7948335 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt
-blob_new=3ce0b63971fb9ce13bd44bc21509af00e00f945a app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+blob_new=ca3ccc7e79d07987159ae20a5f80f4ffa6d26380 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
 blob_new=72d26bb0d16291d7e6aad0b58b1d49bb9c745884 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt
 blob_new=fb1c8a630c9c650d2d0ac68895a70b946987119a app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelStore.kt
-blob_new=40905a6ab1d32dc2471fe1ad176f04339b0b8733 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+blob_new=ff47be2c75243787f216a8b54380e513b77c8e7d app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 blob_new=0434c16bf9738c5e408ae3d00bde1e953ddeec65 app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
 blob_after=0fdd5de0f18e4b946aa2f9f97a1e6e71f4f4f535 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 blob_after=14ebcdc0fde29fd9aae21d9d09e9186b95ef527c app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt

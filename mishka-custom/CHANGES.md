@@ -154,18 +154,48 @@ MainActivity 在 `onWindowFocusChanged` / `onResume` / 配置变化 / 主题 rec
   WebView 自己的 `getUrl()` 属性遮蔽，整段加载逻辑实际一直空转（页面能载全靠 `update`
   差值兜底）。入口 URL 改为先取 `entryUrl` 再用，「只有新建实例才整页 loadUrl」从此名实相符。
 
+## 8. 返回进入逻辑对齐 box.app（新实例 + 入口加载，预热器秒建）
+
+用户要求照 https://github.com/MiChongs/box.app 的 web 界面返回进入逻辑实现。box.app 的机制
+（`AppScaffold.openSubpage/exitSubpage` + `ThemedWebView`，已逐行核对）：
+
+- **进入**：`openSubpage` 清零 `backRequestKey` / `canGoBack` → **新 WebView + `loadUrl(入口 URL)`**
+  —— 每次进都是面板首页；
+- **返回**：系统返回先退页内历史（`backRequestKey += 1` → `goBack`），退无可退才退出页面；
+  顶栏返回键直接退出；
+- **退出**：WebView 实例**不保留**；重建靠 `WebViewPreloader`（两阶段预热：后台线程触发
+  Chromium provider 加载 + 主线程空闲预建实例）把 `new WebView()` 的 ~500ms 冷启压到近 0；
+- **配套**：`resetHistoryOnUrlChange` —— 换 URL 加载完 `clearHistory()`，返回不会走进
+  上一个面板的历史。
+
+**本版改动**（§6 的「实例保留 + goHome 历史回退」方案按要求整体换成 box.app 方案）：
+
+- 删 `PanelWebViewCache` 与 `WebView.goHome`；新增 `WebViewPreloader`（box.app 同款），
+  `MainActivity.onCreate` 调 `preload`；
+- factory 每次进入 `WebViewPreloader.take() ?: WebView(ctx)` + `loadUrl(入口 URL)`——
+  重进总是面板首页，天然成立；
+- `onRelease` 销毁实例（box.app 是丢给 GC，这里顺手 destroy 防泄漏，对外行为一致）；
+- 换 URL（切面板）加载完 `clearHistory()` + 回报 `canGoBack = false`
+  （`resetHistoryOnUrlChange` 等价）；
+- `canGoBack` 改为不跨进入保存（等价 box.app `openSubpage` 清零）；返回分发保持与 box.app
+  相同（系统返回页内历史优先、顶栏返回直接退出）；
+- 删 `PanelChrome.kt`（`findActivityOrNull` 随缓存移除失去用途），补丁文件数 72 → 71；
+- **行为说明**：重进会重新加载面板入口（box.app 原生行为，§6 的「重进保留页面状态」就此
+  撤销），加载期显示 WebView 底色。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 72 个 blob 逐文件一致（面板相关断言共 9 条：布局 2 +
-  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ WebView 保留 / 回首页 3）。
+  应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（面板相关断言共 11 条：布局 2 +
+  主题顶栏 / 状态栏 4（含 2 条反向「不再强制状态栏」）+ box.app 返回进入逻辑 5）。
 - **Kotlin 类型检查通过**：kotlinc 2.4.20 + 真实依赖（miuix 0.9.4 / JetBrains Compose
   1.12.0 族（miuix 0.9.4 的实际传递版本）/ androidx.activity 1.13.0 / lifecycle 2.11.0 /
   navigationevent 1.1.2 / Robolectric `android-all` 当 android.jar），对 `custom/panel/`
-  六个文件做完整前端类型检查，**0 错误**（本轮改的 PanelWebView / PanelScreen / PanelChrome
-  都在内）。项目侧引用（`ProxyServiceBridge` / `StatusColors` / `sheetContentSafePadding` /
+  五个文件（PanelChrome.kt 已删）做完整前端类型检查，**0 错误**（本轮改的 PanelWebView /
+  PanelScreen 都在内；MainActivity 的一行 preload 调用不在检查范围，改动极小）。
+  项目侧引用（`ProxyServiceBridge` / `StatusColors` / `sheetContentSafePadding` /
   `R`）用的是照真实声明写的桩。
-  前两轮类型检查各抓出过一个必炸的编译错误（`LocalView` 当 `Context` 用），本轮 0。
+  历史轮次的类型检查各抓出过必炸的编译错误（`LocalView` 当 `Context` 用等），本轮 0。
   Compose 编译器插件没装，后端 IR lowering 依旧会崩——缺插件的已知表现，不是代码问题。
 - `BASELINE.txt` 的 `patch_sha256` 随新补丁更新（完整值见该文件）。
 - 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑不动，**本次没有跑通 Gradle 编译验证**。

@@ -205,15 +205,21 @@ assert_not_contains 'forceLightStatusBars' \
 assert_not_contains 'forceLightStatusBars' \
   app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt \
   'main activity enforces status-bar appearance from theme only'
-assert_contains 'PanelWebViewCache' \
+assert_contains 'WebViewPreloader' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView instance survives back/re-enter instead of cold-reloading'
-assert_contains 'val (webView, fresh) = PanelWebViewCache.acquire' \
+  'panel WebView is prewarmed box.app-style for instant entry'
+assert_contains 'WebViewPreloader.take() ?: WebView(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'only a freshly created WebView loads URL'
-assert_contains 'goHome(entryUrl)' \
+  'each panel entry builds a fresh WebView (box.app enter logic)'
+assert_contains 'loadUrl(entryUrl)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  're-entering the panel returns to the panel home page'
+  'panel entry always loads the panel home URL'
+assert_contains 'clearHistoryAfterNextPageFinished' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'URL change clears history so back never walks into the previous panel'
+assert_contains 'released.destroy()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'leaving the panel disposes the WebView instance'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"
