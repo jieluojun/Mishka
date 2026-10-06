@@ -177,21 +177,21 @@ assert_contains 'mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW' \
 assert_contains 'NavigationBackHandler(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
   'system back is routed into the panel page history first'
-assert_contains 'PanelCompactTopAppBar(' \
+assert_contains 'MiuixIcons.ChevronBackward' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel page title/address uses a left-aligned single-row app bar'
-assert_contains 'fontSize = 16.sp' \
+  'panel top bar back icon is the box.app chevron'
+assert_contains 'MiuixIcons.Tune' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel page title/address uses compact 16sp typography'
-assert_contains 'Lifecycle.Event.ON_RESUME' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView is resumed and its responsive layout refreshed on re-entry'
-assert_contains 'webView.destroy()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'released panel WebViews are destroyed instead of leaving stale surfaces'
-assert_contains "window.dispatchEvent(new Event('resize'))" \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel page recalculates responsive layout after restore and initial load'
+  'panel list opens from the box.app sliders icon (right-2 slot)'
+assert_contains 'Color(0xFFF7F7F7)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'panel top bar background matches the box.app light bar #F7F7F7'
+assert_contains 'PanelChrome.forceLightStatusBars' \
+  app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt \
+  'status bar appearance honors the fixed-light panel top bar'
+assert_contains 'PanelChrome.forceLightStatusBars = true' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'panel screen pins dark status-bar icons while the light top bar is shown'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"

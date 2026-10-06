@@ -78,34 +78,55 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
   读取走的是 `State.getValue` 扩展，只导 `setValue` 不够，委托直接解析失败。
 - `PanelSheet.kt` 清理未用 import 时把 `Column` 一起删了，而外层容器还在用。
 
-## 5. 面板顶栏：地址改为紧凑单行
+## 5. 外部面板顶栏对齐 box.app（浅色单行）
 
-手机端原来走 Miuix `SmallTopAppBar`，标题居中而且过长会被截断。现改为自定义紧凑单行布局：保留 WebView
-返回的标题文本、主题色与图标，地址左对齐到返回按钮之后并设为 **16sp**，与返回、刷新、面板列表、清除按钮并排；
-其它页面顶栏不变。
+此前面板页顶栏走 miuix `AdaptiveTopAppBar`：手机上是**深色大标题两行**布局（标题 32sp
+独占一行），返回用 `Back` 箭头、清单入口是 `GridView` 田字格，配色随 App 主题——App
+深色主题下面板内容是浅色网页，顶栏却是一整块黑色，和 box.app 的浅色顶栏放一起违和。
 
-## 6. WebView 重进时刷新生命周期与布局
+按 box.app 截图实测像素复刻（1440px 宽、density 3.5，图标槽位两图本来就重合）：
 
-为嵌入面板的 WebView 监听 `ON_PAUSE` / `ON_RESUME`。恢复时调用 `onResume()`、重新测量/绘制，并向页面发出
-`resize` 事件，让响应式代理组网格重算尺寸；页面完成加载后也触发一次布局刷新。WebView 真正离开组合树时停止加载、
-清理客户端与 JS bridge 并 `destroy()`，避免反复进入时留下旧的 Chromium 合成视图。
+| 项 | box.app 实测 | 现在 |
+| --- | --- | --- |
+| 底色 | `#F7F7F7`，铺到状态栏后面 | 同 |
+| 前景 | 纯黑 `#000000` | 同 |
+| 布局 | 单行：`‹` 返回 / 标题 / 刷新 · 滑杆 · 清除 | 同 |
+| 返回图标 | 细尖角 chevron | `MiuixIcons.ChevronBackward` |
+| 清单图标（右二） | 双横线滑杆（上线钮偏右、下线钮偏左、空心圆钮） | `MiuixIcons.Tune`（路径逐段核过，与截图同形） |
+| 标题 | 18sp 常规字重、左对齐（距返回槽 12dp）、单行省略 | 同 |
+| 图标槽 | 40dp、外沿 16dp | 同（miuix `IconButton` 默认值，实测即 40dp 节距） |
+
+改动落在 `PanelScreen.kt`：弃用 `AdaptiveTopAppBar` 与 `MiuixScrollBehavior`，新增私有
+`PanelTopBar`（`#F7F7F7` 底 + 56dp 标题行，WindowInsets 处理与 miuix 顶栏同款）。
+标题仍取网页 `document.title`（如「127.0.0.1:9090 | 代理」），取值逻辑不变。
+**顶栏不随 App 深浅色主题走，恒为浅色**——这是与 box.app 浅色顶栏「一致」的直接要求。
+
+**状态栏图标跟着顶栏走**：顶栏铺到状态栏后面，App 深色主题下白色图标会直接消失在
+`#F7F7F7` 上。新增 `custom/panel/PanelChrome.kt` 持有 `forceLightStatusBars` 开关，
+`MainActivity.enforceSystemBarsAppearance` 尊重它。为什么不能只在进页面时改一次：
+MainActivity 在 `onWindowFocusChanged` / `onResume` / 配置变化 / 主题 recomposition 时
+都会重排系统栏外观，面板页自己的「清除数据」确认框一关（弹窗收回焦点）就会把图标
+翻回白色。进面板置 true，退面板复位并按当前主题恢复。
 
 ## 验证
 
-- 本次已检查 patch diff 语法、`PanelScreen.kt` / `PanelWebView.kt` blob 与 `BASELINE.txt` 一致，并同步更新 `patch_sha256`；
-  完整的 apply / 反向 apply 和 71 个 blob 逐文件校验，需在基线 Mishka 仓库执行
-  `mishka-custom/tools/verify_app_patch.sh --repo <仓库>`（工具现已含紧凑顶栏断言）。
-- **此前一版的 Kotlin 类型检查结果**：沙箱里装了 kotlinc，把真实依赖拉齐
-  （Compose 1.9.4 / miuix 0.9.4 / androidx.activity / lifecycle / navigationevent /
-  Robolectric 的 `android-all` 当 android.jar），对 `custom/panel/` 五个文件做了完整
-  前端类型检查，**0 错误**。上面的两个编译错误就是这么找出来的。
-  项目侧引用（`ProxyServiceBridge` / `AdaptiveTopAppBar` / `StatusColors` /
-  `sheetContentSafePadding` / `R`）用的是照真实声明写的桩。
-  Compose 编译器插件没装，所以后端 IR lowering 会崩——这是缺插件的已知表现，
-  不是代码问题（一个 6 行的正确 Composable 同样崩）。
-- 资源侧额外做了 AAPT 敏感字符扫描（裸撇号 / `&` / 尖括号），四个语言全部干净。
-- 本次补丁哈希：`de84decd5aad9adb4e2466ebecdd4ecb22971e0cb02a97f255b034f4c49d408e`。
-- 当前运行环境只有定制包，没有 Mishka 源码仓库，因此**本次没有运行 Gradle / Kotlin 编译**。落地后请先跑一次：
+- `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
+  应用结果与 `BASELINE.txt` 的 72 个 blob 逐文件一致（较上版 +1：`PanelChrome.kt`；
+  顶栏相关断言新增 5 条）。
+- **Kotlin 类型检查通过**：kotlinc 2.4.20 + 真实依赖（miuix 0.9.4 / JetBrains Compose
+  1.12.0 族（miuix 0.9.4 的实际传递版本）/ androidx.activity 1.13.0 / lifecycle 2.11.0 /
+  navigationevent 1.1.2 / Robolectric `android-all` 当 android.jar），对 `custom/panel/`
+  六个文件（含新的 `PanelChrome.kt`）做完整前端类型检查，**0 错误**。
+  项目侧引用（`ProxyServiceBridge` / `StatusColors` / `sheetContentSafePadding` / `R`）
+  用的是照真实声明写的桩。
+  **本轮类型检查真抓出一个必炸的编译错误**：状态栏外观覆盖最初写成
+  `panelView.findActivityOrNull()`——`LocalView.current` 是 `View` 不是 `Context`，
+  扩展解析不了，已改为 `panelView.context.findActivityOrNull()`。
+  Compose 编译器插件没装，后端 IR lowering 依旧会崩——缺插件的已知表现，不是代码问题。
+- `BASELINE.txt` 的 `patch_sha256` 已随新补丁更新为
+  `46705cf03ee6276f...`（完整值见该文件）。
+- 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑不动，**本次没有跑通 Gradle 编译验证**。
+  落地后请先跑一次：
 
 ```bash
 ./gradlew :app:compileDebugKotlin -x buildMihomo_arm64_v8a
