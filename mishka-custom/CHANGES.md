@@ -64,12 +64,35 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
 顶栏的「清除面板数据」= WebView 缓存 / Cookie / Storage / 表单 / SSL 偏好全清，面板里
 保存的设置与登录态会一起没，弹窗确认后再执行。
 
+## 4. 修 CI 首轮报错（上一版打包后的构建日志）
+
+日志：`app/src/main/res/values/strings.xml:142` 合并资源时挂掉，
+`panel_clear_cache_message` 里那个 `panel's` 的**裸撇号**没转义，AAPT2 报
+「Invalid unicode escape sequence」。已改成 `panel\'s`（与仓库里既有的
+`external_control_controller_hint` 同一写法）。四个语言共 17 条面板文案重新扫过一遍，
+没有别的裸 `'` / `&` / `<`。
+
+顺带把这一版真正跑了一次类型检查（见下），又抓出两个必炸的编译错误，都已修：
+
+- `PanelWebView.kt` 少 `import androidx.compose.runtime.getValue` —— `var x by remember { mutableStateOf(...) }`
+  读取走的是 `State.getValue` 扩展，只导 `setValue` 不够，委托直接解析失败。
+- `PanelSheet.kt` 清理未用 import 时把 `Column` 一起删了，而外层容器还在用。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
   应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（新增 11 条外部面板相关的断言）。
+- **Kotlin 类型检查通过（本版新增）**：沙箱里装了 kotlinc，把真实依赖拉齐
+  （Compose 1.9.4 / miuix 0.9.4 / androidx.activity / lifecycle / navigationevent /
+  Robolectric 的 `android-all` 当 android.jar），对 `custom/panel/` 五个文件做了完整
+  前端类型检查，**0 错误**。上面的两个编译错误就是这么找出来的。
+  项目侧引用（`ProxyServiceBridge` / `AdaptiveTopAppBar` / `StatusColors` /
+  `sheetContentSafePadding` / `R`）用的是照真实声明写的桩。
+  Compose 编译器插件没装，所以后端 IR lowering 会崩——这是缺插件的已知表现，
+  不是代码问题（一个 6 行的正确 Composable 同样崩）。
+- 资源侧额外做了 AAPT 敏感字符扫描（裸撇号 / `&` / 尖括号），四个语言全部干净。
 - `BASELINE.txt` 的 `patch_sha256` 已随新补丁更新为
-  `d46fb5bfb4a41c74dbd8869dd336eaff2cbc88d2dcf8ffca2ceec4a3b8b74826`。
+  `49ee9229ae5f4413...`（完整值见该文件）。
 - 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑到配置阶段就被 OOM 掉了，**本次没有跑通
   编译验证**。落地后请先跑一次：
 

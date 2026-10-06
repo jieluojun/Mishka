@@ -17468,13 +17468,14 @@ index 0000000..7f901b9
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt
 new file mode 100644
-index 0000000..482eeec
+index 0000000..72d26bb
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,189 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
 +import androidx.compose.foundation.layout.PaddingValues
 +import androidx.compose.foundation.layout.Row
 +import androidx.compose.foundation.layout.fillMaxWidth
@@ -17738,10 +17739,10 @@ index 0000000..fb1c8a6
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 new file mode 100644
-index 0000000..bc5d93d
+index 0000000..a36a56a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
-@@ -0,0 +1,436 @@
+@@ -0,0 +1,437 @@
 +package top.yukonga.mishka.custom.panel
 +
 +import android.annotation.SuppressLint
@@ -17774,6 +17775,7 @@ index 0000000..bc5d93d
 +import androidx.compose.foundation.layout.fillMaxSize
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.getValue
 +import androidx.compose.runtime.key
 +import androidx.compose.runtime.mutableStateOf
 +import androidx.compose.runtime.remember
@@ -23236,7 +23238,7 @@ index f6895e0..1498692 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..946729d 100644
+index d1acc59..ac5f6ff 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
@@ -23266,7 +23268,7 @@ index d1acc59..946729d 100644
 +    <string name="panel_error_url_invalid">URL is invalid</string>
 +    <string name="panel_add">Add</string>
 +    <string name="panel_clear_cache">Clear panel data</string>
-+    <string name="panel_clear_cache_message">Clears the panel's cache, cookies and storage. Settings and sign-in stored inside the panel will be reset.</string>
++    <string name="panel_clear_cache_message">Clears the panel\'s cache, cookies and storage. Settings and sign-in stored inside the panel will be reset.</string>
 +    <string name="panel_clear_cache_failed">Failed to clear panel data</string>
 +    <string name="panel_save_failed">Failed to save the file</string>
 +    <string name="panel_no_file_picker">No app available to pick a file</string>
