@@ -10,7 +10,8 @@
 #   2. 内核：在 <仓库>/mihomo 放一份 jieluojun/mihomo(Alpha)，checkout 到补丁基线 commit，
 #      校验并应用 patches/mihomo/*.patch（用 --kernel-dir 可以放到仓库外）
 #   3. 写 go.work + go.work.sum（内核换了分支后缺的依赖哈希都在这，仓库自带的 go.mod/go.sum 不动）
-#   4. 应用 app 侧补丁 patches/app/0001-anchor-panel.patch（自定义编辑器 + 订阅页可视化配置入口迁移）
+#   4. 应用 app 侧补丁 patches/app/0001-anchor-panel.patch（自定义编辑器 + 订阅页可视化配置入口迁移
+#      + 主页外部面板 Web 界面）
 #
 # 回滚：scripts/revert-patches.sh --all
 set -euo pipefail

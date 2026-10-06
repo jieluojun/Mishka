@@ -26,12 +26,50 @@ miuix 的 `BasicComponent` 把 `endActions` 直接塞进一个**没有 arrangeme
 取 8dp，与卡片底部「定位 / 改名 / 删除」那一行的 `spacedBy(8.dp)` 对齐。锚点卡片与悬空引用
 卡片两处同步。
 
+## 3. 新增：外部面板（Web 界面），移植自 box.app
+
+主页「工具」区多一个**面板**入口，点进去是一个承载 mihomo 面板的 WebView。按你回的
+「与 box.app 一致」，清单与取值都照 box.app 来：
+
+| 内置面板 | 地址 |
+| --- | --- |
+| 本地 | `http://<external-controller>/ui`（端口取运行时 `ProxyServiceBridge`，只在代理 Running 时才算得出；停了退回上次缓存的地址） |
+| Zashboard | `http://board.zash.run.place` |
+| MetaCubeXD | `https://metacubex.github.io/metacubexd` |
+
+自定义面板可增删，存在 SharedPreferences `panel_cache`（与 box.app 同名，不上 Room——
+就几行展示偏好，丢了大不了重填）。清单从顶栏右二的图标打开。
+
+**不代填控制器地址与密钥**：box.app 也是让面板自己在首次进入时问一次并存 localStorage，
+所以这里不拼 `?hostname=&secret=`。各家面板对这两个 query 的支持并不一致，代填错了
+比不填更难排查。
+
+新增文件（均在 `app/src/main/kotlin/top/yukonga/mishka/custom/panel/`）：
+
+- `PanelEntry.kt` / `PanelStore.kt`：条目模型 + 持久化
+- `PanelWebView.kt`：WebView 封装。三个不能省的点——
+  1. `mixedContentMode = MIXED_CONTENT_ALWAYS_ALLOW`：面板多为 https 站点，控制器在
+     `http://127.0.0.1:<port>`，默认值会把面板调 API 的请求全掐了，表现为「页面能开、
+     数据全空」且只在 logcat 里留一行。
+  2. 切面板时用 `key(sessionKey)` 整个重建 WebView，只 `loadUrl` 会带上一家的登录态。
+  3. 面板的「导出配置」是 `URL.createObjectURL` + 点隐藏 `<a download>`，WebView 的
+     DownloadListener **收不到 blob:/data:** 地址，所以注入了一段 JS 改成
+     fetch → base64 → JS bridge → SAF 存盘；真正的 http 下载仍走 DownloadListener。
+- `PanelSheet.kt` / `PanelScreen.kt`：面板清单底栏 + 页面壳（刷新 / 清缓存 / 返回）
+
+系统返回键在网页还能后退时先给网页（`NavigationBackHandler`，`isBackEnabled = canGoBack`），
+退到底才退出页面；这一屏因此关掉了横滑返回（`NavSwipeDirection.None`）——边缘侧滑走的是
+同一条 NavigationEvent 分发，会被子级 BackHandler 截走变成「网页后退」，看着像卡住。
+
+顶栏的「清除面板数据」= WebView 缓存 / Cookie / Storage / 表单 / SSL 偏好全清，面板里
+保存的设置与登录态会一起没，弹窗确认后再执行。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 64 个 blob 逐文件一致。
+  应用结果与 `BASELINE.txt` 的 71 个 blob 逐文件一致（新增 11 条外部面板相关的断言）。
 - `BASELINE.txt` 的 `patch_sha256` 已随新补丁更新为
-  `537b26fdb8d6771913b69fb509944e75029a0b8b3e98f7ec794a0c6faf0beee3`。
+  `d46fb5bfb4a41c74dbd8869dd336eaff2cbc88d2dcf8ffca2ceec4a3b8b74826`。
 - 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑到配置阶段就被 OOM 掉了，**本次没有跑通
   编译验证**。落地后请先跑一次：
 

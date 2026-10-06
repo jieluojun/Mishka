@@ -146,6 +146,38 @@ assert_contains '0.0.0.0' \
   app/src/main/res/values-zh-rCN/strings.xml \
   'Chinese external-control hint warns about wildcard unauthenticated exposure'
 
+# --- 外部面板（Web 界面）---
+assert_contains 'entry<Route.Panel>(swipeDismiss = NavSwipeDirection.None)' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \
+  'external panel route is registered without swipe-to-dismiss'
+assert_contains 'onNavigatePanel = { navigator.push(Route.Panel) }' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \
+  'home screen can navigate to the external panel'
+assert_contains 'onNavigatePanel = onNavigatePanel' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt \
+  'home screen forwards the external panel callback'
+assert_contains '<string name="home_panel">' \
+  app/src/main/res/values/strings.xml \
+  'external panel quick-entry string exists in the default locale'
+assert_contains '<string name="panel_title">' \
+  app/src/main/res/values-zh-rCN/strings.xml \
+  'external panel strings exist in the Chinese locale'
+assert_contains 'PANEL_URL_ZASHBOARD = "http://board.zash.run.place"' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt \
+  'built-in Zashboard panel URL matches box.app'
+assert_contains 'PANEL_URL_METACUBEXD = "https://metacubex.github.io/metacubexd"' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt \
+  'built-in MetaCubeXD panel URL matches box.app'
+assert_contains '"http://${status.externalController}/ui"' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'local panel URL is resolved from the running controller address'
+assert_contains 'mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
+  'panel WebView allows http calls from https panel pages'
+assert_contains 'NavigationBackHandler(' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
+  'system back is routed into the panel page history first'
+
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"
   if [[ "$actual" == "$expected" ]]; then
