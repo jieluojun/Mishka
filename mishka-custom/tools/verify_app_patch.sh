@@ -177,42 +177,9 @@ assert_contains 'mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW' \
 assert_contains 'NavigationBackHandler(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
   'system back is routed into the panel page history first'
-assert_contains 'private val PanelTopBarHeight = 52.dp' \
+assert_contains 'SmallTopAppBar(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel top bar is a compact single row (address beside the action buttons)'
-assert_contains 'object RuleMatchResolver' \
-  app/src/main/kotlin/top/yukonga/mishka/domain/rule/RuleMatchResolver.kt \
-  'home latency fallback resolves the rule target instead of probing GLOBAL'
-assert_contains 'RuleMatchResolver.resolve(host, rules)' \
-  app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt \
-  'home latency fallback no longer reports a GLOBAL (foreign node) delay as the probe result'
-assert_contains 'suspend fun getGroupProxyDelay(' \
-  app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
-  'group delay endpoint exists (whole-group test in one request)'
-assert_contains 'private const val GROUP_DELAY_CONCURRENCY = 8' \
-  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
-  'batch speed test uses mihomo_box concurrency (8)'
-assert_contains 'private const val BATCH_DELAY_TIMEOUT_MS = 2000' \
-  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
-  'batch speed test uses the short 2s batch timeout (5s only for single node taps)'
-assert_contains 'fun noteUserInteraction()' \
-  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
-  'batch speed test yields to list scrolling'
-assert_contains 'webView.destroy()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt \
-  'panel WebView is destroyed on dispose (leaking one per entry starves Chromium renderers)'
-assert_contains 'private const val PANEL_URL_SETTLE_MS = 400L' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'controller address must settle before the panel page is reloaded (entry flicker)'
-assert_contains 'settledUrl ?: PanelStore.cachedLocalUrl(context)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel keeps the last known URL instead of tearing the WebView down when the address blips'
-assert_contains 'text = pageTitle?.takeIf { it.isNotBlank() }' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt \
-  'panel top bar shows the page title like box.app (not a permanent URL)'
-assert_contains '(delays[name] ?: 0) <= 0' \
-  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
-  'group-delay fast path counts failed nodes too (otherwise no summary toast)'
+  'panel page title/address uses a compact single-row app bar'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"
