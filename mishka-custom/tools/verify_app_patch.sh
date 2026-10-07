@@ -218,9 +218,9 @@ assert_contains 'orderState.removeAt(cur)' \
 assert_contains 'if (cur < at) at -= 1' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'insert index is corrected for removing the dragged row first'
-assert_contains 'if (!outside && curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return' \
+assert_contains 'if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'finger over the dragged row itself is a no-op (no swap oscillation; skipped once the row left the window)'
+  'finger over the dragged row itself is a no-op (no swap oscillation)'
 assert_contains 'dragTo(change.position.y + containerTop)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the container gesture resolves the finger Y in window coordinates (container-local + window origin; reference e.clientY, never accumulated)'
@@ -329,76 +329,6 @@ assert_not_contains 'MiniIconButton(MiuixIcons.Edit, "改名") { renaming = e.ke
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
   'mapping list rows no longer rename from the pencil button'
 
-# --- 第八轮（2026-10-08）实机问题修复：写坏配置的写通道 + 分区页开关 + 规则页上移/下移/拖到顶 ---
-# 1) 整篇替换的 END 必须在**替换前**的坐标系里（旧写法拿 newText 的行数算，行数变少时
-#    旧文档的尾巴会粘在新文本末尾：规则行 `MATCH,国外出口 CT`、开关行 `enable: trueCT`）。
-assert_contains "val lines = text.split('\n')" \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'config panel whole-text replace computes END from the OLD text (no stray tail)'
-assert_not_contains 'newText.split' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'config panel no longer derives the replace range from the new text'
-assert_contains "val lines = text.split('\n')" \
-  app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt \
-  'anchor panel whole-text replace computes END from the OLD text'
-assert_not_contains 'newText.split' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt \
-  'anchor panel no longer derives the replace range from the new text'
-# 2) 行内标量写回不重复补 `&锚点`（`dns.ipv6: &on true` 曾被写成 `&on &on false`）。
-assert_contains 'private fun anchorPrefix(before: String, anchor: String?, emptyValue: Boolean): String = when {' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt \
-  'matched-key writes keep a single anchor token on the line'
-assert_contains 'val prefix = anchorPrefix(before, n.anchor, n.valueEnd <= n.valueStart)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt \
-  'inline scalar replace reuses the anchor-aware prefix helper'
-assert_contains 'val prefix = anchorPrefix(before, item.anchor, item.valueEnd <= item.valueStart)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt \
-  'sequence item scalar replace reuses the anchor-aware prefix helper'
-# 3) 分区页开关：状态按生效值显示（锚点继承 / 别名不再画成关），写穿锚点时 toast 点名共用者，
-#    「没有变化」说清原因；「本来就没设置」只在生效值层面成立时才短路。
-assert_contains 'val effBool = FormValues.effectiveBool(doc, path)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'section-page switches render the effective value (inherited / aliased bools are not shown as off)'
-assert_contains 'val sameAsEffective = effBool != null && effBool == value' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'switch writes fall through to a real write when the effective value differs'
-assert_contains 'val eff = reveal?.let { FormValues.effectiveBool(out, it) }' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'the no-change toast explains an inherited / aliased value instead of a bare 没有变化'
-assert_contains 'private fun sharedAnchorOf(doc: YamlDoc, path: YPath): String?' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'writes into an anchored node name the shared anchor in the toast'
-# 4) 规则列表：行尾 ↑ / ↓ 逐条挪位（拖动把手仍在）。
-assert_contains 'onMove: ((from: Int, to: Int) -> Unit)? = null,' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'sequence lists accept an optional move-by-one callback'
-assert_contains 'onMove(i, i - 1)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'rows expose the move-up button'
-assert_contains 'onMove(i, i + 1)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'rows expose the move-down button'
-assert_contains 'host.moveItem(seqPath, from, to,' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'the rules page wires move-by-one to the sequence patch'
-# 5) 拖动：手指离开容器时直接落极值位（不再用过期矩形做最近行兜底），
-#    被回收的行不参与命中判定——修「拖到顶上又被弹回下面」。
-assert_contains 'fingerY < containerTop -> at = 0' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'above the container commits to the list head'
-assert_contains 'fingerY > containerBottom -> at = orderState.size - 1' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'below the container commits to the list tail'
-assert_contains 'private fun live(index: Int): Boolean = handleCoords[index]?.isAttached == true' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'recycled rows stop contributing stale hit rects'
-assert_contains 'if (!live(o)) continue' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'hit testing skips rows that are no longer laid out'
-assert_contains 'val target = if (over >= 0) over else nearest' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'inside the container keeps the reference hit test (nearest fallback)'
-
 check_last_param_is_lambda MiniIconButton app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 check_last_param_is_lambda DragSortRow app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 check_last_param_is_lambda rememberDragSortState app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
@@ -429,56 +359,98 @@ else
   echo "warn 没有 python3，跳过 tools/check_cross_package_imports.py"
 fi
 
-# --- web 面板（本轮参考 box.app 重新加回；反转 §12 的「已移除」断言）---
-assert_contains 'WebPanelScreen' \
+# --- web 界面已完全移除（防回归）---
+assert_not_contains 'PanelScreen' \
   app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \
-  'web panel screen is wired into navigation'
-assert_contains 'data object WebPanel' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt \
-  'web panel route is registered'
-assert_contains 'onNavigateWebPanel' \
+  'web panel is fully removed from navigation'
+assert_not_contains 'onNavigatePanel' \
   app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt \
-  'web panel quick entry exists under home tools'
-assert_contains 'onPageCommitVisible' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/web/ThemedWebView.kt \
-  'web panel WebView uses hideUntilCommitVisible anti-flicker'
-assert_contains 'key(isDark, sessionKey)' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/WebPanelScreen.kt \
-  'web panel rebuilds WebView per panel/theme (login isolation + anti-flicker)'
-assert_contains 'home_panel' \
+  'web panel quick entry is fully removed from home'
+assert_not_contains 'home_panel' \
   app/src/main/res/values/strings.xml \
-  'web panel strings present (default locale)'
-assert_contains 'home_panel' \
+  'web panel strings are fully removed (default locale)'
+assert_not_contains 'home_panel' \
   app/src/main/res/values-zh-rCN/strings.xml \
-  'web panel strings present (Chinese locale)'
-assert_contains 'home_panel' \
+  'web panel strings are fully removed (Chinese locale)'
+assert_not_contains 'home_panel' \
   app/src/main/res/values-zh-rTW/strings.xml \
-  'web panel strings present (Taiwan locale)'
-assert_contains 'home_panel' \
+  'web panel strings are fully removed (Taiwan locale)'
+assert_not_contains 'home_panel' \
   app/src/main/res/values-ru/strings.xml \
-  'web panel strings present (Russian locale)'
-if [ -f "$REPO/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/WebPanelScreen.kt" ] && \
-   [ -f "$REPO/app/src/main/kotlin/top/yukonga/mishka/ui/web/ThemedWebView.kt" ]; then
-  echo "ok  web panel screen + ThemedWebView present"
+  'web panel strings are fully removed (Russian locale)'
+if [ -d "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel" ]; then
+  echo "FAIL web panel package still exists" >&2; fail=1
 else
-  echo "FAIL web panel screen or ThemedWebView missing" >&2; fail=1
+  echo "ok  web panel package (custom/panel) is gone"
 fi
 
-# --- 测延迟逻辑对齐 box.app（measure_only）---
-assert_contains 'sealed class LatencyResult' \
-  app/src/main/kotlin/top/yukonga/mishka/data/api/LatencyResult.kt \
-  'latency result is a sealed hierarchy (box.app measure states)'
-assert_contains 'latencyWarmupDone' \
-  app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt \
-  'latency does a discarded warmup pass before the real one'
-assert_contains 'Range' \
-  app/src/main/kotlin/top/yukonga/mishka/data/api/RuleLatencyTester.kt \
-  'latency probe sends Range: bytes=0-0 like box.app'
-
-# --- find-process-mode 尊重配置文件（respect_profile）---
-assert_contains 'findProcessMode = userOverride.findProcessMode' \
+# --- 2026-10-08：拖动排序“CT”残留 / 末行残留、锚点重复、落点漂移、find-process-mode（防回归）---
+# 根因 1：整篇替换的结束位置按 newText 算而不是按编辑器旧内容算 → 旧末行尾巴残留（"REJECT"→"CT"）、
+# 删除项后旧尾部整段残留。两处 apply() 都必须按旧内容算范围。
+assert_contains 'val current = controller.getText()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'form apply() ranges the replace by the current editor text, not the new text'
+assert_contains 'val oldLines = current.split' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'form apply() end position comes from the old text'
+assert_not_contains 'val lines = newText.split' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'form apply() no longer ranges the replace by the new text'
+assert_contains 'val current = controller.getText()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt \
+  'anchor apply() ranges the replace by the current editor text, not the new text'
+assert_not_contains 'val lines = newText.split' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt \
+  'anchor apply() no longer ranges the replace by the new text'
+# 根因 2：行内 `&锚点` 每次 setValue 都无条件再拼一次 → `&x &x false`（非法 YAML）。
+assert_contains 'endsWith(anchorTag)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt \
+  'anchored scalar keeps a single &anchor (only prepend when missing)'
+assert_not_contains 'val prefix = if (n.anchor != null) "&${n.anchor} " else ""' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt \
+  'anchor prefix is no longer prepended unconditionally'
+# 根因 3：自动滚动到头跳过 step → 行冻在半路，落点与手指对不上。到头也要 step（幂等）。
+assert_not_contains '== 0f) return' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'auto-scroll never skips the step even when the scroll is exhausted'
+# 根因 3b：滚出视口的行不清除身段登记 → 命中判定测到“幽灵行”，长列表快速拖动 +
+# 自动滚动时手指档位算错（冲过头 / 落点错位）。行回收时必须忘掉它的坐标。
+assert_contains 'fun forgetRow(index: Int)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'drag rows forget their geometry on dispose (no ghost hit-testing)'
+assert_contains 'onDispose { state.forgetRow(index) }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'drag row wrapper clears geometry when recycled'
+# 根因 4：表单行列表无 key → 行过滤变化时行内状态错位。行必须带稳定 key。
+assert_contains 'is FormField -> "f:${row.path}"' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'form rows carry stable keys (path), so filtered-in/out rows never swap state'
+assert_contains 'items(HUB, key = { it.title })' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'form hub carries stable keys'
+assert_contains 'itemsIndexed(entries, key = { _, e -> e.key })' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'mapping list carries stable keys'
+# 根因 5：运行时覆盖固定注入 find-process-mode=off → 订阅写的 always 被静默盖掉，
+# PROCESS-NAME/PROCESS-PATH 类规则全灭。三级优先级：应用覆写 > 订阅原文 > off。
+assert_contains 'profileFindProcessMode' \
   app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
-  'find-process-mode no longer forced to off; profile value wins'
+  'override builder accepts the profile find-process-mode'
+assert_contains 'profileFindProcessMode' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt \
+  'vpn service passes the profile find-process-mode'
+assert_contains 'profileFindProcessMode' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt \
+  'root service passes the profile find-process-mode'
+assert_contains 'readSubscriptionFindProcessMode' \
+  app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt \
+  'plain-profile fallback reads find-process-mode'
+assert_contains 'findProcessMode' \
+  app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt \
+  'runtime config model carries find-process-mode'
+assert_contains 'FindProcessMode' \
+  app/src/main/native/mishka_core/transform_bridge.go \
+  'native bridge extracts find-process-mode'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"

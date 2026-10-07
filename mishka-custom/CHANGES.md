@@ -1,147 +1,70 @@
-# 本次改动（2026-10-08）——实机反馈四轮：写坏配置的写通道 / 分区页开关 / 规则页上移下移 / 拖到顶弹回
+# 本次改动（2026-10-08）——编辑器残留 / 锚点重复 / 拖动落点 / find-process-mode 四处修复
 
-> **本包是「只换补丁」的修复版**：同一 base commit（`5e6743592b9c465eb015db7b05c588c50cd2b874`），
-> `patches/app/0001-anchor-panel.patch` 换成带本轮修复的全量补丁（`patch_sha256` = `1f5cadbc…`，见
-> `patches/app/BASELINE.txt`）。与上一版补丁的差异**只落在 5 个文件**：
-> `custom/anchor/AnchorPanel.kt`、`custom/forms/{ConfigFormPanel,FlowFormPages,YamlEngine,DragSort}.kt`，
-> 其余 **69 个文件逐字节相同**。
+> **背景**：真机反馈三个问题——① 路由规则拖动排序后倒数第二条的策略名多出 `CT`
+> （且从下往上拖会先冲过头再落到倒数第 4 条）；② 可视化配置页（DNS/嗅探）的开关
+> 「动一个影响另一个」，重复点还弹 `xxx 没有变化`；③ 配置文件里写了
+> `find-process-mode: always`，但进程匹配类规则仍不生效。
 >
-> 用法（仓库先回到 base commit，再应用本包补丁；细节见 `README.md`）：
+> 排查结论（含 JVM 测试桩验证，见下）：
+> - **① 的 `CT` 残留**：根因在**可视化表单与锚点面板共用的整篇写回函数**
+>   （`ConfigFormPanel.apply()` / `AnchorPanel.apply()`），不是 YAML 引擎：
+>   替换范围的结束位置按**新文本**算——新末行更短时旧末行尾巴就残留在后面
+>   （`REJECT` 被更短的末行覆盖前半，尾巴 `CT` 留下）。同一根因还能让删除项后
+>   旧文档尾部整段残留（末行重复）。修法：范围改按编辑器**当前**内容算
+>   （`controller.getText()` 现场取，不用 remember 的快照）。
+>   JVM 桩复现了逐字一致的 `- MATCH,国外出口CT`，修后干净。
+> - **① 的落点漂移**：复现环境只验证了「文本写回」是对的（拖动提交的顺序本身无误）；
+>   冲过头/落点错位发生在手指移动→列表滚动的追踪阶段。修了一处确定性的 contributing
+>   因素：自动滚动到头时以前**跳过**命中判定（`scroller(...) == 0f → return`），
+>   手指静止 + 列表到头会让还没追上手指的行永远冻在半路，松手落点与手指对不上；
+>   现在到头也做判定（幂等，无行为代价）。拖动动画/手势链本身经排查无误
+>   （FLIP 只动内层放置、外层测量不受影响；容器手势抢流/取消路径无饥饿）。
+> - **② 未能复现为代码缺陷**：YAML 引擎 21 组开关/解析探针（DNS/嗅探嵌套 toggles、
+>   flow 块、注释、引号布尔、CRLF、重复键、Tab、引号键、BOM）全部干净；
+>   所有 Switch 调用点（FieldRow/DnsSwitchRow/隧道/tcp-udp/noResolve/模式）互相独立、
+>   无交叉写；`items(rows)` 无 key 但 DNS/嗅探页行全静态、无过滤——key 解释不了反馈。
+>   作为防御性修复，给表单行列表/Hub/映射列表补了稳定 key（P2 详情页切类型时
+>   行会过滤变化，无 key 会错位复用行内状态）。**仍需要复现信息才能定位 ②**
+>   （见本轮对话末尾的追问：哪一页、哪两个开关、点第几次出现、是否伴随 toast）。
+> - **③ 根因确认**：与配置文件/表单都无关——运行时覆盖构建器
+>   （`RuntimeOverrideBuilder`）固定注入 `find-process-mode=off`，订阅里写的
+>   `always` 在 Go 侧根本没被读出来就被盖掉，off 下内核不解析进程名，
+>   PROCESS-NAME/PROCESS-PATH 类规则整体失效。修法是整条链：
+>   Go 桥新增 `FindProcessMode` 提取（含 age 解密 + 变换后的生效值）→
+>   `CoreRuntimeConfig.findProcessMode` → 两服务透传（native 缺席时回退读订阅原文，
+>   仅 off/strict/always 通过）→ 构建器三级优先级
+>   `应用覆写显式值 > 订阅原文显式值 > off`。不写该项的订阅行为与以前完全一致（仍 off）。
+> - 排查附带发现并修复：行内 `&锚点` 的标量每次改值都会再拼一次锚点
+>   （`enable: &x true` 改一次变 `&x &x false`，非法 YAML，内核拒绝加载）；
+>   现在只在缺失时补。
 >
-> ```bash
-> cd <Mishka 仓库>
-> git checkout 5e6743592b9c465eb015db7b05c588c50cd2b874 && git clean -fd
-> git apply mishka-custom/patches/app/0001-anchor-panel.patch
-> ```
+> **追加（同日，根据复现信息 dns_pair + fast_long 继续挖）**：
+> - ① 落点漂移找到第二个确定性成因：**幽灵坐标**——拖动行的身段（tops/heights）
+>   登记后从不清除，行滚出视口被 lazy 回收后过期坐标还留在表里，命中判定拿着
+>   它们算手指档位；长列表快速拖动 + 自动滚动时行会被瞬移到错误档位（先冲过头、
+>   松手落点与手指对不上）。修法：`DragSortRow` 加 `DisposableEffect`，
+>   行 dispose 时调 `forgetRow()` 清登记（换位是同 key 移槽不触发 dispose，
+>   滚回视口会重新登记）。`step()` 本身是直接瞬移到手指档位（非逐格爬），
+>   加上到头也判定的修复后，拖动栈已无已知的错位来源。
+> - ② 穷尽式排查结论：**代码层无复现机制**。YAML 引擎新增 12 组异形邻居探针
+>   （别名/合并键/折叠多行/行尾注释/块标量/引号值/删键/往返）全过 + 2645 次
+>   随机文档属性测试（只准目标跨度变化、前后缀逐字相等、重解析+读回正确）
+>   零失败；锚点写穿经门控条件证明对 DNS 页是冷的（本地优先 + dns 不在写穿名单）；
+>   FieldRow 无状态、DNS/嗅探页全静态行（无 only/hide/拦截/自定义行、无重复 path，
+>   已逐项 grep 确认）；Miuix Switch（0.9.4 同系源码）是标准受控 toggleable，
+>   消费点击、无内部状态。**定位 ② 需要你的实际文本**：出问题的两个开关名 +
+>   那段 `dns:` 原文（见本轮对话末尾追问），拿到后跑真字节复现。
+>
+> 验证：Go `TestExtractRuntimeConfigValuesFindProcessMode` 新增并通过；
+> JVM 桩 38 组定向探针（R1–R12、E1–E9 边缘、锚点回归 5 组、F1–F12 异形邻居）全过 +
+> 2645 次随机属性测试零失败；
+> `verify_app_patch.sh` 180 项全过（含新增的 20 条防回归断言），补丁双向可逆。
+> 补丁与 `BASELINE.txt` 已按修复后的源码重新导出。
+>
+> **注意**：沙盒无 Android SDK，本轮 Kotlin 改动未跑 Gradle 编译（改动均为小范围
+> 表达式/参数级，已逐行复读；Go 侧已编译+测试通过）。CI 过一遍即确认。
 
-本轮修 4 件事，全部对应实机反馈（① 路由 / 规则页 ② 分区页开关）。
-
-## 1. 拖完规则行，倒数第二行的策略后面多了「CT」（写坏配置的根因）
-
-症状：拖动排序之后规则列表里出现 `- MATCH,国外出口 CT`（正常是 `- MATCH,国外出口`）；同一族的症状还有开关行
-`enable: trueCT`、`override-destination: truee`。共同点：都发生在**整篇文本替换**的路径上，而且都是**删行**
-（新文本行数比旧文本少）之后。
-
-根因（一句话）：`TextBuffer.replaceRange(start, end, newText)` 的两个端点都在**替换前**的坐标系里，旧代码却用
-**newText** 的行数算 END：
-
-```kotlin
-val lines = newText.split('\n')                     // ← 错：用新文本的尺寸去定旧文档的终点
-controller.replaceRange(TextPosition(0, 0), TextPosition(lines.lastIndex, lines[lines.lastIndex].length), newText)
-```
-
-新文本更短时，END 落在旧文档的中间，于是**旧文档从那里往后的尾巴整段被留在新文本后面**——`CT` 就是这么
-粘上去的（拖动排序把「删掉 + 插入」合成了一次整篇写回，行数少了 1）。
-
-修法：两个端点一律按**旧文本**算（`text.split('\n')`）。改的站点只有两处「整篇替换」：
-`custom/forms/ConfigFormPanel.kt` 的 `applyText(...)`、`custom/anchor/AnchorPanel.kt` 的同一处（锚点面板写回）。
-
-顺带修掉同一族的第二个写坏值：**行内标量写回重复补锚点**。`dns.ipv6: &on true` 切开关后曾被写成
-`dns.ipv6: &on &on false`（在 YAML 里那是「锚点 + 字符串 `&on false`」，内核直接拒绝加载）。根因：`scalarNode`
-解析带锚点的行时已经把 `valueStart` 推到锚点**之后**，`before` 里已经带着 `&on`，代码又无条件补一次。
-修法：`YamlEngine` 新增私有 `anchorPrefix(before, anchor, emptyValue)`——`before` 里已有该锚点就不再补，
-「锚点 + 空值」的行补一个空格；映射行内标量、序列项标量两处调用都改走它。
-
-## 2. 分区页开关：切一个、另一个跟着变（共用值 / 继承）
-
-症状：分区页（全局配置 / DNS / 嗅探 / TUN …）切一个开关，另一个开关的显示跟着变，或者「点了没反应、再点
-还是原样」。用户侧判断是「共用参数 / 共用值」。
-
-排查结论（先排除两个想当然）：
-
-- **不是两行字段共用同一个 YAML path**：把 154 行字段表（`FormSpecs.kt` / `FormSpecsP2.kt`，含 `only=` 门控的
-  重复行）按 path 全量对扫，**没有任何两行指向同一个键**；`tolerance` 在「通用参数 / Smart 专属」两处出现，
-  但 `only=` 交叉后不会同时显示。
-- **不是写通道把值串了**：`FormHost.set` → `AnchorInheritance.applySetAware` → `commit` 的语义用 Regress7
-  回归 19/19 通过；同一批用例喂给旧实现 `applyOld` 会造出 21 个坏例，新实现 0 个。
-
-真正的原因：**锚点 / 别名继承——两处显示的是同一个值**。一个键挂着 `&定义`、别处用 `*别名` / `<<:` 引用它，
-写一处当然两处都变；而面板原先**只认本地行**：本地没写、值其实来自继承时，开关被画成「关」，点一下只是把
-已经开的值又写一遍（toast「没有变化」）——看起来就是「这个开关坏了，旁边那个却不听我的」。
-
-本轮把这条链路**显示与提示**改对（写回语义一行未动，那部分已被回归锁死）：
-
-- 开关状态按**生效值**显示：`FieldRow` 的 `switchShown` 先认本地行，本地没写时用
-  `FormValues.effectiveBool(doc, path)`（锚点继承 / 别名展开后的值），最后才是 `field.default`。继承来的「开」
-  不再画成关。
-- 「本来就没有设置 / 本来就是默认值」只在**生效值层面**成立时才短路（`sameAsEffective`）：本地没写但生效值
-  已经是目标值时，toast 说明「生效值已经是开 / 关（来自锚点继承 / 别名）」；否则照常落写（写一条本地覆写
-  行），不再出现「点了没反应」。
-- 写共用键时**点名**：`FormHost.set` 原来只对「继承写穿」点名 `&anchor`；现在补 `sharedAnchorOf(doc, path)`
-  ——键本身挂 `&定义`、别处有 `*别名` 引用时，toast 变成「已写入（&xxx 被 N 处引用共用，会一起生效）」；
-  `commit` 的「没有变化」也解释成「生效值来自锚点继承 / 别名（当前开 / 关），本处没有可改的本地行」。
-
-> 说明：开关联动的**真机复现**本轮没拿到（需要知道「哪个分区页 + 哪两个开关名」，才能把 YAML 片段对上号）。
-> 上面 4 条覆盖了「看起来跟着变 / 点不动 / 没有变化」的全部 UI 侧成因。若真机上仍有联动，请给出
-> **分区页名 + 两个开关的显示名**（配置文件里对应的键更好），我按实际 YAML 定点复现。
-
-## 3. 规则页 / 序列列表：行尾 ↑ / ↓ 逐条挪位
-
-`SeqListPage` 新增可选参数 `onMove: ((from, to) -> Unit)?`：传了就在每行行尾、拖动把手之外再加两个
-`TextButton`（`↑` / `↓`，`minWidth = 32.dp`、`minHeight = 36.dp`，无障碍语义标签「上移」/「下移」），列表头 /
-尾自动置灰（`enabled = i > 0` / `enabled = i < size - 1`）。规则页（`RuleListPage`）接上：
-
-```kotlin
-onMove = { from, to -> host.moveItem(seqPath, from, to, "规则 ${from + 1}") }
-```
-
-`FormHost.moveItem(seqPath, from, to, label)` → `YamlPatch.moveItem`（块级交换；流式列表走 `flowSeqRewrite`），
-越界 / 不可编辑路径原样返回、不写坏文档。列表头提示同步改成「按住行首把手拖动排序，或用行尾 ↑ / ↓ 逐条挪」。
-**拖动把手保留**（长距离挪位还是拖更快），两条入口并存。
-
-## 4. 拖到顶又被弹回下面（拖动落位算错）
-
-症状：快速往上拖到顶（手指跑到列表上沿之外）松手，被拖行没落到第 1 位，反而回到列表中部。
-
-根因两条，都在 `DragSort.step()`：
-
-1. **容器外仍走「最近行中线」兜底**：手指跑到容器外时 `tops` / `heights` 里是**过期的量测值**（自动翻滚已经
-   把行带出窗口），「离哪一行中线最近」常常命中列表中间某行，被拖行就被钉在中途，松手落在错位置。
-2. **自命中早退用错矩形**：`if (fingerY in curTop..curTop+curH) return` 拿的是被拖行自己的矩形——它已经滚出
-   窗口，矩形同样是过期值，于是「拖到容器外」被判成「还压在自己身上」，拖着不动。
-
-修法（对齐参考实现口径）：
-
-- 手指在**容器上沿之外** → 直接落 `at = 0`；**下沿之外** → `at = orderState.size - 1`（即列表头 / 列表尾），
-  不再做「命中行 + 上半 / 下半」换算；容器**内**保持原判定（命中行 + 中线判上下，命中不到时最近行兜底）。
-- `live(index) = handleCoords[index]?.isAttached == true`：命中循环跳过被 lazy 列表**回收**的行——它们的把手
-  节点已解绑，`tops` / `heights` 里留的是旧值，一个过期矩形就能把落点指到别的档位（根因 1 的同一个来源）。
-- 被拖行不在布局里（`!live(from)`）时**不认**自命中早退。
-
-状态机复现（`DragSim`：12 行、首行加高、容器 0–1000；「旧」= 上一版的整段实现，「v1」= 本轮中间版本，
-「新」= 本轮最终）：
-
-| 场景 | 旧 | v1 | 新 |
-| --- | --- | --- | --- |
-| 快拖到顶（手指 Y = -80） | 落在中部（实机复现 = 用户截图） | (11,4) ✗ | **(11,0)** ✓ |
-| 慢拖到顶（手指 Y = -20） | — | — | **(11,0)** ✓ |
-| 抓第 9 行拖出上沿 | — | — | **(10,0)** ✓ |
-| 容器内手指 Y = 300 | — | — | **(11,7)** ✓ |
-
-> `live()` 是针对「行被回收」的加固（过期矩形的来源）；状态机里没有重建 lazy 回收行为，它补齐的是 `hitHandle`
-> 已有的 `isAttached` 过滤口径。**请在真机上按原路径复验一次**：快速上甩到顶、快甩到底、以及拖回自己那一行
-> 再松手。
-
-## 验证
-
-- `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆（`apply` / `apply -R`），
-  应用结果与 `BASELINE.txt` 的 74 个 blob **逐文件一致**；文本断言 **109 条**（上一版 79 条 + 本轮 5 类：
-  整篇替换 END 取旧文本 ×2、`&锚点`不重复 ×3、开关生效值 / 写穿点名 / 「没有变化」解释 ×4、行尾 ↑ / ↓ ×4、
-  拖动落位 + `live()` ×5；原「自命中早退」断言按新口径改成 `!outside && …`）。
-- 写通道回归（`regress7`，19 项）：pass = 19 / fail = 0；同一批用例在旧实现下 21 个坏例 → 新实现 0 个
-  （`&on &on`、尾巴粘连、`<<:` 继承物化、别名侧写入不落空块、锚点定义 ≤1 个 `&`）。
-- 「整篇替换」站点全量核对：`replaceRange` 只有 `ConfigFormPanel.applyText` 与 `AnchorPanel` 两处在写整篇
-  文本，其余站点（编辑器内核 `TextBuffer`）不受影响。
-- **Kotlin 语法门**：对 `custom/forms` + `custom/anchor` 全量跑 `kotlinc`（沙箱无 Android / Compose 依赖），
-  报错数与上一版基线同量级（3229 vs 3206，全部是缺依赖导致的 `unresolved reference` 级联），**0 条语法
-  错误**；本轮新增标识符（`anchorPrefix` / `sharedAnchorOf` / `effBool` / `onMove` / `live`）只在预期的
-  「缺依赖」类别里出现。**没有跑 Gradle 类型检查**（沙箱无 SDK）。落地后请先编译一次：
-
-```bash
-./gradlew :app:compileDebugKotlin -x buildMihomo_arm64_v8a
-```
-
-# 上一轮改动（2026-10-07）——与 mihomo_box 模块对齐的三处交互
+# 本次改动（2026-10-07）——与 mihomo_box 模块对齐的三处交互
 
 > **追加（CI 构建报错修复）**：首轮 CI 在 `:app:compileReleaseKotlin` 失败（3m37s），**94 条**错误全是同一处——
 > `MiniIconButton` 的 `onClick` 被排在 `modifier` **前面**，而 47 处调用全用尾随 lambda
@@ -858,76 +781,17 @@ verify 复核通过后再动的代码。
 
 补丁文件数 71 → **64**（-5 面板包、-2 回归上游的首页文件）。
 
-## 13. web 面板重新加回（参考 box.app；反转 §12 的移除）
-
-用户本轮要求「参考 box.app 的 web 界面，在主页『工具』下面新增与 box.app 一样的 web 界面」，
-即把 §12 删掉的外部面板重新做回来。**重要背景**：§3–§11 那版面板（含 §5–§11 共 9 轮防白闪
-打磨）在 §12 被整体删除，而工作区在其后重建过——仓库 git 历史与历史补丁对象都只到 §12 之后
-（67/60 文件、无 `custom/panel/`），**§11 那版成熟代码已不可恢复**。因此本轮是照 §11 在本文档
-里留下的规格 + box.app `ThemedWebView` 重新实现，并把当年最关键的防白闪机制一并带上，避免重蹈
-§5–§11 的覆辙。
-
-新增（与 box.app 对齐，落在 `ui/web/` 与 `ui/screen/panel/`）：
-
-- `ui/web/ThemedWebView.kt`：WebView 承载。三个不能省的点都照搬——
-  1. **防白闪 `hideUntilCommitVisible`**：新建 WebView 先 `INVISIBLE`，`onPageCommitVisible`
-     才 `VISIBLE`；刷新 / 换 URL 前也先隐回底色。这是 §11 花了多轮才落地的核心去闪机制。
-  2. `mixedContentMode = MIXED_CONTENT_ALWAYS_ALLOW`：面板多为 https、控制器在 http，
-     默认值会把面板调 API 全掐了（页面能开、数据全空）。
-  3. 深色跟随 App（API33+ `isAlgorithmicDarkeningAllowed`、API29–32 `forceDark`）；Cookie 持久化。
-- `ui/screen/panel/WebPanelScreen.kt`：面板管理器。内置 zashboard / metacubexd 两个在线面板，
-  自定义面板可增删切换，选中项与列表持久化到 SharedPreferences `panel_cache`（与 box.app 同名）。
-  **换面板 / 换深浅色用 `key(isDark, sessionKey)` 整体重建 WebView**（§11 同款）——既隔离上一家
-  面板登录态，又让新实例从隐藏态起步防白闪。顶栏：返回（网页可后退先 `goBack`，退无可退才退出）
-  / 刷新 / 面板清单。
-- 导航：`Route.WebPanel` + `AppNavigation` 的 `entry<Route.WebPanel>`；首页「工具」区在 2×2 快捷
-  入口下方加一张**整宽「Web 面板」卡片**（`QuickEntriesSection` / `HomeScreen` 的 `onNavigateWebPanel`）。
-- 4 语言共 11 条面板文案（`home_panel*` 与 `panel_*`）。
-
-与 box.app / §11 的差异（都为控制本轮范围，非退化）：**不含 `local` 内置项**（那需要打包一份
-本地 webroot 或解析 external-controller 的 `/ui`，用户可自行「添加」指向本地控制器的 metacubexd
-达到同样效果）；**不含 §11 的下载 JS 桥 / 文件选择器 / `WebViewPreloader` 预热**（面板是纯 SPA，
-看面板用不到下载；预热只是秒开优化）；系统返回手势暂只接了顶栏返回键（未接 `NavigationBackHandler`
-的侧滑返回）。**防白闪是运行期视觉行为，沙箱无设备无法验证**，落地后请重点看换面板 / 重进是否还闪。
-
-## 14. 主页测延迟改用 box.app 的测量法（measure_only）
-
-按用户选的 measure_only：保留固定的 Baidu / Cloudflare / Google 三个目标（不做可配置目标 / 编辑页），
-只把**测量机制**换成 box.app 那套。
-
-- 新增 `data/api/LatencyResult.kt`：`sealed class`，状态 Loading / Success(latencyMs) / Timeout /
-  DnsError / Unreachable / HttpError(code) / NotAvailable（与 box.app 一一对应）。
-- 重写 `data/api/RuleLatencyTester.kt`：`measure()` 返回 `LatencyResult`；请求带 box.app 同款
-  `User-Agent` + `Range: bytes=0-0` 头；按异常类型细分（超时→Timeout、UnknownHost→DnsError、
-  连接/路由/SSL→Unreachable、4xx/5xx→HttpError、2xx/3xx→Success）。
-- `viewmodel/HomeViewModel.kt`：延迟字段 Int→LatencyResult；**先跑一轮丢弃的预热**（`latencyWarmupDone`）
-  再跑真正一轮（box.app 同款，避开首包冷启动虚高）。
-- `ui/screen/home/LatencySection.kt`：按状态显示「N ms / 超时 / DNS / 无法连接 / HTTP {code} / N/A」，
-  颜色随状态（成功用 `StatusColors.delay(ms)`）。4 语言各加 6 条状态文案。
-
-## 15. find-process-mode: always 不生效（respect_profile）
-
-配置文件里写 `find-process-mode: always` 但进程匹配规则不生效。根因：`RuntimeOverrideBuilder`
-把 `findProcessMode` 兜底成了 `"off"`（`userOverride.findProcessMode ?: "off"`），于是无论配置文件
-怎么写都被覆盖成 off。按用户选的 respect_profile 做最小修复——
-
-- `service/RuntimeOverrideBuilder.kt`：`findProcessMode = userOverride.findProcessMode`（去掉 `?: "off"`）。
-  配置 JSON 用 `encodeDefaults=false` / `explicitNulls=false`，null 字段会被省略 ⇒ 不再下发
-  find-process-mode ⇒ 配置文件（profile YAML）里的值得以生效。不在 App 内新增设置项。
-
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 74 个 blob 逐文件一致（运行时配置 / root / 表单 / 隐藏不可用
-  断言 + §12「已移除」断言已反转为「web 面板已加回」断言 + 测延迟 / find-process-mode 断言）。
-- **Kotlin 类型检查**：本轮**新增**了 web 面板（`ThemedWebView` / `WebPanelScreen`）、测延迟
-  （`LatencyResult` / 重写 `RuleLatencyTester` / `HomeViewModel` / `LatencySection`）等代码路径。
-  沙箱内只做了静态核对（括号/引号配平、引用完整性：`Route.WebPanel` / `onNavigateWebPanel` /
-  `WebPanelScreen` 接线齐全，`LatencyResult` 无悬空引用，`StatusColors.delay` 保留，面板/延迟字符串
-  4 语言齐备），**没有跑 kotlinc / Gradle 类型检查**（沙箱无 SDK、内存 2GB）。
-- `BASELINE.txt` 的 `patch_sha256` 随新补丁更新（完整值见该文件），74 个 blob（28 新增 + 46 修改）。
-- **落地后请务必先跑一次编译**（本轮有新增代码，重点看 `ThemedWebView` 的 `android.webkit` /
-  `AndroidView` 导入、`WebPanelScreen` 的 miuix 组件签名、`Route.WebPanel` 序列化）：
+  应用结果与 `BASELINE.txt` 的 64 个 blob 逐文件一致（运行时配置 / root / 表单 / 隐藏不可用
+  断言 26 条 + 「web 面板已彻底移除」防回归断言 7 条）。
+- **Kotlin 类型检查**：历史轮次的面板文件类型检查已随 web 界面移除而失去对象（kotlinc 环境
+  曾对 `custom/panel/` 全部文件查过 **0 错误**）；本轮改动全为删除与参数清理，无新增代码路径，
+  唯一保留的代码改动是 `Route.FileManagerEditor` 的 `showConfigForm` 等既有功能，不受影响。
+- `BASELINE.txt` 的 `patch_sha256` 随新补丁更新（完整值见该文件）。
+- 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑不动，**本次没有跑通 Gradle 编译验证**。
+  落地后请先跑一次（本轮是纯删除，重点看有没有漏删的引用导致编译不过）：
 
 ```bash
 ./gradlew :app:compileDebugKotlin -x buildMihomo_arm64_v8a
