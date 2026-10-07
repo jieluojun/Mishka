@@ -52,6 +52,12 @@
 > `Unresolved reference: pointerInput` —— 把手换回 `pointerInput` 时忘了把 import 补回来（§9 换去
 > `pointerInteropFilter` 时删过它），跨包 import 工具只管 `custom.*` 符号、androidx 的它看不见。
 > 补 import，并按 §7 先例给 verify 加 2 条断言（`pointerInput` / `awaitPointerEvent` import 必须在位）（§12）。
+>
+> **追加（CI 构建报错修复，三次）**：二轮 CI 又报 4 条 `Unresolved reference` —— `awaitFirstDown` /
+> `forEachGesture` **不在** `androidx.compose.ui.input.pointer`（在 `foundation.gestures`），
+> `awaitPointerEventScope` / `awaitPointerEvent` 是 `PointerInputScope` / `AwaitPointerEventScope` 的
+> **接口成员**（只能在 `pointerInput` 块里直接调，根本不是顶层函数、不能 import）。改对 import，
+> verify 用 4 条断言把正确 / 错误 import 形态都钉住（§13）。
 
 基线未变：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`。参考实现是
 mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/core.js` /
@@ -329,9 +335,30 @@ dragSort.dragging < 0` 两处、`verticalScroll(…, enabled = … < 0)`（弹�
 `top.yukonga.mishka.custom.*` 的顶层符号，androidx 的包级函数不在它管辖内，于是漏网——与 §7 的
 `dragSortItem` 是同一类「调用点对、import 漏」，只是包不同。
 
-修法：补 `import androidx.compose.ui.input.pointer.pointerInput`。防回归：verify 新增 2 条 import
-断言（`pointerInput`、`awaitPointerEvent` 必须在位），与 §7/§8 给 `positionInWindow` /
-`LayoutCoordinates` 钉的断言同一套路。
+修法：补 `import androidx.compose.ui.input.pointer.pointerInput`。防回归：verify 新增 `pointerInput`
+import 断言，与 §7/§8 给 `positionInWindow` / `LayoutCoordinates` 钉的断言同一套路（同轮误加的
+`awaitPointerEvent` import 断言在 §13 一并纠正）。
+
+## 13. 修复（编译）：手势助手的包不是 `ui.input.pointer`
+
+症状：CI `:app:compileReleaseKotlin` 报 4 条 `Unresolved reference`（DragSort.kt 的 4 行 import）+
+连带 `Suspension functions can only be called within coroutine body`：`awaitFirstDown` /
+`awaitPointerEvent` / `awaitPointerEventScope` / `forEachGesture` 全 unresolved。
+
+根因：v6 把手循环凭印象把四个助手都写成 `androidx.compose.ui.input.pointer.*`。对照 androidx 源码
+（`compose/foundation/.../gestures/ForEachGesture.kt`、`SuspendingPointerInputFilter.kt`）逐个核实：
+
+- `forEachGesture`、`awaitFirstDown` 是 **`androidx.compose.foundation.gestures`** 的顶层扩展函数；
+- `awaitPointerEventScope` 是 `PointerInputScope` 的**成员函数**、`awaitPointerEvent` 是
+  `AwaitPointerEventScope` 的**成员函数** —— 在 `pointerInput { }` 块里直接调用即可，不是顶层函数，
+  **不能 import**。
+
+修法：import 改为 `androidx.compose.foundation.gestures.awaitFirstDown` /
+`androidx.compose.foundation.gestures.forEachGesture`，删掉两行 `ui.input.pointer.await*`；调用点
+（`forEachGesture { awaitPointerEventScope { awaitFirstDown(…) … awaitPointerEvent() … } }`）一字不动。
+
+防回归：verify 换 / 增 4 条 —— 两条 `foundation.gestures` import 在位、`pointerInput` import 在位、
+`import androidx.compose.ui.input.pointer.await` 禁现（错误形态整类钉死）。
 
 ## 验证
 
@@ -351,6 +378,8 @@ dragSort.dragging < 0` 两处、`verticalScroll(…, enabled = … < 0)`（弹�
   在 DragSort.kt 整段禁现；补丁双向可逆、67 个 blob（含 4 个本轮改动文件的新 hash）逐文件一致。
 - §12（补 `pointerInput` import）后复跑 → **156 条 ok / 0 FAIL**：新增 2 条 import 断言在位，
   其余（含 v6 的 9 条）全绿。
+- §13（手势助手 import 纠正）后复跑 → **158 条 ok / 0 FAIL**：两条 `foundation.gestures` import
+  断言、`ui.input.pointer.await*` 禁现断言在位，补丁双向可逆、67 blob 逐文件一致。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 

@@ -240,14 +240,22 @@ assert_not_contains 'dragAmount' \
 assert_contains 'val down = awaitFirstDown(requireUnconsumed = false)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the handle grabs the stream on DOWN without slop waiting'
-# §7 同类 CI 报错的防回归：v6 重写时漏了 pointerInput 的 import（跨包工具只管 custom.* 符号，
-# androidx 符号漏 import 它看不见），CI 报 Unresolved reference: pointerInput。
+# §7 同类 CI 报错的防回归：v6 重写连踩两次 import 坑（CI 两轮各报一次）：
+#  1) pointerInput 的 import 漏补（跨包工具只管 custom.* 符号，androidx 的它看不见）；
+#  2) awaitFirstDown / forEachGesture 不在 ui.input.pointer 而在 foundation.gestures，
+#     awaitPointerEventScope / awaitPointerEvent 是接口成员、根本不能 import。
 assert_contains 'import androidx.compose.ui.input.pointer.pointerInput' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'pointerInput is imported (v6 handle loop uses it; missing import broke CI once)'
-assert_contains 'import androidx.compose.ui.input.pointer.awaitPointerEvent' \
+assert_contains 'import androidx.compose.foundation.gestures.awaitFirstDown' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the awaitPointerEvent loop import is present'
+  'awaitFirstDown is imported from foundation.gestures (it is NOT in ui.input.pointer)'
+assert_contains 'import androidx.compose.foundation.gestures.forEachGesture' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'forEachGesture is imported from foundation.gestures (it is NOT in ui.input.pointer)'
+assert_not_contains 'import androidx.compose.ui.input.pointer.await' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'no bogus ui.input.pointer.await* imports (those symbols are members or live in foundation.gestures)'
 assert_contains 'startDrag(index, down.position.y)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'press = immediate drag start (handle semantics unchanged)'
