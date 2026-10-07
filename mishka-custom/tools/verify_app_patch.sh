@@ -359,30 +359,56 @@ else
   echo "warn 没有 python3，跳过 tools/check_cross_package_imports.py"
 fi
 
-# --- web 界面已完全移除（防回归）---
-assert_not_contains 'PanelScreen' \
+# --- web 面板（本轮参考 box.app 重新加回；反转 §12 的「已移除」断言）---
+assert_contains 'WebPanelScreen' \
   app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \
-  'web panel is fully removed from navigation'
-assert_not_contains 'onNavigatePanel' \
+  'web panel screen is wired into navigation'
+assert_contains 'data object WebPanel' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt \
+  'web panel route is registered'
+assert_contains 'onNavigateWebPanel' \
   app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt \
-  'web panel quick entry is fully removed from home'
-assert_not_contains 'home_panel' \
+  'web panel quick entry exists under home tools'
+assert_contains 'onPageCommitVisible' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/web/ThemedWebView.kt \
+  'web panel WebView uses hideUntilCommitVisible anti-flicker'
+assert_contains 'key(isDark, sessionKey)' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/WebPanelScreen.kt \
+  'web panel rebuilds WebView per panel/theme (login isolation + anti-flicker)'
+assert_contains 'home_panel' \
   app/src/main/res/values/strings.xml \
-  'web panel strings are fully removed (default locale)'
-assert_not_contains 'home_panel' \
+  'web panel strings present (default locale)'
+assert_contains 'home_panel' \
   app/src/main/res/values-zh-rCN/strings.xml \
-  'web panel strings are fully removed (Chinese locale)'
-assert_not_contains 'home_panel' \
+  'web panel strings present (Chinese locale)'
+assert_contains 'home_panel' \
   app/src/main/res/values-zh-rTW/strings.xml \
-  'web panel strings are fully removed (Taiwan locale)'
-assert_not_contains 'home_panel' \
+  'web panel strings present (Taiwan locale)'
+assert_contains 'home_panel' \
   app/src/main/res/values-ru/strings.xml \
-  'web panel strings are fully removed (Russian locale)'
-if [ -d "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel" ]; then
-  echo "FAIL web panel package still exists" >&2; fail=1
+  'web panel strings present (Russian locale)'
+if [ -f "$REPO/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/WebPanelScreen.kt" ] && \
+   [ -f "$REPO/app/src/main/kotlin/top/yukonga/mishka/ui/web/ThemedWebView.kt" ]; then
+  echo "ok  web panel screen + ThemedWebView present"
 else
-  echo "ok  web panel package (custom/panel) is gone"
+  echo "FAIL web panel screen or ThemedWebView missing" >&2; fail=1
 fi
+
+# --- 测延迟逻辑对齐 box.app（measure_only）---
+assert_contains 'sealed class LatencyResult' \
+  app/src/main/kotlin/top/yukonga/mishka/data/api/LatencyResult.kt \
+  'latency result is a sealed hierarchy (box.app measure states)'
+assert_contains 'latencyWarmupDone' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt \
+  'latency does a discarded warmup pass before the real one'
+assert_contains 'Range' \
+  app/src/main/kotlin/top/yukonga/mishka/data/api/RuleLatencyTester.kt \
+  'latency probe sends Range: bytes=0-0 like box.app'
+
+# --- find-process-mode 尊重配置文件（respect_profile）---
+assert_contains 'findProcessMode = userOverride.findProcessMode' \
+  app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
+  'find-process-mode no longer forced to off; profile value wins'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"

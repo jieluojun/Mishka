@@ -17940,6 +17940,50 @@ index 0000000..0434c16
 +
 +    private fun leadingIndent(value: String): Int = value.takeWhile { it == ' ' }.length
 +}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/LatencyResult.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/LatencyResult.kt
+new file mode 100644
+index 0000000..23fa311
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/LatencyResult.kt
+@@ -0,0 +1,38 @@
++package top.yukonga.mishka.data.api
++
++/**
++ * 单次延迟实测的细分结果（对齐 box.app 的 `LatencyResult`）。
++ *
++ * 旧口径只用一个整数毫秒（-1 失败 / -2 不可用），把「超时 / DNS 失败 / 不可达 / HTTP 错误」全糊成
++ * `-- ms`；box.app 把它们分开，主页据此给出可读状态而不是误导性的数字。这里原样采用其状态划分。
++ */
++sealed class LatencyResult {
++    /** 测量中（预热轮 / 正式轮尚未返回）。 */
++    data object Loading : LatencyResult()
++
++    /** 测量成功：首包往返毫秒。 */
++    data class Success(val latencyMs: Long) : LatencyResult()
++
++    /** 连接 / 读取超时。 */
++    data object Timeout : LatencyResult()
++
++    /** DNS 解析失败。 */
++    data object DnsError : LatencyResult()
++
++    /** 连接被拒 / 网络不可达 / TLS 失败。 */
++    data object Unreachable : LatencyResult()
++
++    /** HTTP 4xx/5xx：链路通、但目标返回错误码（仍反映「能连上」）。 */
++    data class HttpError(val code: Int) : LatencyResult()
++
++    /** mixed-port 不可用 / 未知错误：测不了。 */
++    data object NotAvailable : LatencyResult()
++
++    /** 毫秒值：仅 [Success] 有，其余为 null（用于取色与挑最优）。 */
++    val millis: Long?
++        get() = (this as? Success)?.latencyMs
++
++    /** 是否是「已经出过结果」（非 Loading、非 NotAvailable）——用于判断整体是否测过。 */
++    val isResolved: Boolean
++        get() = this !is Loading && this !is NotAvailable
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 index 33aa9cc..eec239e 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
@@ -18088,6 +18132,102 @@ index 33aa9cc..eec239e 100644
 +/** 延迟测试失败（内核返回非 2xx，通常 503 = 节点连不通测速地址）。[status] 供上层分类提示。 */
 +class DelayTestFailedException(val node: String, val status: Int, val reason: String) :
 +    MihomoApiException("delay test for '$node' failed: HTTP $status $reason")
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/RuleLatencyTester.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/RuleLatencyTester.kt
+index 30eb71b..9725667 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/data/api/RuleLatencyTester.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/RuleLatencyTester.kt
+@@ -2,11 +2,11 @@ package top.yukonga.mishka.data.api
+ 
+ import io.ktor.client.HttpClient
+ import io.ktor.client.engine.ProxyBuilder
++import io.ktor.client.plugins.HttpRequestTimeoutException
+ import io.ktor.client.plugins.HttpTimeout
+ import io.ktor.client.request.get
++import io.ktor.client.request.header
+ import io.ktor.http.Url
+-import top.yukonga.mishka.data.api.RuleLatencyTester.Companion.Failed
+-import top.yukonga.mishka.data.api.RuleLatencyTester.Companion.Unavailable
+ import top.yukonga.mishka.data.repository.SubscriptionProxyResolver
+ import kotlin.time.TimeSource
+ 
+@@ -15,25 +15,52 @@ import kotlin.time.TimeSource
+  * `GET /proxies/{name}/delay` 对指定组的当前选中节点直接拨测、绕过规则匹配，做不到这点。
+  *
+  * Mishka 自身流量始终绕过 TUN，mixed-port 是唯一能让自己的请求经过 mihomo 的入口；
+- * 端口解析不到时返回 [Unavailable]，由调用方决定降级方式。
++ * 端口解析不到时返回 [LatencyResult.NotAvailable]，由调用方决定降级方式。
++ *
++ * 测量口径对齐 box.app（`HomeMetricsApi.measureLatency`）：带 `Range: bytes=0-0` 让目标只回首字节、
++ * 只测「链路通不通」的首包往返；`followRedirects=false`，收到首个响应即算连通；结果按 HTTP 码与异常
++ * 类型细分成 [LatencyResult]，而不是把一切异常糊成一个整数。
+  */
+ class RuleLatencyTester(
+     private val proxyResolver: SubscriptionProxyResolver,
+ ) {
+     /**
+-     * @return 毫秒延迟；[Unavailable] 表示 mixed-port 不可用（无法按规则测），[Failed] 表示请求失败或超时。
++     * @return [LatencyResult]：[LatencyResult.NotAvailable] 表示 mixed-port 不可用（无法按规则测），
++     * 其余状态见 [LatencyResult]（成功 / 超时 / DNS 失败 / 不可达 / HTTP 错误）。
+      */
+-    suspend fun measure(url: String, timeoutMillis: Long): Int {
++    suspend fun measure(url: String, timeoutMillis: Long): LatencyResult {
+         // 只要代理在跑就走本机端口，与「订阅下载走代理」开关无关——此处测的是代理本身的连通性
+-        val proxyUrl = proxyResolver.resolve(requireUserToggle = false) ?: return Unavailable
++        val proxyUrl = proxyResolver.resolve(requireUserToggle = false) ?: return LatencyResult.NotAvailable
+         // 每次新建 client：复用连接池会省掉 TCP 握手，让重复刷新测出的数字逐次偏低，口径不稳
+         val client = buildClient(proxyUrl, timeoutMillis)
+         return try {
+             val start = TimeSource.Monotonic.markNow()
+-            client.get(url)
+-            start.elapsedNow().inWholeMilliseconds.toInt()
++            val response = client.get(url) {
++                header("User-Agent", "Mishka/Latency")
++                header("Range", "bytes=0-0")
++            }
++            val ms = start.elapsedNow().inWholeMilliseconds
++            when (val code = response.status.value) {
++                in 200..399 -> LatencyResult.Success(ms)
++                in 400..599 -> LatencyResult.HttpError(code)
++                else -> LatencyResult.Success(ms) // 1xx 仍算可达
++            }
++        } catch (_: java.net.UnknownHostException) {
++            LatencyResult.DnsError
++        } catch (_: HttpRequestTimeoutException) {
++            LatencyResult.Timeout
++        } catch (_: java.net.SocketTimeoutException) {
++            LatencyResult.Timeout
++        } catch (_: java.io.InterruptedIOException) {
++            LatencyResult.Timeout
++        } catch (_: java.net.ConnectException) {
++            LatencyResult.Unreachable
++        } catch (_: java.net.NoRouteToHostException) {
++            LatencyResult.Unreachable
++        } catch (_: javax.net.ssl.SSLException) {
++            LatencyResult.Unreachable
+         } catch (_: Throwable) {
+-            Failed
++            LatencyResult.NotAvailable
+         } finally {
+             client.close()
+         }
+@@ -44,16 +71,8 @@ class RuleLatencyTester(
+             connectTimeoutMillis = timeoutMillis
+             requestTimeoutMillis = timeoutMillis
+         }
+-        // 跟随 3xx 会把后续跳转的往返一并计进耗时；首个响应到达即视为连通
++        // 跟随 3xx 会把后续跳转的往返一并计进耗时；首个响应到达即视为连通（与 box.app 同口径）
+         followRedirects = false
+         engine { proxy = ProxyBuilder.http(Url(proxyUrl)) }
+     }
+-
+-    companion object {
+-        /** mixed-port 解析不到，无法按规则测 */
+-        const val Unavailable = -2
+-
+-        /** 请求失败 / 超时 / 目标不可达 */
+-        const val Failed = -1
+-    }
+ }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 index 76eb0a2..14ebcdc 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
@@ -19871,7 +20011,7 @@ index 2a8f11d..948ec25 100644
                                  "pre-tproxy-tether-$proto-v6"
                              )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
-index b57d687..b3ca808 100644
+index b57d687..0ccd68c 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 @@ -2,6 +2,8 @@ package top.yukonga.mishka.service
@@ -19914,7 +20054,7 @@ index b57d687..b3ca808 100644
      ): File {
          val storage = PlatformStorage(context)
          val wifiRuntimeMode = storage.getString(StorageKeys.WIFI_POLICY_RUNTIME_MODE, "")
-@@ -85,12 +96,14 @@ object RuntimeOverrideBuilder {
+@@ -85,26 +96,45 @@ object RuntimeOverrideBuilder {
                  else -> null
              },
              tproxyPort = when (tunMode) {
@@ -19935,9 +20075,25 @@ index b57d687..b3ca808 100644
              },
              // RootTproxy 下**不**注入 routing-mark：Android Netd 用 fwmark 低 16 位编码 netId，
              // mihomo 若带 SO_MARK 会被解释为不存在的 netId，命中 legacy_system 表（无默认路由）
-@@ -104,7 +117,19 @@ object RuntimeOverrideBuilder {
+             // → mihomo 出站全部 `network unreachable`。iptables 改用 `-m owner --uid-owner 0`
+             // 放行 mihomo（它以 root 运行），副作用是所有 root 进程都不经 TPROXY，但用户 app 正常代理
+             routingMark = userOverride.routingMark,
+-            // tcp-concurrent：代理侧并发拨号，显著降低首包延迟，多客户端并发场景尤其有效；
+-            // find-process-mode=off：ROOT TUN 分应用已由 sing-tun include/exclude-package 的 uidrange
+-            // 处理，mihomo 运行期遍历 /proc 查进程纯属冗余；VPN 模式 AppProxy 走 VpnService 同理。
+-            // 用户显式设置优先：仅在未设置时注入默认值
++            // tcp-concurrent：代理侧并发拨号，显著降低首包延迟，多客户端并发场景尤其有效。
++            // 用户显式设置优先：仅在未设置时注入默认值 true。
              tcpConcurrent = userOverride.tcpConcurrent ?: true,
-             findProcessMode = userOverride.findProcessMode ?: "off",
+-            findProcessMode = userOverride.findProcessMode ?: "off",
++            // find-process-mode：**不再强制注入 "off"**。此前无条件写 "off"，经 --override-json 在
++            // yaml.Unmarshal 之后 Decode 进 RawConfig，会盖过用户 profile YAML 里的
++            // `find-process-mode: always/strict`，使 PROCESS-NAME 等进程匹配规则整体失效。
++            // override JSON 用 explicitNulls=false 序列化：字段为 null 即不输出，mihomo decode 跳过
++            // 未提及字段、保留 profile 原值——所以这里透传用户覆盖值（null = 不注入 = 尊重 profile）。
++            // 性能无忧：ROOT TUN 分应用本就由 sing-tun include/exclude-package 的 uidrange 处理，
++            // 用户不显式开启时 mihomo 自身默认即 off，不会平白多出 /proc 遍历。
++            findProcessMode = userOverride.findProcessMode,
              dns = buildDnsOverride(tunMode, userOverride.dns),
 -            tun = buildTunOverride(context, tunMode, tunFd, userOverride.tun),
 +            tun = buildTunOverride(
@@ -19956,7 +20112,7 @@ index b57d687..b3ca808 100644
              profile = ProfileOverride(storeSelected = false, storeFakeIp = true),
          )
          // 原子写：mihomo 紧接着就以 --override-json 读它，半个 JSON 会让启动失败且难以定位
-@@ -132,14 +157,40 @@ object RuntimeOverrideBuilder {
+@@ -132,14 +162,40 @@ object RuntimeOverrideBuilder {
          tunMode: TunMode,
          tunFd: Int,
          userTun: TunOverride?,
@@ -20000,7 +20156,7 @@ index b57d687..b3ca808 100644
  
          // 分应用代理：仅 RootTun 通过 mihomo include/exclude-package 实现；
          // VPN 由 VpnService.Builder.addAllowed/DisallowedApplication 管；
-@@ -186,15 +237,19 @@ object RuntimeOverrideBuilder {
+@@ -186,15 +242,19 @@ object RuntimeOverrideBuilder {
          // 破坏同 LAN 设备发现 / P2P 直连（如妙享桌面）。注入私网 + 组播 route-exclude 留在物理网卡，
          // 与 VPN / TPROXY 的 LAN 放行对齐；仅 ROOT TUN 需要，用户显式设置优先。
          val routeExclude: List<String>? = when {
@@ -20024,7 +20180,7 @@ index b57d687..b3ca808 100644
  
          // sing-tun userspace TUN 性能：mtu=9000 + gso + gso-max-size=65535 让大包聚合，
          // 减少每包 read syscall；仅 ROOT TUN 注入 GSO（VPN fd 由 VpnService 创建无 vnet header）。
-@@ -209,20 +264,148 @@ object RuntimeOverrideBuilder {
+@@ -209,20 +269,148 @@ object RuntimeOverrideBuilder {
          return TunOverride(
              enable = true,
              device = device,
@@ -20275,10 +20431,18 @@ index 7a0fb51..7e2415d 100644
      }
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 2341aa9..3e42813 100644
+index 2341aa9..d00f6a3 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-@@ -335,6 +335,9 @@ fun AppNavigation(
+@@ -76,6 +76,7 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
+ import top.yukonga.mishka.ui.component.liquid.IosLiquidGlassNavigationBar
+ import top.yukonga.mishka.ui.screen.connection.ConnectionScreen
+ import top.yukonga.mishka.ui.screen.dns.DnsQueryScreen
++import top.yukonga.mishka.ui.screen.panel.WebPanelScreen
+ import top.yukonga.mishka.ui.screen.home.HomeScreen
+ import top.yukonga.mishka.ui.screen.log.LogScreen
+ import top.yukonga.mishka.ui.screen.provider.ProviderScreen
+@@ -335,6 +336,9 @@ fun AppNavigation(
                          onBack = { navigator.pop() },
                          onSaved = { navigator.pop() },
                          onNavigateOverrides = { navigator.push(Route.SubscriptionOverrides(route.uuid)) },
@@ -20288,7 +20452,7 @@ index 2341aa9..3e42813 100644
                      )
                  }
              }
-@@ -387,6 +390,8 @@ fun AppNavigation(
+@@ -387,6 +391,8 @@ fun AppNavigation(
                  providerViewModel?.let {
                      ProviderScreen(
                          viewModel = it,
@@ -20297,7 +20461,19 @@ index 2341aa9..3e42813 100644
                          onBack = { navigator.pop() },
                      )
                  }
-@@ -422,6 +427,10 @@ fun AppNavigation(
+@@ -407,6 +413,11 @@ fun AppNavigation(
+                     )
+                 }
+             }
++            entry<Route.WebPanel>(swipeDismiss = swipeDismiss) {
++                WebPanelScreen(
++                    onBack = { navigator.pop() },
++                )
++            }
+             entry<Route.VpnSettings>(swipeDismiss = swipeDismiss) {
+                 storage?.let {
+                     VpnSettingsScreen(
+@@ -422,6 +433,10 @@ fun AppNavigation(
                      RootSettingsScreen(
                          storage = it,
                          isProxyRunning = homeState?.isRunning == true || homeState?.isStarting == true,
@@ -20308,7 +20484,7 @@ index 2341aa9..3e42813 100644
                          onBack = { navigator.pop() },
                      )
                  }
-@@ -509,6 +518,7 @@ fun AppNavigation(
+@@ -509,6 +524,7 @@ fun AppNavigation(
                      uuid = route.uuid,
                      relativePath = route.relativePath,
                      subscriptionViewModel = subscriptionViewModel,
@@ -20316,11 +20492,29 @@ index 2341aa9..3e42813 100644
                      onBack = { navigator.pop() },
                  )
              }
+@@ -582,6 +598,7 @@ private fun MainPage(
+                     onNavigateProvider = { navigator.push(Route.Provider) },
+                     onNavigateConnection = { navigator.push(Route.Connection) },
+                     onNavigateDnsQuery = { navigator.push(Route.DnsQuery) },
++                    onNavigateWebPanel = { navigator.push(Route.WebPanel) },
+                     onStartProxy = { homeViewModel?.startProxy() },
+                     onSwitchMode = { homeViewModel?.switchMode(it) },
+                     onSwitchTunStack = { homeViewModel?.switchTunStack(it) },
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
-index bdb96f7..c5f8970 100644
+index bdb96f7..2bef5ec 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
-@@ -56,7 +56,11 @@ sealed interface Route : NavKey {
+@@ -37,6 +37,9 @@ sealed interface Route : NavKey {
+     @Serializable
+     data object Connection : Route
+ 
++    @Serializable
++    data object WebPanel : Route
++
+     @Serializable
+     data object VpnSettings : Route
+ 
+@@ -56,7 +59,11 @@ sealed interface Route : NavKey {
      data object BackupRestore : Route
  
      @Serializable
@@ -20333,6 +20527,138 @@ index bdb96f7..c5f8970 100644
  
      @Serializable
      data object AppProxy : Route
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
+index f3a7a58..e46dcae 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
+@@ -50,6 +50,7 @@ fun HomeScreen(
+     onNavigateProvider: () -> Unit = {},
+     onNavigateConnection: () -> Unit = {},
+     onNavigateDnsQuery: () -> Unit = {},
++    onNavigateWebPanel: () -> Unit = {},
+     onStartProxy: () -> Unit = {},
+     onSwitchMode: (String) -> Unit = {},
+     onSwitchTunStack: (String) -> Unit = {},
+@@ -148,6 +149,7 @@ fun HomeScreen(
+                     onNavigateProvider = onNavigateProvider,
+                     onNavigateConnection = onNavigateConnection,
+                     onNavigateDnsQuery = onNavigateDnsQuery,
++                    onNavigateWebPanel = onNavigateWebPanel,
+                 )
+             }
+         }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/LatencySection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/LatencySection.kt
+index e4cdac2..99b3b6e 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/LatencySection.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/LatencySection.kt
+@@ -20,8 +20,8 @@ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.data.api.LatencyResult
+ import top.yukonga.mishka.ui.theme.StatusColors
+-import top.yukonga.mishka.util.FormatUtils
+ import top.yukonga.mishka.viewmodel.HomeUiState
+ import top.yukonga.miuix.kmp.basic.Card
+ import top.yukonga.miuix.kmp.basic.Icon
+@@ -65,17 +65,23 @@ private fun LatencyHeader(
+     state: HomeUiState,
+     onTestLatency: () -> Unit,
+ ) {
+-    val allTested = state.latencyBaidu >= 0 || state.latencyCloudflare >= 0 || state.latencyGoogle >= 0
++    // 细分结果下的整体判定：Google 通=正常、仅 Cloudflare 通=部分、都不通=异常、还没测=未测试
++    val anyResolved = state.latencyBaidu.isResolved ||
++        state.latencyCloudflare.isResolved ||
++        state.latencyGoogle.isResolved
++    val googleOk = state.latencyGoogle is LatencyResult.Success
++    val cloudflareOk = state.latencyCloudflare is LatencyResult.Success
+     val statusColor = when {
+-        !allTested -> StatusColors.neutral
+-        state.latencyGoogle >= 0 -> StatusColors.healthy
+-        state.latencyCloudflare >= 0 -> StatusColors.warning
++        state.isTestingLatency || !anyResolved -> StatusColors.neutral
++        googleOk -> StatusColors.healthy
++        cloudflareOk -> StatusColors.warning
+         else -> StatusColors.danger
+     }
+     val statusText = when {
+-        !allTested -> stringResource(R.string.home_latency_untested)
+-        state.latencyGoogle >= 0 -> stringResource(R.string.home_latency_normal)
+-        state.latencyCloudflare >= 0 -> stringResource(R.string.home_latency_partial)
++        state.isTestingLatency -> stringResource(R.string.home_latency_measuring)
++        !anyResolved -> stringResource(R.string.home_latency_untested)
++        googleOk -> stringResource(R.string.home_latency_normal)
++        cloudflareOk -> stringResource(R.string.home_latency_partial)
+         else -> stringResource(R.string.home_latency_abnormal)
+     }
+ 
+@@ -127,9 +133,13 @@ private fun LatencyHeader(
+ }
+ 
+ @Composable
+-private fun LatencyItem(name: String, delay: Int) {
+-    // -1 视为"未测/不可达"，由 token 映射到 neutral 灰
+-    val color = StatusColors.delay(if (delay < 0) null else delay)
++private fun LatencyItem(name: String, result: LatencyResult) {
++    // 成功按毫秒取色（优/一般/差）；测量中/不可用=中性灰；超时/DNS/不可达/HTTP 错误=红
++    val color = when (result) {
++        is LatencyResult.Success -> StatusColors.delay(result.latencyMs.toInt())
++        LatencyResult.Loading, LatencyResult.NotAvailable -> StatusColors.neutral
++        else -> StatusColors.danger
++    }
+ 
+     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+         Row(
+@@ -149,10 +159,22 @@ private fun LatencyItem(name: String, delay: Int) {
+             )
+         }
+         Text(
+-            text = FormatUtils.formatLatency(delay),
++            text = latencyText(result),
+             fontSize = 15.sp,
+             fontWeight = FontWeight.Medium,
+             color = MiuixTheme.colorScheme.onSurface,
+         )
+     }
+ }
++
++/** 细分结果 → 可读文案（对齐 box.app：ms / 超时 / DNS / 不可达 / HTTP xxx / N/A）。 */
++@Composable
++private fun latencyText(result: LatencyResult): String = when (result) {
++    is LatencyResult.Success -> "${result.latencyMs} ms"
++    LatencyResult.Loading -> stringResource(R.string.home_latency_measuring)
++    LatencyResult.Timeout -> stringResource(R.string.home_latency_timeout)
++    LatencyResult.DnsError -> stringResource(R.string.home_latency_dns)
++    LatencyResult.Unreachable -> stringResource(R.string.home_latency_down)
++    is LatencyResult.HttpError -> stringResource(R.string.home_latency_http, result.code)
++    LatencyResult.NotAvailable -> stringResource(R.string.home_latency_na)
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
+index ce37f91..46bd5d2 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
+@@ -26,6 +26,7 @@ fun LazyListScope.quickEntriesSection(
+     onNavigateProvider: () -> Unit = {},
+     onNavigateConnection: () -> Unit = {},
+     onNavigateDnsQuery: () -> Unit = {},
++    onNavigateWebPanel: () -> Unit = {},
+ ) {
+     item(key = "quick_entries_title") {
+         SmallTitle(text = stringResource(R.string.home_tools))
+@@ -75,6 +76,13 @@ fun LazyListScope.quickEntriesSection(
+                     onClick = onNavigateDnsQuery,
+                 )
+             }
++            QuickEntryCard(
++                modifier = Modifier.fillMaxWidth(),
++                title = stringResource(R.string.home_panel),
++                subtitle = stringResource(R.string.home_panel_subtitle),
++                isRunning = isRunning,
++                onClick = onNavigateWebPanel,
++            )
+         }
+     }
+ }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
 index 018c54d..4623ff2 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
@@ -20592,6 +20918,317 @@ index 119695c..993d9f9 100644
 -
 -private fun List<String>.swap(from: Int, to: Int): List<String> =
 -    toMutableList().also { it[from] = this[to]; it[to] = this[from] }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/WebPanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/WebPanelScreen.kt
+new file mode 100644
+index 0000000..415f950
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/panel/WebPanelScreen.kt
+@@ -0,0 +1,305 @@
++package top.yukonga.mishka.ui.screen.panel
++
++import android.content.Context
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.text.input.rememberTextFieldState
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.key
++import androidx.compose.runtime.mutableIntStateOf
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.graphicsLayer
++import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.platform.LocalLayoutDirection
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.LayoutDirection
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import org.json.JSONArray
++import org.json.JSONObject
++import top.yukonga.mishka.R
++import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
++import top.yukonga.mishka.ui.component.blur.BlurredBar
++import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
++import top.yukonga.mishka.ui.theme.LocalAppDarkMode
++import top.yukonga.mishka.ui.web.ThemedWebView
++import top.yukonga.miuix.kmp.basic.Icon
++import top.yukonga.miuix.kmp.basic.IconButton
++import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
++import top.yukonga.miuix.kmp.basic.Scaffold
++import top.yukonga.miuix.kmp.basic.Text
++import top.yukonga.miuix.kmp.basic.TextButton
++import top.yukonga.miuix.kmp.basic.TextField
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Back
++import top.yukonga.miuix.kmp.icon.extended.Delete
++import top.yukonga.miuix.kmp.icon.extended.MoreCircle
++import top.yukonga.miuix.kmp.icon.extended.Ok
++import top.yukonga.miuix.kmp.icon.extended.Refresh
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++import top.yukonga.miuix.kmp.window.WindowDialog
++
++/**
++ * Web 面板管理器（对齐 box.app `PanelScreen`）。
++ *
++ * 内置 zashboard / metacubexd 两个在线面板，另支持自定义面板的添加 / 删除 / 切换，选中项与自定义列表
++ * 都持久化到 SharedPreferences（`panel_cache`）。选中面板用 [ThemedWebView] 全屏承载。
++ *
++ * box.app 的「local」内置项指向其自带 / mihomo external-ui 的本地面板（需要打包一份 webroot）；本项目
++ * 未内置 webroot，故不提供 local，用户可自行「添加」指向本地控制器的 metacubexd 达到同样效果。
++ */
++@Composable
++fun WebPanelScreen(
++    onBack: () -> Unit = {},
++) {
++    val context = LocalContext.current
++    val isDark = LocalAppDarkMode.current
++    val scrollBehavior = MiuixScrollBehavior()
++    val backdrop = rememberBlurBackdrop()
++    val blurActive = backdrop != null
++    val barColor = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
++
++    val prefs = remember { context.getSharedPreferences("panel_cache", Context.MODE_PRIVATE) }
++
++    val zashboardName = stringResource(R.string.panel_zashboard)
++    val metacubexdName = stringResource(R.string.panel_metacubexd)
++
++    // 内置在线面板（无 local：见文件说明）
++    val builtInPanels = remember(zashboardName, metacubexdName) {
++        listOf(
++            PanelEntry("zashboard", zashboardName, "http://board.zash.run.place", isBuiltIn = true),
++            PanelEntry("metacubexd", metacubexdName, "https://metacubex.github.io/metacubexd/", isBuiltIn = true),
++        )
++    }
++    val defaultPanelId = builtInPanels.first().id
++
++    fun parseCustomPanels(raw: String?): List<PanelEntry> {
++        if (raw.isNullOrBlank()) return emptyList()
++        return try {
++            val arr = JSONArray(raw)
++            (0 until arr.length()).mapNotNull { i ->
++                val o = arr.optJSONObject(i) ?: return@mapNotNull null
++                val id = o.optString("id").ifBlank { return@mapNotNull null }
++                PanelEntry(id, o.optString("name").ifBlank { id }, o.optString("url"), isBuiltIn = false)
++            }
++        } catch (e: Exception) {
++            emptyList()
++        }
++    }
++
++    fun persistCustomPanels(list: List<PanelEntry>) {
++        val arr = JSONArray()
++        list.forEach { p ->
++            arr.put(JSONObject().put("id", p.id).put("name", p.name).put("url", p.url))
++        }
++        prefs.edit().putString("panel_list_v1", arr.toString()).apply()
++    }
++
++    var customPanels by remember { mutableStateOf(parseCustomPanels(prefs.getString("panel_list_v1", null))) }
++    var selectedId by remember { mutableStateOf(prefs.getString("panel_selected_id_v1", null) ?: defaultPanelId) }
++    var reloadKey by remember { mutableIntStateOf(0) }
++    var backRequestKey by remember { mutableIntStateOf(0) }
++    // 换面板 / 换深浅色时自增，配合 key(isDark, sessionKey) 整体重建 WebView：既隔离上一家面板的登录态，
++    // 也让新实例从隐藏态起步（防白闪）。box.app 同款做法。
++    var sessionKey by remember { mutableIntStateOf(0) }
++    var canGoBack by remember { mutableStateOf(false) }
++    var showPanelDialog by remember { mutableStateOf(false) }
++    var showAddDialog by remember { mutableStateOf(false) }
++
++    val panels = builtInPanels + customPanels
++    val selected = panels.firstOrNull { it.id == selectedId } ?: builtInPanels.first()
++
++    fun selectPanel(id: String) {
++        if (selectedId != id) sessionKey++
++        selectedId = id
++        prefs.edit().putString("panel_selected_id_v1", id).apply()
++    }
++
++    Scaffold(
++        topBar = {
++            BlurredBar(backdrop = backdrop, blurActive = blurActive) {
++                AdaptiveTopAppBar(
++                    title = selected.name,
++                    color = barColor,
++                    scrollBehavior = scrollBehavior,
++                    navigationIcon = {
++                        IconButton(onClick = { if (canGoBack) backRequestKey++ else onBack() }) {
++                            val layoutDirection = LocalLayoutDirection.current
++                            Icon(
++                                imageVector = MiuixIcons.Back,
++                                contentDescription = stringResource(R.string.common_back),
++                                tint = MiuixTheme.colorScheme.onSurface,
++                                modifier = Modifier.graphicsLayer {
++                                    scaleX = if (layoutDirection == LayoutDirection.Rtl) -1f else 1f
++                                },
++                            )
++                        }
++                    },
++                    actions = {
++                        IconButton(onClick = { reloadKey++ }) {
++                            Icon(
++                                imageVector = MiuixIcons.Refresh,
++                                contentDescription = stringResource(R.string.panel_reload),
++                                tint = MiuixTheme.colorScheme.onSurface,
++                            )
++                        }
++                        IconButton(onClick = { showPanelDialog = true }) {
++                            Icon(
++                                imageVector = MiuixIcons.MoreCircle,
++                                contentDescription = stringResource(R.string.panel_switch),
++                                tint = MiuixTheme.colorScheme.onSurface,
++                            )
++                        }
++                    },
++                )
++            }
++        },
++    ) { innerPadding ->
++        key(isDark, sessionKey) {
++            ThemedWebView(
++                url = selected.url,
++                isDark = isDark,
++                reloadKey = reloadKey,
++                backRequestKey = backRequestKey,
++                modifier = Modifier
++                    .fillMaxSize()
++                    .padding(top = innerPadding.calculateTopPadding()),
++                onCanGoBackChange = { canGoBack = it },
++            )
++        }
++    }
++
++    if (showPanelDialog) {
++        WindowDialog(
++            show = true,
++            title = stringResource(R.string.panel_switch),
++            onDismissRequest = { showPanelDialog = false },
++        ) {
++            Column(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .heightIn(max = 360.dp)
++                    .verticalScroll(rememberScrollState()),
++            ) {
++                panels.forEach { p ->
++                    Row(
++                        modifier = Modifier
++                            .fillMaxWidth()
++                            .clickable {
++                                selectPanel(p.id)
++                                showPanelDialog = false
++                            }
++                            .padding(horizontal = 8.dp, vertical = 12.dp),
++                        verticalAlignment = Alignment.CenterVertically,
++                    ) {
++                        Text(
++                            text = p.name,
++                            modifier = Modifier.weight(1f),
++                            fontSize = 16.sp,
++                            fontWeight = if (p.id == selectedId) FontWeight.Medium else FontWeight.Normal,
++                            color = MiuixTheme.colorScheme.onSurface,
++                        )
++                        if (p.id == selectedId) {
++                            Icon(
++                                imageVector = MiuixIcons.Ok,
++                                contentDescription = null,
++                                tint = MiuixTheme.colorScheme.primary,
++                            )
++                        }
++                        if (!p.isBuiltIn) {
++                            IconButton(onClick = {
++                                val next = customPanels.filterNot { it.id == p.id }
++                                customPanels = next
++                                persistCustomPanels(next)
++                                if (selectedId == p.id) selectPanel(defaultPanelId)
++                            }) {
++                                Icon(
++                                    imageVector = MiuixIcons.Delete,
++                                    contentDescription = stringResource(R.string.panel_delete),
++                                    tint = MiuixTheme.colorScheme.error,
++                                )
++                            }
++                        }
++                    }
++                }
++                TextButton(
++                    text = stringResource(R.string.panel_add),
++                    onClick = {
++                        showPanelDialog = false
++                        showAddDialog = true
++                    },
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(top = 4.dp),
++                )
++            }
++        }
++    }
++
++    if (showAddDialog) {
++        val nameState = rememberTextFieldState()
++        val urlState = rememberTextFieldState()
++        WindowDialog(
++            show = true,
++            title = stringResource(R.string.panel_add),
++            onDismissRequest = { showAddDialog = false },
++        ) {
++            Column(modifier = Modifier.fillMaxWidth()) {
++                TextField(
++                    state = nameState,
++                    modifier = Modifier.fillMaxWidth(),
++                    label = stringResource(R.string.panel_add_name),
++                    useLabelAsPlaceholder = true,
++                )
++                TextField(
++                    state = urlState,
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(top = 8.dp),
++                    label = stringResource(R.string.panel_add_url),
++                    useLabelAsPlaceholder = true,
++                )
++                TextButton(
++                    text = stringResource(R.string.panel_add_confirm),
++                    onClick = {
++                        val name = nameState.text.toString().trim()
++                        val url = urlState.text.toString().trim()
++                        if (name.isNotBlank() && url.isNotBlank()) {
++                            val id = "custom-" + System.currentTimeMillis()
++                            val next = customPanels + PanelEntry(id, name, url, isBuiltIn = false)
++                            customPanels = next
++                            persistCustomPanels(next)
++                            selectPanel(id)
++                            showAddDialog = false
++                        }
++                    },
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .padding(top = 12.dp),
++                )
++            }
++        }
++    }
++}
++
++private data class PanelEntry(
++    val id: String,
++    val name: String,
++    val url: String,
++    val isBuiltIn: Boolean = false,
++)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
 index 93088aa..3eeddd1 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
@@ -21498,8 +22135,138 @@ index cef7fbf..eeb582a 100644
              item {
                  TextButton(
                      text = stringResource(R.string.common_save),
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/web/ThemedWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/web/ThemedWebView.kt
+new file mode 100644
+index 0000000..bb84209
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/web/ThemedWebView.kt
+@@ -0,0 +1,124 @@
++package top.yukonga.mishka.ui.web
++
++import android.annotation.SuppressLint
++import android.graphics.Color as AndroidColor
++import android.os.Build
++import android.view.View
++import android.view.ViewGroup
++import android.webkit.CookieManager
++import android.webkit.WebSettings
++import android.webkit.WebView
++import android.webkit.WebViewClient
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.remember
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.viewinterop.AndroidView
++
++/**
++ * Web 面板承载（对齐 box.app `ThemedWebView` 的核心）：系统 WebView 加载面板 URL，跟随 App 深色模式
++ * （API 33+ 用 `isAlgorithmicDarkeningAllowed`、API 29–32 用 `forceDark`），支持刷新 / 后退，Cookie
++ * 持久化（保留面板登录态）。
++ *
++ * box.app 原版还带文件下载 JS 桥、文件选择器、WebView 预热——那些服务于「下载配置文件」等场景，
++ * 对「看 mihomo 面板」（metacubexd / zashboard 都是纯 SPA）用不到，这里不移植，保持最小实现。
++ *
++ * @param url            要加载的面板地址；变化即整页重新加载。
++ * @param isDark         是否深色（来自 `LocalAppDarkMode`）。
++ * @param reloadKey      自增触发 `reload()`。
++ * @param backRequestKey 自增触发 `goBack()`（能后退时）。
++ * @param onCanGoBackChange 回传当前能否后退，供上层决定「后退」是网页后退还是退出本页。
++ */
++@Composable
++@SuppressLint("SetJavaScriptEnabled")
++fun ThemedWebView(
++    url: String,
++    isDark: Boolean,
++    reloadKey: Int,
++    backRequestKey: Int,
++    modifier: Modifier = Modifier,
++    onCanGoBackChange: (Boolean) -> Unit = {},
++) {
++    val surface = if (isDark) Color.Black else Color.White
++    val cookieManager = remember { CookieManager.getInstance() }
++    Box(modifier = modifier.fillMaxSize().background(surface)) {
++        AndroidView(
++            modifier = Modifier.fillMaxSize(),
++            factory = { ctx ->
++                WebView(ctx).apply {
++                    layoutParams = ViewGroup.LayoutParams(
++                        ViewGroup.LayoutParams.MATCH_PARENT,
++                        ViewGroup.LayoutParams.MATCH_PARENT,
++                    )
++                    cookieManager.setAcceptCookie(true)
++                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
++                        cookieManager.setAcceptThirdPartyCookies(this, true)
++                    }
++                    settings.apply {
++                        javaScriptEnabled = true
++                        domStorageEnabled = true
++                        cacheMode = WebSettings.LOAD_DEFAULT
++                        // 面板常从 https 站点拉 http 的控制器接口，放开混合内容
++                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
++                        useWideViewPort = true
++                        loadWithOverviewMode = true
++                        // 不让系统字体缩放撑破面板布局
++                        textZoom = 100
++                        applyDarkMode(this, isDark)
++                    }
++                    // 防白闪：内容提交（onPageCommitVisible）前保持隐藏，只露容器底色，加载期不会露出白帧。
++                    // 这是 box.app ThemedWebView 的核心去闪机制（本项目历史上花了 §5–§11 多轮才落到这一步）。
++                    visibility = View.INVISIBLE
++                    webViewClient = object : WebViewClient() {
++                        override fun doUpdateVisitedHistory(view: WebView?, u: String?, isReload: Boolean) {
++                            view?.let { onCanGoBackChange(it.canGoBack()) }
++                        }
++                        override fun onPageCommitVisible(view: WebView?, u: String?) {
++                            view?.visibility = View.VISIBLE
++                        }
++                    }
++                    setBackgroundColor(if (isDark) AndroidColor.BLACK else AndroidColor.WHITE)
++                    loadUrl(url)
++                    tag = WebTag(reloadKey, url, backRequestKey)
++                }
++            },
++            update = { wv ->
++                applyDarkMode(wv.settings, isDark)
++                wv.setBackgroundColor(if (isDark) AndroidColor.BLACK else AndroidColor.WHITE)
++                val last = wv.tag as? WebTag
++                when {
++                    last == null -> wv.tag = WebTag(reloadKey, url, backRequestKey)
++                    last.url != url -> {
++                        wv.visibility = View.INVISIBLE
++                        wv.loadUrl(url)
++                        wv.tag = WebTag(reloadKey, url, backRequestKey)
++                    }
++                    last.reloadKey != reloadKey -> {
++                        wv.visibility = View.INVISIBLE
++                        wv.reload()
++                        wv.tag = WebTag(reloadKey, url, backRequestKey)
++                    }
++                    last.backRequestKey != backRequestKey -> {
++                        if (wv.canGoBack()) wv.goBack()
++                        onCanGoBackChange(wv.canGoBack())
++                        wv.tag = WebTag(reloadKey, url, backRequestKey)
++                    }
++                }
++            },
++        )
++    }
++}
++
++private fun applyDarkMode(settings: WebSettings, isDark: Boolean) {
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++        settings.isAlgorithmicDarkeningAllowed = isDark
++    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++        @Suppress("DEPRECATION")
++        settings.forceDark = if (isDark) WebSettings.FORCE_DARK_ON else WebSettings.FORCE_DARK_OFF
++    }
++}
++
++private data class WebTag(val reloadKey: Int, val url: String, val backRequestKey: Int)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
-index b112741..74194d3 100644
+index b112741..d578e99 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 @@ -1,11 +1,13 @@
@@ -21516,7 +22283,7 @@ index b112741..74194d3 100644
  import kotlinx.coroutines.Dispatchers
  import kotlinx.coroutines.Job
  import kotlinx.coroutines.async
-@@ -17,7 +19,10 @@ import kotlinx.coroutines.flow.asStateFlow
+@@ -17,7 +19,11 @@ import kotlinx.coroutines.flow.asStateFlow
  import kotlinx.coroutines.flow.first
  import kotlinx.coroutines.flow.update
  import kotlinx.coroutines.launch
@@ -21524,10 +22291,11 @@ index b112741..74194d3 100644
 +import kotlinx.coroutines.sync.withLock
  import kotlinx.coroutines.withContext
 +import top.yukonga.mishka.R
++import top.yukonga.mishka.data.api.LatencyResult
  import top.yukonga.mishka.data.api.MihomoConnectionManager
  import top.yukonga.mishka.data.api.RuleLatencyTester
  import top.yukonga.mishka.data.repository.OverrideJsonStore
-@@ -33,6 +38,7 @@ import top.yukonga.mishka.platform.ProxyServiceController
+@@ -33,6 +39,7 @@ import top.yukonga.mishka.platform.ProxyServiceController
  import top.yukonga.mishka.platform.ProxyState
  import top.yukonga.mishka.platform.TunMode
  import top.yukonga.mishka.platform.showToast
@@ -21535,7 +22303,21 @@ index b112741..74194d3 100644
  import top.yukonga.mishka.util.FormatUtils
  import kotlin.time.Clock
  import kotlin.time.Duration
-@@ -140,6 +146,7 @@ class HomeViewModel(
+@@ -53,9 +60,10 @@ data class HomeUiState(
+     val providerTraffic: ImmutableList<ProviderTrafficInfo> = persistentListOf(),
+     val isProviderTrafficLoading: Boolean = false,
+     val providerTrafficLoadFailed: Boolean = false,
+-    val latencyBaidu: Int = -1,
+-    val latencyCloudflare: Int = -1,
+-    val latencyGoogle: Int = -1,
++    // 三探针各自一个细分结果（对齐 box.app：ms / 超时 / DNS / 不可达 / HTTP / N/A），不再是一个整数
++    val latencyBaidu: LatencyResult = LatencyResult.NotAvailable,
++    val latencyCloudflare: LatencyResult = LatencyResult.NotAvailable,
++    val latencyGoogle: LatencyResult = LatencyResult.NotAvailable,
+     val isTestingLatency: Boolean = false,
+     // false = 本轮退回了组拨测、未经规则引擎，UI 据此标注
+     val latencyViaRules: Boolean = true,
+@@ -140,6 +148,7 @@ class HomeViewModel(
      private val overrideStore: OverrideJsonStore,
      private val connectionManager: MihomoConnectionManager,
      private val latencyTester: RuleLatencyTester,
@@ -21543,7 +22325,16 @@ index b112741..74194d3 100644
      private val getActiveSubscriptionId: () -> String? = { null },
      private val activeSubscription: StateFlow<Subscription?> = MutableStateFlow(null).asStateFlow(),
      private val onLiveProviderInfo: (subscriptionId: String?, info: SubscriptionInfo?) -> Unit = { _, _ -> },
-@@ -189,6 +196,8 @@ class HomeViewModel(
+@@ -176,6 +185,8 @@ class HomeViewModel(
+ 
+     private var repository: MihomoRepository? = null
+     private var latencyJob: Job? = null
++    // 对齐 box.app：首次测延迟先跑一轮「预热」（丢弃结果），摊掉 DNS/建连把首测拉高的开销；只做一次
++    private var latencyWarmupDone = false
+     private var connectionRateJob: Job? = null
+     private var trafficJob: Job? = null
+     private var memoryJob: Job? = null
+@@ -189,6 +200,8 @@ class HomeViewModel(
      private var uptimeJob: Job? = null
      private var mihomoPid: Int = -1
      private val systemInfo = PlatformSystemInfo()
@@ -21552,7 +22343,7 @@ index b112741..74194d3 100644
  
      /** UI 是否在前台，由 MainActivity 的 onStart/onStop 驱动，门控各轮询循环 */
      private val uiVisible = MutableStateFlow(true)
-@@ -694,14 +703,79 @@ class HomeViewModel(
+@@ -694,14 +707,79 @@ class HomeViewModel(
          serviceController.restartWhenReady(getActiveSubscriptionId())
      }
  
@@ -21638,6 +22429,83 @@ index b112741..74194d3 100644
      }
  
      fun reloadConfig() {
+@@ -709,25 +787,42 @@ class HomeViewModel(
+     }
+ 
+     /**
+-     * 三个探针一律经 [RuleLatencyTester] 按规则实测；mixed-port 解析不到时退回 GLOBAL 组拨测，
+-     * 并置 `latencyViaRules = false` 让 UI 标注，不静默给出误导性数字。
++     * 测延迟（对齐 box.app 的测量法）：
++     * 1) **预热一轮**（首次）：先把三个探针各测一遍并丢弃，摊掉 DNS 解析 / TCP+TLS 建连把首测数字
++     *    拉高的开销——box.app 的 `latencyWarmupDone` 同款；预热只做一次，之后每次刷新直接进正式轮。
++     * 2) **正式轮**：三探针并发经 [RuleLatencyTester] 按规则实测，返回细分 [LatencyResult]。
++     * mixed-port 解析不到时退回 GLOBAL 组拨测，并置 `latencyViaRules = false` 让 UI 标注，
++     * 不静默给出误导性数字。
+      */
+     fun testLatency() {
+         if (latencyJob?.isActive == true) return
+         if (repository == null) return
+         _uiState.value = _uiState.value.copy(isTestingLatency = true)
++        // 立刻把三探针置为 Loading，UI 显示「测量中」而不是留着上一轮的旧值
++        _uiState.value = _uiState.value.copy(
++            latencyBaidu = LatencyResult.Loading,
++            latencyCloudflare = LatencyResult.Loading,
++            latencyGoogle = LatencyResult.Loading,
++        )
+ 
+         latencyJob = viewModelScope.launch {
+             try {
+-                // 每个探针自己回报是否走了规则，不共写标志位
++                // 预热轮（丢弃结果）：与正式轮同样的并发拨测，只是不写回 UI
++                if (!latencyWarmupDone) {
++                    latencyWarmupDone = true
++                    LatencyProbe.entries.map { probe ->
++                        async { latencyTester.measure(probe.url, LATENCY_TIMEOUT_MILLIS) }
++                    }.awaitAll()
++                }
++                // 正式轮：每个探针自己回报是否走了规则，不共写标志位
+                 val viaRules = LatencyProbe.entries.map { probe ->
+                     async {
+-                        val delay = latencyTester.measure(probe.url, LATENCY_TIMEOUT_MILLIS)
+-                        if (delay == RuleLatencyTester.Unavailable) {
+-                            fallbackProbe(probe)
++                        val result = latencyTester.measure(probe.url, LATENCY_TIMEOUT_MILLIS)
++                        if (result is LatencyResult.NotAvailable) {
++                            applyLatency(probe, fallbackProbe(probe))
+                             false
+                         } else {
+-                            applyLatency(probe, delay)
++                            applyLatency(probe, result)
+                             true
+                         }
+                     }
+@@ -739,18 +834,19 @@ class HomeViewModel(
+         }
+     }
+ 
+-    /** mixed-port 不可用时的降级：GLOBAL 组拨测，至少能反映节点本身通不通 */
+-    private suspend fun fallbackProbe(probe: LatencyProbe) {
++    /** mixed-port 不可用时的降级：GLOBAL 组拨测，至少能反映节点本身通不通（结果同样归一成 [LatencyResult]）。 */
++    private suspend fun fallbackProbe(probe: LatencyProbe): LatencyResult {
+         val result = repository?.getProxyDelay("GLOBAL", probe.url, LATENCY_TIMEOUT_MILLIS.toInt())
+-        applyLatency(probe, result?.getOrNull()?.delay ?: -1)
++        val delay = result?.getOrNull()?.delay ?: -1
++        return if (delay >= 0) LatencyResult.Success(delay.toLong()) else LatencyResult.Unreachable
+     }
+ 
+-    private fun applyLatency(probe: LatencyProbe, delay: Int) {
++    private fun applyLatency(probe: LatencyProbe, result: LatencyResult) {
+         _uiState.update {
+             when (probe) {
+-                LatencyProbe.Baidu -> it.copy(latencyBaidu = delay)
+-                LatencyProbe.Cloudflare -> it.copy(latencyCloudflare = delay)
+-                LatencyProbe.Google -> it.copy(latencyGoogle = delay)
++                LatencyProbe.Baidu -> it.copy(latencyBaidu = result)
++                LatencyProbe.Cloudflare -> it.copy(latencyCloudflare = result)
++                LatencyProbe.Google -> it.copy(latencyGoogle = result)
+             }
+         }
+     }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
 index 4b576a6..e0a0abe 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
@@ -22640,7 +23508,7 @@ index faef989..2c11db7 100644
  //
  //export mishkaValidateTransform
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..8e3fc15 100644
+index 78fcd87..dcc13c8 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
 @@ -105,6 +105,9 @@
@@ -22653,7 +23521,38 @@ index 78fcd87..8e3fc15 100644
      <string name="home_switch_tun_stack">Сменить стек TUN</string>
      <string name="home_uptime_seconds">%1$d с</string>
      <string name="home_uptime_minutes">%1$d мин</string>
-@@ -169,6 +172,9 @@
+@@ -128,6 +131,17 @@
+     <string name="home_logs_subtitle">Просмотр</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">Запрос</string>
++    <string name="panel_zashboard">zashboard</string>
++    <string name="panel_metacubexd">metacubexd</string>
++    <string name="panel_reload">Обновить</string>
++    <string name="panel_switch">Сменить панель</string>
++    <string name="panel_delete">Удалить</string>
++    <string name="panel_add">Добавить панель</string>
++    <string name="panel_add_name">Название</string>
++    <string name="panel_add_url">URL</string>
++    <string name="panel_add_confirm">Добавить</string>
++    <string name="home_panel">Веб-панель</string>
++    <string name="home_panel_subtitle">Открыть панель</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">Задержка</string>
+@@ -136,6 +150,12 @@
+     <string name="home_latency_partial">Частично</string>
+     <string name="home_latency_abnormal">Ошибка</string>
+     <string name="home_latency_not_via_rules">Не по правилам</string>
++    <string name="home_latency_measuring">Проверка…</string>
++    <string name="home_latency_timeout">Тайм-аут</string>
++    <string name="home_latency_dns">DNS</string>
++    <string name="home_latency_down">Недоступен</string>
++    <string name="home_latency_http">HTTP %1$d</string>
++    <string name="home_latency_na">N/A</string>
+ 
+     <!-- Home - Overview -->
+     <string name="home_overview">Обзор</string>
+@@ -169,6 +189,9 @@
      <string name="proxy_mode_direct_hint">Активен прямой режим (Direct): весь трафик идет в обход прокси. Выбор групп сохраняется, но вступит в силу только после переключения в режим правил (Rule).</string>
      <string name="proxy_mode_global_hint">Активен глобальный режим (Global): весь трафик направляется через группу GLOBAL. Выбор в остальных группах вступит в силу после переключения в режим правил (Rule).</string>
      <string name="proxy_refresh_icon">Обновить значки</string>
@@ -22663,7 +23562,7 @@ index 78fcd87..8e3fc15 100644
      <string name="proxy_single_column">В один столбец</string>
      <string name="proxy_show_global_group">Группа GLOBAL</string>
      <string name="proxy_timeout">Тайм-аут</string>
-@@ -179,6 +185,11 @@
+@@ -179,6 +202,11 @@
      <string name="proxy_sort_reverse">В обратном порядке</string>
      <string name="proxy_test_group_delay">Проверить задержку</string>
      <string name="proxy_test_node_delay">Проверить задержку узла</string>
@@ -22675,7 +23574,7 @@ index 78fcd87..8e3fc15 100644
      <string name="proxy_fixed">Зафиксировано на этом узле</string>
      <string name="proxy_unfix">Открепить, вернуть автовыбор</string>
  
-@@ -280,6 +291,7 @@
+@@ -280,6 +308,7 @@
      <string name="provider_updating_single">Обновление %1$s…</string>
      <string name="provider_updating_progress">%1$d / %2$d</string>
      <string name="provider_update_failed">Не удалось обновить %1$s: %2$s</string>
@@ -22683,7 +23582,7 @@ index 78fcd87..8e3fc15 100644
  
      <!-- Settings -->
      <string name="settings_title">Настройки</string>
-@@ -289,9 +301,11 @@
+@@ -289,9 +318,11 @@
      <string name="settings_tun_vpn_summary">через VpnService</string>
      <string name="settings_tun_root_tun_summary">собственное TUN-устройство</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -22695,7 +23594,7 @@ index 78fcd87..8e3fc15 100644
      <string name="settings_vpn_settings">Настройки VPN</string>
      <string name="settings_vpn_summary">Обход локальной сети, перехват DNS, IPv6</string>
      <string name="settings_tun_device">Имя устройства TUN</string>
-@@ -333,7 +347,7 @@
+@@ -333,7 +364,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">Равномерное матовое размытие по всей верхней панели</string>
      <string name="settings_theme_blur_style_progressive_summary">Градиентное размытие с усилением к верхнему краю</string>
      <string name="settings_theme_density_scale">Масштаб интерфейса</string>
@@ -22704,7 +23603,7 @@ index 78fcd87..8e3fc15 100644
      <string name="settings_theme_floating_bottom_bar">Плавающая нижняя панель</string>
      <string name="settings_theme_floating_bottom_bar_summary">Использовать парящую нижнюю панель на смартфонах</string>
      <string name="settings_theme_floating_bottom_bar_style">Стиль плавающей нижней панели</string>
-@@ -406,8 +420,12 @@
+@@ -406,8 +437,12 @@
      <string name="root_tether_scan_result_title">Обнаруженные интерфейсы</string>
      <string name="root_tether_tproxy_unavailable_warning">В ядре отсутствует модуль xt_TPROXY. Используется резервный режим (меньшая скорость, но соединения работают). Для максимальной производительности TPROXY используйте ядро с поддержкой xt_TPROXY.</string>
      <string name="root_tproxy_tether_note">В режиме TPROXY весь трафик точки доступа направляется через ядро автоматически; переключение «В обход / Через прокси» не требуется.</string>
@@ -22717,7 +23616,7 @@ index 78fcd87..8e3fc15 100644
      <string name="root_attach_force_reapply_title">Принудительно применять правила при переподключении</string>
      <string name="root_attach_force_reapply_summary">Диагностика: повторно применять правила iptables при каждом подключении приложения к работающему mihomo. Включайте только если правила раздачи пропадают после переподключения.</string>
  
-@@ -506,10 +524,10 @@
+@@ -506,10 +541,10 @@
      <!-- External Control -->
      <string name="external_control_title">Внешний контроллер</string>
      <string name="external_control_ip">Адрес API</string>
@@ -22731,7 +23630,7 @@ index 78fcd87..8e3fc15 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">Файловый менеджер</string>
-@@ -596,8 +614,6 @@
+@@ -596,8 +631,6 @@
      <string name="override_url_placeholder">Введите URL</string>
      <string name="override_local_file">Локальный файл</string>
      <string name="override_format">Формат</string>
@@ -22740,7 +23639,7 @@ index 78fcd87..8e3fc15 100644
      <string name="override_format_yaml">YAML</string>
      <string name="override_format_javascript">JavaScript</string>
      <string name="override_delete_title">Удалить переопределение</string>
-@@ -615,4 +631,6 @@
+@@ -615,4 +648,6 @@
          <item quantity="other">Выбрано %1$d переопределения</item>
      </plurals>
      <string name="subscription_overrides">Переопределения</string>
@@ -22748,7 +23647,7 @@ index 78fcd87..8e3fc15 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..138732b 100644
+index cba1bbb..87b4ece 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -22761,7 +23660,38 @@ index cba1bbb..138732b 100644
      <string name="home_switch_tun_stack">切换 TUN Stack</string>
      <string name="home_uptime_seconds">%1$d 秒</string>
      <string name="home_uptime_minutes">%1$d 分钟</string>
-@@ -167,6 +170,9 @@
+@@ -126,6 +129,17 @@
+     <string name="home_logs_subtitle">查看</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">查询</string>
++    <string name="panel_zashboard">zashboard</string>
++    <string name="panel_metacubexd">metacubexd</string>
++    <string name="panel_reload">刷新</string>
++    <string name="panel_switch">切换面板</string>
++    <string name="panel_delete">删除</string>
++    <string name="panel_add">添加面板</string>
++    <string name="panel_add_name">名称</string>
++    <string name="panel_add_url">URL</string>
++    <string name="panel_add_confirm">添加</string>
++    <string name="home_panel">Web 面板</string>
++    <string name="home_panel_subtitle">打开面板</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">延迟</string>
+@@ -134,6 +148,12 @@
+     <string name="home_latency_partial">部分</string>
+     <string name="home_latency_abnormal">异常</string>
+     <string name="home_latency_not_via_rules">未走规则</string>
++    <string name="home_latency_measuring">测量中</string>
++    <string name="home_latency_timeout">超时</string>
++    <string name="home_latency_dns">DNS</string>
++    <string name="home_latency_down">不可达</string>
++    <string name="home_latency_http">HTTP %1$d</string>
++    <string name="home_latency_na">不可用</string>
+ 
+     <!-- Home - Overview -->
+     <string name="home_overview">概览</string>
+@@ -167,6 +187,9 @@
      <string name="proxy_mode_direct_hint">当前为直连模式，所有流量不经代理。此处的选择会被保存，切回规则模式后生效。</string>
      <string name="proxy_mode_global_hint">当前为全局模式，仅 GLOBAL 组决定出口。其他代理组的选择切回规则模式后生效。</string>
      <string name="proxy_refresh_icon">刷新图标</string>
@@ -22771,7 +23701,7 @@ index cba1bbb..138732b 100644
      <string name="proxy_single_column">单列显示</string>
      <string name="proxy_show_global_group">GLOBAL 组</string>
      <string name="proxy_timeout">超时</string>
-@@ -177,6 +183,11 @@
+@@ -177,6 +200,11 @@
      <string name="proxy_sort_reverse">倒序</string>
      <string name="proxy_test_group_delay">测试延迟</string>
      <string name="proxy_test_node_delay">测试节点延迟</string>
@@ -22783,7 +23713,7 @@ index cba1bbb..138732b 100644
      <string name="proxy_fixed">已固定到此节点</string>
      <string name="proxy_unfix">解除固定，恢复自动选择</string>
  
-@@ -278,6 +289,7 @@
+@@ -278,6 +306,7 @@
      <string name="provider_updating_single">正在更新 %1$s…</string>
      <string name="provider_updating_progress">%1$d / %2$d</string>
      <string name="provider_update_failed">更新 %1$s 失败: %2$s</string>
@@ -22791,7 +23721,7 @@ index cba1bbb..138732b 100644
  
      <!-- Settings -->
      <string name="settings_title">设置</string>
-@@ -287,9 +299,11 @@
+@@ -287,9 +316,11 @@
      <string name="settings_tun_vpn_summary">通过 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 设备</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -22803,7 +23733,7 @@ index cba1bbb..138732b 100644
      <string name="settings_vpn_settings">VPN 设置</string>
      <string name="settings_vpn_summary">绕过私有网络、DNS 劫持、IPv6</string>
      <string name="settings_tun_device">TUN 设备名称</string>
-@@ -331,7 +345,7 @@
+@@ -331,7 +362,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">顶栏整体均匀模糊</string>
      <string name="settings_theme_blur_style_progressive_summary">顶部渐强模糊</string>
      <string name="settings_theme_density_scale">界面缩放</string>
@@ -22812,7 +23742,7 @@ index cba1bbb..138732b 100644
      <string name="settings_theme_floating_bottom_bar">悬浮底栏</string>
      <string name="settings_theme_floating_bottom_bar_summary">在手机布局中使用悬浮底部导航栏</string>
      <string name="settings_theme_floating_bottom_bar_style">悬浮底栏样式</string>
-@@ -404,8 +418,12 @@
+@@ -404,8 +435,12 @@
      <string name="root_tether_scan_result_title">检测到以下接口</string>
      <string name="root_tether_tproxy_unavailable_warning">当前内核缺少 xt_TPROXY 模块，已降级为兼容路径（吞吐略差，连接仍可用）。如需原生 TPROXY 性能，请更换支持该模块的内核。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有热点流量由内核规则自动代理，无需切换「绕过 / 走代理」。</string>
@@ -22825,7 +23755,7 @@ index cba1bbb..138732b 100644
      <string name="root_attach_force_reapply_title">重连时强制重建规则</string>
      <string name="root_attach_force_reapply_summary">诊断开关：每次应用重新连接到正在运行的 mihomo 时强制重建 iptables 规则。仅当重连后热点规则丢失时开启。</string>
  
-@@ -504,10 +522,10 @@
+@@ -504,10 +539,10 @@
      <!-- External Control -->
      <string name="external_control_title">外部控制器</string>
      <string name="external_control_ip">API 地址</string>
@@ -22839,7 +23769,7 @@ index cba1bbb..138732b 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">文件管理</string>
-@@ -594,8 +612,6 @@
+@@ -594,8 +629,6 @@
      <string name="override_url_placeholder">输入覆写地址</string>
      <string name="override_local_file">本地文件</string>
      <string name="override_format">文件格式</string>
@@ -22848,7 +23778,7 @@ index cba1bbb..138732b 100644
      <string name="override_format_yaml">YAML</string>
      <string name="override_format_javascript">JavaScript</string>
      <string name="override_delete_title">删除覆写</string>
-@@ -610,4 +626,6 @@
+@@ -610,4 +643,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -22856,7 +23786,7 @@ index cba1bbb..138732b 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..8f33921 100644
+index f6895e0..323a8da 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
 @@ -103,6 +103,9 @@
@@ -22869,7 +23799,38 @@ index f6895e0..8f33921 100644
      <string name="home_switch_tun_stack">切換 TUN Stack</string>
      <string name="home_uptime_seconds">%1$d 秒</string>
      <string name="home_uptime_minutes">%1$d 分鐘</string>
-@@ -167,6 +170,9 @@
+@@ -126,6 +129,17 @@
+     <string name="home_logs_subtitle">檢視</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">查詢</string>
++    <string name="panel_zashboard">zashboard</string>
++    <string name="panel_metacubexd">metacubexd</string>
++    <string name="panel_reload">重新整理</string>
++    <string name="panel_switch">切換面板</string>
++    <string name="panel_delete">刪除</string>
++    <string name="panel_add">新增面板</string>
++    <string name="panel_add_name">名稱</string>
++    <string name="panel_add_url">URL</string>
++    <string name="panel_add_confirm">新增</string>
++    <string name="home_panel">Web 面板</string>
++    <string name="home_panel_subtitle">開啟面板</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">延遲</string>
+@@ -134,6 +148,12 @@
+     <string name="home_latency_partial">部分</string>
+     <string name="home_latency_abnormal">異常</string>
+     <string name="home_latency_not_via_rules">未經規則</string>
++    <string name="home_latency_measuring">測量中</string>
++    <string name="home_latency_timeout">超時</string>
++    <string name="home_latency_dns">DNS</string>
++    <string name="home_latency_down">不可達</string>
++    <string name="home_latency_http">HTTP %1$d</string>
++    <string name="home_latency_na">不可用</string>
+ 
+     <!-- Home - Overview -->
+     <string name="home_overview">總覽</string>
+@@ -167,6 +187,9 @@
      <string name="proxy_mode_direct_hint">目前為直連模式，所有流量皆不經過代理。此處的選擇會被儲存，切回規則模式後生效。</string>
      <string name="proxy_mode_global_hint">目前為全域模式，僅由 GLOBAL 群組決定出口。其他代理群組的選擇將在切回規則模式後生效。</string>
      <string name="proxy_refresh_icon">重新整理圖示</string>
@@ -22879,7 +23840,7 @@ index f6895e0..8f33921 100644
      <string name="proxy_single_column">單欄顯示</string>
      <string name="proxy_show_global_group">GLOBAL 群組</string>
      <string name="proxy_timeout">逾時</string>
-@@ -177,6 +183,11 @@
+@@ -177,6 +200,11 @@
      <string name="proxy_sort_reverse">反向</string>
      <string name="proxy_test_group_delay">測試延遲</string>
      <string name="proxy_test_node_delay">測試節點延遲</string>
@@ -22891,7 +23852,7 @@ index f6895e0..8f33921 100644
      <string name="proxy_fixed">已固定至此節點</string>
      <string name="proxy_unfix">解除固定，恢復自動選擇</string>
  
-@@ -278,6 +289,7 @@
+@@ -278,6 +306,7 @@
      <string name="provider_updating_single">正在更新 %1$s…</string>
      <string name="provider_updating_progress">%1$d / %2$d</string>
      <string name="provider_update_failed">更新 %1$s 失敗: %2$s</string>
@@ -22899,7 +23860,7 @@ index f6895e0..8f33921 100644
  
      <!-- Settings -->
      <string name="settings_title">設定</string>
-@@ -287,9 +299,11 @@
+@@ -287,9 +316,11 @@
      <string name="settings_tun_vpn_summary">透過 VpnService</string>
      <string name="settings_tun_root_tun_summary">自建 TUN 裝置</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -22911,7 +23872,7 @@ index f6895e0..8f33921 100644
      <string name="settings_vpn_settings">VPN 設定</string>
      <string name="settings_vpn_summary">繞過私人網路、DNS 攔截、IPv6</string>
      <string name="settings_tun_device">TUN 裝置名稱</string>
-@@ -331,7 +345,7 @@
+@@ -331,7 +362,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">頂欄整體均勻模糊</string>
      <string name="settings_theme_blur_style_progressive_summary">頂部漸強模糊</string>
      <string name="settings_theme_density_scale">介面縮放</string>
@@ -22920,7 +23881,7 @@ index f6895e0..8f33921 100644
      <string name="settings_theme_floating_bottom_bar">懸浮底部列</string>
      <string name="settings_theme_floating_bottom_bar_summary">在手機版面中使用懸浮底部導覽列</string>
      <string name="settings_theme_floating_bottom_bar_style">懸浮底部列樣式</string>
-@@ -404,8 +418,12 @@
+@@ -404,8 +435,12 @@
      <string name="root_tether_scan_result_title">偵測到以下介面</string>
      <string name="root_tether_tproxy_unavailable_warning">目前核心缺少 xt_TPROXY 模組，已降級為相容路徑（吞吐量略低，連線仍可用）。如需原生 TPROXY 效能，請更換支援該模組的核心。</string>
      <string name="root_tproxy_tether_note">TPROXY 模式下所有熱點流量由核心規則自動代理，無需切換「繞過／經過代理」。</string>
@@ -22933,7 +23894,7 @@ index f6895e0..8f33921 100644
      <string name="root_attach_force_reapply_title">重新連線時強制重建規則</string>
      <string name="root_attach_force_reapply_summary">診斷開關：每次應用程式重新連線到執行中的 mihomo 時強制重建 iptables 規則。僅在重連後熱點規則遺失時開啟。</string>
  
-@@ -504,10 +522,10 @@
+@@ -504,10 +539,10 @@
      <!-- External Control -->
      <string name="external_control_title">外部控制器</string>
      <string name="external_control_ip">API 位址</string>
@@ -22947,7 +23908,7 @@ index f6895e0..8f33921 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">檔案管理</string>
-@@ -594,8 +612,6 @@
+@@ -594,8 +629,6 @@
      <string name="override_url_placeholder">輸入覆寫網址</string>
      <string name="override_local_file">本機檔案</string>
      <string name="override_format">檔案格式</string>
@@ -22956,7 +23917,7 @@ index f6895e0..8f33921 100644
      <string name="override_format_yaml">YAML</string>
      <string name="override_format_javascript">JavaScript</string>
      <string name="override_delete_title">刪除覆寫</string>
-@@ -610,4 +626,6 @@
+@@ -610,4 +643,6 @@
          <item quantity="other">已選擇 %1$d 項覆寫</item>
      </plurals>
      <string name="subscription_overrides">覆寫</string>
@@ -22964,7 +23925,7 @@ index f6895e0..8f33921 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..1cb982c 100644
+index d1acc59..77ded1c 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
@@ -22977,7 +23938,38 @@ index d1acc59..1cb982c 100644
      <string name="home_switch_tun_stack">Switch TUN Stack</string>
      <string name="home_uptime_seconds">%1$ds</string>
      <string name="home_uptime_minutes">%1$dm</string>
-@@ -169,6 +172,9 @@
+@@ -128,6 +131,17 @@
+     <string name="home_logs_subtitle">View</string>
+     <string name="home_dns">DNS</string>
+     <string name="home_dns_subtitle">Query</string>
++    <string name="panel_zashboard">zashboard</string>
++    <string name="panel_metacubexd">metacubexd</string>
++    <string name="panel_reload">Refresh</string>
++    <string name="panel_switch">Switch panel</string>
++    <string name="panel_delete">Delete</string>
++    <string name="panel_add">Add panel</string>
++    <string name="panel_add_name">Name</string>
++    <string name="panel_add_url">URL</string>
++    <string name="panel_add_confirm">Add</string>
++    <string name="home_panel">Web panel</string>
++    <string name="home_panel_subtitle">Open the dashboard panel</string>
+ 
+     <!-- Home - Latency -->
+     <string name="home_latency">Latency</string>
+@@ -136,6 +150,12 @@
+     <string name="home_latency_partial">Partial</string>
+     <string name="home_latency_abnormal">Abnormal</string>
+     <string name="home_latency_not_via_rules">Not via rules</string>
++    <string name="home_latency_measuring">Testing…</string>
++    <string name="home_latency_timeout">Timeout</string>
++    <string name="home_latency_dns">DNS</string>
++    <string name="home_latency_down">Down</string>
++    <string name="home_latency_http">HTTP %1$d</string>
++    <string name="home_latency_na">N/A</string>
+ 
+     <!-- Home - Overview -->
+     <string name="home_overview">Overview</string>
+@@ -169,6 +189,9 @@
      <string name="proxy_mode_direct_hint">Direct mode is active: all traffic bypasses the proxy. Group selections are saved but only take effect after switching back to rule mode.</string>
      <string name="proxy_mode_global_hint">Global mode is active: only the GLOBAL group routes traffic. Selections in other groups take effect after switching back to rule mode.</string>
      <string name="proxy_refresh_icon">Refresh Icons</string>
@@ -22987,7 +23979,7 @@ index d1acc59..1cb982c 100644
      <string name="proxy_single_column">Single Column</string>
      <string name="proxy_show_global_group">GLOBAL Group</string>
      <string name="proxy_timeout">Timeout</string>
-@@ -179,6 +185,11 @@
+@@ -179,6 +202,11 @@
      <string name="proxy_sort_reverse">Reverse</string>
      <string name="proxy_test_group_delay">Test latency</string>
      <string name="proxy_test_node_delay">Test node delay</string>
@@ -22999,7 +23991,7 @@ index d1acc59..1cb982c 100644
      <string name="proxy_fixed">Fixed to this node</string>
      <string name="proxy_unfix">Unfix, restore automatic selection</string>
  
-@@ -280,6 +291,7 @@
+@@ -280,6 +308,7 @@
      <string name="provider_updating_single">Updating %1$s…</string>
      <string name="provider_updating_progress">%1$d / %2$d</string>
      <string name="provider_update_failed">Failed to update %1$s: %2$s</string>
@@ -23007,7 +23999,7 @@ index d1acc59..1cb982c 100644
  
      <!-- Settings -->
      <string name="settings_title">Settings</string>
-@@ -289,9 +301,11 @@
+@@ -289,9 +318,11 @@
      <string name="settings_tun_vpn_summary">via VpnService</string>
      <string name="settings_tun_root_tun_summary">owns TUN device</string>
      <string name="settings_tun_root_tproxy_summary">iptables TPROXY</string>
@@ -23019,7 +24011,7 @@ index d1acc59..1cb982c 100644
      <string name="settings_vpn_settings">VPN Settings</string>
      <string name="settings_vpn_summary">Bypass private network, DNS hijacking, IPv6</string>
      <string name="settings_tun_device">TUN Device Name</string>
-@@ -333,7 +347,7 @@
+@@ -333,7 +364,7 @@
      <string name="settings_theme_blur_style_gaussian_summary">Uniform frosted blur across the top bar</string>
      <string name="settings_theme_blur_style_progressive_summary">Gradient blur, strongest at the top edge</string>
      <string name="settings_theme_density_scale">Interface Scale</string>
@@ -23028,7 +24020,7 @@ index d1acc59..1cb982c 100644
      <string name="settings_theme_floating_bottom_bar">Floating Bottom Bar</string>
      <string name="settings_theme_floating_bottom_bar_summary">Use a floating bottom navigation bar on phones</string>
      <string name="settings_theme_floating_bottom_bar_style">Floating Bottom Bar Style</string>
-@@ -406,8 +420,12 @@
+@@ -406,8 +437,12 @@
      <string name="root_tether_scan_result_title">Detected interfaces</string>
      <string name="root_tether_tproxy_unavailable_warning">Kernel lacks xt_TPROXY module. Running in fallback path (slower, connections still work). Use a kernel with xt_TPROXY for native TPROXY performance.</string>
      <string name="root_tproxy_tether_note">TPROXY mode proxies all hotspot traffic via kernel rules; no Bypass/Through toggle needed.</string>
@@ -23041,7 +24033,7 @@ index d1acc59..1cb982c 100644
      <string name="root_attach_force_reapply_title">Force re-apply on reconnect</string>
      <string name="root_attach_force_reapply_summary">Diagnostic: re-apply iptables rules every time the app reattaches to a running mihomo. Leave off unless tether rules disappear after reconnect.</string>
  
-@@ -506,10 +524,10 @@
+@@ -506,10 +541,10 @@
      <!-- External Control -->
      <string name="external_control_title">External Controller</string>
      <string name="external_control_ip">API Address</string>
@@ -23055,7 +24047,7 @@ index d1acc59..1cb982c 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">File Manager</string>
-@@ -596,8 +614,6 @@
+@@ -596,8 +631,6 @@
      <string name="override_url_placeholder">Enter an override URL</string>
      <string name="override_local_file">Local file</string>
      <string name="override_format">Format</string>
@@ -23064,7 +24056,7 @@ index d1acc59..1cb982c 100644
      <string name="override_format_yaml">YAML</string>
      <string name="override_format_javascript">JavaScript</string>
      <string name="override_delete_title">Delete override</string>
-@@ -613,4 +629,6 @@
+@@ -613,4 +646,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>

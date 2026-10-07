@@ -715,17 +715,76 @@ verify 复核通过后再动的代码。
 
 补丁文件数 71 → **64**（-5 面板包、-2 回归上游的首页文件）。
 
+## 13. web 面板重新加回（参考 box.app；反转 §12 的移除）
+
+用户本轮要求「参考 box.app 的 web 界面，在主页『工具』下面新增与 box.app 一样的 web 界面」，
+即把 §12 删掉的外部面板重新做回来。**重要背景**：§3–§11 那版面板（含 §5–§11 共 9 轮防白闪
+打磨）在 §12 被整体删除，而工作区在其后重建过——仓库 git 历史与历史补丁对象都只到 §12 之后
+（67/60 文件、无 `custom/panel/`），**§11 那版成熟代码已不可恢复**。因此本轮是照 §11 在本文档
+里留下的规格 + box.app `ThemedWebView` 重新实现，并把当年最关键的防白闪机制一并带上，避免重蹈
+§5–§11 的覆辙。
+
+新增（与 box.app 对齐，落在 `ui/web/` 与 `ui/screen/panel/`）：
+
+- `ui/web/ThemedWebView.kt`：WebView 承载。三个不能省的点都照搬——
+  1. **防白闪 `hideUntilCommitVisible`**：新建 WebView 先 `INVISIBLE`，`onPageCommitVisible`
+     才 `VISIBLE`；刷新 / 换 URL 前也先隐回底色。这是 §11 花了多轮才落地的核心去闪机制。
+  2. `mixedContentMode = MIXED_CONTENT_ALWAYS_ALLOW`：面板多为 https、控制器在 http，
+     默认值会把面板调 API 全掐了（页面能开、数据全空）。
+  3. 深色跟随 App（API33+ `isAlgorithmicDarkeningAllowed`、API29–32 `forceDark`）；Cookie 持久化。
+- `ui/screen/panel/WebPanelScreen.kt`：面板管理器。内置 zashboard / metacubexd 两个在线面板，
+  自定义面板可增删切换，选中项与列表持久化到 SharedPreferences `panel_cache`（与 box.app 同名）。
+  **换面板 / 换深浅色用 `key(isDark, sessionKey)` 整体重建 WebView**（§11 同款）——既隔离上一家
+  面板登录态，又让新实例从隐藏态起步防白闪。顶栏：返回（网页可后退先 `goBack`，退无可退才退出）
+  / 刷新 / 面板清单。
+- 导航：`Route.WebPanel` + `AppNavigation` 的 `entry<Route.WebPanel>`；首页「工具」区在 2×2 快捷
+  入口下方加一张**整宽「Web 面板」卡片**（`QuickEntriesSection` / `HomeScreen` 的 `onNavigateWebPanel`）。
+- 4 语言共 11 条面板文案（`home_panel*` 与 `panel_*`）。
+
+与 box.app / §11 的差异（都为控制本轮范围，非退化）：**不含 `local` 内置项**（那需要打包一份
+本地 webroot 或解析 external-controller 的 `/ui`，用户可自行「添加」指向本地控制器的 metacubexd
+达到同样效果）；**不含 §11 的下载 JS 桥 / 文件选择器 / `WebViewPreloader` 预热**（面板是纯 SPA，
+看面板用不到下载；预热只是秒开优化）；系统返回手势暂只接了顶栏返回键（未接 `NavigationBackHandler`
+的侧滑返回）。**防白闪是运行期视觉行为，沙箱无设备无法验证**，落地后请重点看换面板 / 重进是否还闪。
+
+## 14. 主页测延迟改用 box.app 的测量法（measure_only）
+
+按用户选的 measure_only：保留固定的 Baidu / Cloudflare / Google 三个目标（不做可配置目标 / 编辑页），
+只把**测量机制**换成 box.app 那套。
+
+- 新增 `data/api/LatencyResult.kt`：`sealed class`，状态 Loading / Success(latencyMs) / Timeout /
+  DnsError / Unreachable / HttpError(code) / NotAvailable（与 box.app 一一对应）。
+- 重写 `data/api/RuleLatencyTester.kt`：`measure()` 返回 `LatencyResult`；请求带 box.app 同款
+  `User-Agent` + `Range: bytes=0-0` 头；按异常类型细分（超时→Timeout、UnknownHost→DnsError、
+  连接/路由/SSL→Unreachable、4xx/5xx→HttpError、2xx/3xx→Success）。
+- `viewmodel/HomeViewModel.kt`：延迟字段 Int→LatencyResult；**先跑一轮丢弃的预热**（`latencyWarmupDone`）
+  再跑真正一轮（box.app 同款，避开首包冷启动虚高）。
+- `ui/screen/home/LatencySection.kt`：按状态显示「N ms / 超时 / DNS / 无法连接 / HTTP {code} / N/A」，
+  颜色随状态（成功用 `StatusColors.delay(ms)`）。4 语言各加 6 条状态文案。
+
+## 15. find-process-mode: always 不生效（respect_profile）
+
+配置文件里写 `find-process-mode: always` 但进程匹配规则不生效。根因：`RuntimeOverrideBuilder`
+把 `findProcessMode` 兜底成了 `"off"`（`userOverride.findProcessMode ?: "off"`），于是无论配置文件
+怎么写都被覆盖成 off。按用户选的 respect_profile 做最小修复——
+
+- `service/RuntimeOverrideBuilder.kt`：`findProcessMode = userOverride.findProcessMode`（去掉 `?: "off"`）。
+  配置 JSON 用 `encodeDefaults=false` / `explicitNulls=false`，null 字段会被省略 ⇒ 不再下发
+  find-process-mode ⇒ 配置文件（profile YAML）里的值得以生效。不在 App 内新增设置项。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 64 个 blob 逐文件一致（运行时配置 / root / 表单 / 隐藏不可用
-  断言 26 条 + 「web 面板已彻底移除」防回归断言 7 条）。
-- **Kotlin 类型检查**：历史轮次的面板文件类型检查已随 web 界面移除而失去对象（kotlinc 环境
-  曾对 `custom/panel/` 全部文件查过 **0 错误**）；本轮改动全为删除与参数清理，无新增代码路径，
-  唯一保留的代码改动是 `Route.FileManagerEditor` 的 `showConfigForm` 等既有功能，不受影响。
-- `BASELINE.txt` 的 `patch_sha256` 随新补丁更新（完整值见该文件）。
-- 沙箱内存只有 2GB，`:app:compileDebugKotlin` 跑不动，**本次没有跑通 Gradle 编译验证**。
-  落地后请先跑一次（本轮是纯删除，重点看有没有漏删的引用导致编译不过）：
+  应用结果与 `BASELINE.txt` 的 74 个 blob 逐文件一致（运行时配置 / root / 表单 / 隐藏不可用
+  断言 + §12「已移除」断言已反转为「web 面板已加回」断言 + 测延迟 / find-process-mode 断言）。
+- **Kotlin 类型检查**：本轮**新增**了 web 面板（`ThemedWebView` / `WebPanelScreen`）、测延迟
+  （`LatencyResult` / 重写 `RuleLatencyTester` / `HomeViewModel` / `LatencySection`）等代码路径。
+  沙箱内只做了静态核对（括号/引号配平、引用完整性：`Route.WebPanel` / `onNavigateWebPanel` /
+  `WebPanelScreen` 接线齐全，`LatencyResult` 无悬空引用，`StatusColors.delay` 保留，面板/延迟字符串
+  4 语言齐备），**没有跑 kotlinc / Gradle 类型检查**（沙箱无 SDK、内存 2GB）。
+- `BASELINE.txt` 的 `patch_sha256` 随新补丁更新（完整值见该文件），74 个 blob（28 新增 + 46 修改）。
+- **落地后请务必先跑一次编译**（本轮有新增代码，重点看 `ThemedWebView` 的 `android.webkit` /
+  `AndroidView` 导入、`WebPanelScreen` 的 miuix 组件签名、`Route.WebPanel` 序列化）：
 
 ```bash
 ./gradlew :app:compileDebugKotlin -x buildMihomo_arm64_v8a
