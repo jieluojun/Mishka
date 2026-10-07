@@ -227,31 +227,43 @@ assert_contains 'private fun fingerWindowY(index: Int, localY: Float): Float?' \
 assert_contains 'return coords.positionInWindow().y + localY' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the handle node position is read live for every pointer event'
-assert_contains 'dragTo(index, event.getY(i))' \
+assert_contains 'dragTo(index, change.position.y)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the handle touch callback converts the local offset to a window Y instead of adding deltas'
+  'the handle loop converts the local offset to a window Y instead of adding deltas'
 assert_not_contains 'dragAmount' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'no local-delta accumulation: the dragged row jumps a whole row height per swap and the auto-scroll moves the content under the finger, so node-local deltas contain phantom motion (it drifted the finger Y by one row per swap -> swap flicker + stray up-scroll)'
-# 四修（2026-10-07 录屏）：detectDragGestures 与外层 scrollable 抢同一条指针流，自动翻滚 +
-# 实时换位移动指下内容时拖动手势被外层取消/抢走 → 排序中途打断 + 残留事件带着列表整体上滑。
-# 换成 pointerInteropFilter 独占触摸流：DOWN 返回 true 后外层任何手势都看不到这根手指，
-# 结束条件只剩真抬指 / 系统级 CANCEL —— 手指按住不松就不打断。
-assert_contains 'requestDisallowInterceptTouchEvent = disallow' \
+# 六版（2026-10-07 三轮实机后重写）：不再与外层手势仲裁。把手 pointerInput 自 DOWN 起逐事件
+# 消费整条流；宿主把容器用户滚动绑到 dragging<0（LazyColumn userScrollEnabled /
+# verticalScroll enabled），拖动一开始外层 scrollable 整体退出；自动翻滚走 dispatchRawDelta
+# 程序化滚动不吃 userScrollEnabled。detectDragGestures / pointerInteropFilter 两版仲裁路径整段移除。
+assert_contains 'val down = awaitFirstDown(requireUnconsumed = false)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the drag handle exclusively owns the raw touch stream (no Compose arbitration can cancel the drag)'
-assert_contains 'disallow(true)' \
+  'the handle grabs the stream on DOWN without slop waiting'
+assert_contains 'startDrag(index, down.position.y)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'DOWN forbids ancestor interception: without it the interop filter leaves moves interceptable and the outer scrollable steals the stream after slop (handle press degrades to plain scrolling)'
-assert_contains 'handleTouch(index, event, disallow)' \
+  'press = immediate drag start (handle semantics unchanged)'
+assert_contains 'if (up) break' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the per-handle disallow switch is threaded into the touch callback'
-assert_contains 'MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the drag ends only on a real finger lift or a framework stream cancel'
+  'the drag loop ends only when the pressed pointer goes up (lift or framework cancel)'
 assert_not_contains 'detectDragGestures(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the shared-arbitration drag detector is gone (it let the outer scrollable cancel/steal the drag)'
+assert_not_contains 'pointerInteropFilter(' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the interop-filter path is gone too (its suppressMovementConsumption let the outer scrollable steal the stream on-device)'
+assert_contains 'userScrollEnabled = dragSort.dragging < 0' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'sequence list disables user scrolling for the whole drag (outer scrollable exits arbitration)'
+assert_contains 'userScrollEnabled = dragSort.dragging < 0' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
+  'override list disables user scrolling for the whole drag'
+assert_contains 'verticalScroll(scrollState, enabled = dragSort.dragging < 0)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt \
+  'string-list dialog disables user scrolling for the whole drag'
+assert_contains 'verticalScroll(dnsValueScroll, enabled = dnsValueSort.dragging < 0)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt \
+  'dns value list disables user scrolling for the whole drag'
 # positionInWindow / boundsInWindow 是 androidx.compose.ui.layout 包里的扩展函数（不是接口成员）：
 # 少了 import，K2 报 Unresolved reference —— 与曾经漏 import dragSortItem 的 CI 失败同一类。
 assert_contains 'import androidx.compose.ui.layout.positionInWindow' \

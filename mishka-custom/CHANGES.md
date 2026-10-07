@@ -39,6 +39,14 @@
 > 这条流（我们收 ACTION_CANCEL，把手按下退化成纯滚动）。修法：每个把手一个
 > `RequestDisallowInterceptTouchEvent` 开关（`DragHandle` 里 remember，与 interop 节点一一绑定），
 > DOWN 时 `invoke(true)` 禁止外层拦截，移动事件改在 Initial 趟消费，外层再无机会接走（§10）。
+>
+> **追加（2026-10-07 实机反馈五轮）**：§10 落地后「又跟最初一样了」。`detectDragGestures` /
+> `pointerInteropFilter` 两代都把「把手拖动 vs 外层 scrollable」交给 Compose 手势仲裁，实机上分别
+> 被取消拖动 / 退化纯滚动，补丁追着仲裁细节修逃不开机型矩阵。**重写拖动逻辑（v6）**：不再与任何
+> 外层手势仲裁——把手 `pointerInput` 自 DOWN 起逐事件消费整条流（无 slop、无仲裁依赖组件）；宿主把
+> 容器用户滚动绑到 `dragging < 0`（LazyColumn `userScrollEnabled` / verticalScroll `enabled`），
+> 拖动一开始外层 scrollable 整体退出；自动翻滚走 `dispatchRawDelta` 程序化滚动，不吃
+> `userScrollEnabled`（§11）。
 
 基线未变：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`。参考实现是
 mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/core.js` /
@@ -274,6 +282,38 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
 调 `disallow(true)`、回调穿参 `handleTouch(index, event, disallow)`；「结束分支只剩
 UP/CANCEL」「`detectDragGestures(` 禁现」两条维持。
 
+## 11. 重写（拖动排序）：不再与外层仲裁 —— 把手消费整条流 + 拖动期间禁用容器滚动
+
+症状（§10 落地后实机）：「又跟最初一样了」——往上拖仍整体上滑、拖进自动翻滚区域仍打断排序。
+
+根因复盘：`detectDragGestures`（§8）与 `pointerInteropFilter`（§9/§10）两代都把「把手拖动」
+放进和外层 scrollable 的同一条指针流仲裁里，靠「我们消费能挡住外层」或「外层遵守禁拦截契约」
+这类前提——实机上前提先后被打破（手势被取消、slop 抢流、拦截退化）。继续补仲裁细节逃不开
+机型 / 版本矩阵，v6 换成**不仲裁**的结构。
+
+重写（两处互不依赖的保险）：
+
+1. **把手节点自己消费整条流**：`handleModifier` 用裸 `pointerInput`：`awaitFirstDown` 后立刻
+   `startDrag`（无 slop 等待），循环里每帧事件逐指针 `consume()`；结束条件只有主指针
+   `pressed=false`（真抬指；框架 CANCEL 同形）或把手节点解绑（`finally` 兜底 `endDrag`，防
+   `dragging` 残留把容器滚动一直关着）。不用 `detectDragGestures`、不用 `pointerInteropFilter`。
+2. **拖动期间外层 scrollable 整体退出**：宿主把容器用户滚动绑到 `dragging < 0` —— 两处
+   LazyColumn（序列列表页、订阅覆盖页）加 `userScrollEnabled`，四处 verticalScroll（列表弹层、
+   DNS 服务器、fake-ip 规则、DNS 取值）加 `enabled`。拖动一开始重组生效，scrollable 的
+   pointerInput 键变重启，进行中的外层滚动手势也随之终止；「slop 抢流 / 拦截 / 退化纯滚动」
+   全失去土壤。监听器列表（无独立滚动的 Column）靠把手逐事件消费挡住外层页面滚动，与历来表现一致。
+3. **自动翻滚不受影响**：边缘自动翻滚走 `dispatchRawDelta` —— state 级 raw scroller，不吃
+   `userScrollEnabled`（androidx 源码核对：`LazyListState.dispatchRawDelta` 直达
+   `scrollableState.dispatchRawDelta`，enabled 只存在于 scrollable modifier 的手势侧）。
+4. 命中判定 / 列表内实时换位 / FLIP / 虚线描边 / 松手一次性写回均不变；整行 clickable 仍被把手
+   的 DOWN 消费挡住（Main 趟子先父后）。
+
+防回归：verify 换 / 增 9 条 —— `awaitFirstDown(requireUnconsumed = false)` 立即拿流、
+`startDrag(index, down.position.y)`、`if (up) break` 唯一出口、`userScrollEnabled =
+dragSort.dragging < 0` 两处、`verticalScroll(…, enabled = … < 0)`（弹层 + DNS 取值两条代表）、
+`detectDragGestures(` 与 `pointerInteropFilter` 在 DragSort.kt 整段禁现；`dragAmount` 禁用、
+窗口坐标解算（`fingerWindowY` / 实时 `positionInWindow()`）等历轮断言维持。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
@@ -286,6 +326,10 @@ UP/CANCEL」「`detectDragGestures(` 禁现」两条维持。
 - §10 落地后同脚本复跑 → **150 条 ok / 0 FAIL**：本轮 2 条新增（`disallow(true)` 禁拦截在 DOWN
   在位、开关穿参进触摸回调）+ 1 条替换（独占接线断言改钉 `requestDisallowInterceptTouchEvent =
   disallow`）；尾随 lambda（84 处）与跨包 import（166 符号）全树检查继续全绿。
+- §11（v6 重写）落地后复跑 → **154 条 ok / 0 FAIL**：本轮 9 条换 / 增 —— 无 slop 立即拿流、
+  DOWN 即 `startDrag`、`if (up) break` 唯一出口、两处 `userScrollEnabled = dragSort.dragging < 0`、
+  两处 `verticalScroll(…, enabled = … < 0)` 代表、`detectDragGestures(` 与 `pointerInteropFilter(`
+  在 DragSort.kt 整段禁现；补丁双向可逆、67 个 blob（含 4 个本轮改动文件的新 hash）逐文件一致。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 
