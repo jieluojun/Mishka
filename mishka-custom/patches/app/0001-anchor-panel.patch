@@ -6471,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..603a3d0
+index 0000000..d3a7f77
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,483 @@
+@@ -0,0 +1,508 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6550,6 +6550,10 @@ index 0000000..603a3d0
 + *    `Modifier.animateItem`，.26s cubic-bezier(.2,.8,.25,1)，与参考实现同一段缓动）；
 + *  - 手指进入容器上下边缘时自动翻滚：E = clamp(容器高×15%, 44dp, 88dp)，v = 1 + (depth/E)×13
 + *    dp/帧（同参考实现 ≈1~14px/帧）；滚一帧立刻补一轮命中判定；
++ *  - **命中判定合帧到每帧一次**（[drainStep]）：pointer 事件只更新指尖位置并置标记，帧循环里每帧
++ *    最多跑一轮 `step()`——参考实现把 `pointermove` 也合帧进 rAF（`if (moveRaf) return`），注释原话
++ *    「否则命中检测与重排直接吃掉全部帧预算（卡顿主因）」。高刷屏一帧 2~4 个 move 事件，逐事件
++ *    换位 = 每帧多次整列表重排 + FLIP，帧预算被吃光（真机上表现为拖动中卡死、随后事件猛冲）；
 + *  - 拖动中的行加参考实现 `.rule-item.dragging` 的视觉：整行降透明 + 强调色淡底 +
 + *    1.5dp 虚线描边 + 淡阴影。
 + *
@@ -6608,6 +6612,9 @@ index 0000000..603a3d0
 +    }
 +
 +    private var fingerY = 0f
++
++    /** 有新的手指位置等待命中判定（每帧最多消费一次，见 [drainStep]）。 */
++    private var stepPending = false
 +    private var draggingHeight = 0f
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
@@ -6694,6 +6701,7 @@ index 0000000..603a3d0
 +        if (index < 0 || index !in orderState) return
 +        draggingHeight = heights[index] ?: 0f
 +        dragging = index
++        stepPending = false
 +        val top = tops[index]
 +        fingerY = fingerWindowY(index, localY)
 +            ?: if (top != null) top + draggingHeight / 2f
@@ -6721,12 +6729,25 @@ index 0000000..603a3d0
 +    }
 +
 +    /**
-+     * 手指移动：把事件换算成指尖的窗口 Y 后跑一轮命中判定；被拖行的位置由它命中的档位决定
-+     * （不跟手漂浮）。
++     * 手指移动：把事件换算成指尖的窗口 Y，**只置一个待判定的标记**——命中判定合帧到每帧一次
++     * （[drainStep]）。参考实现同样把 `pointermove` 合帧到 `requestAnimationFrame` 里跑 `step()`，
++     * 注释原话：「否则命中检测与重排直接吃掉全部帧预算（卡顿主因）」：高刷触摸设备一帧能来 2~4 个
++     * move 事件，逐事件换位 = 每帧 2~4 次列表重排 + 一堆 FLIP 位移动画，正是上一版在真机上
++     * 「拖动中卡死约一秒、随后事件猛冲」的放大器。
 +     */
 +    fun dragTo(index: Int, localY: Float) {
 +        if (dragging < 0 || dragging != index) return
 +        fingerY = fingerWindowY(index, localY) ?: return
++        stepPending = true
++    }
++
++    /**
++     * 每帧一次的命中判定（由 [rememberDragSortState] 的帧循环调用）：有新的手指位置才跑一轮。
++     * 边缘翻滚在帧循环里滚完一帧也会立刻补一轮（见 [autoScroll]），与参考实现同序。
++     */
++    internal fun drainStep() {
++        if (dragging < 0 || !stepPending) return
++        stepPending = false
 +        step()
 +    }
 +
@@ -6736,6 +6757,7 @@ index 0000000..603a3d0
 +        val to = orderState.indexOf(from)
 +        dragging = -1
 +        fingerY = 0f
++        stepPending = false
 +        draggingHeight = 0f
 +        val moved = reordered && to >= 0 && to != from
 +        flipSuppressed = true   // 提交帧：键位随数据整体重排，这一帧不做位移动画（下一帧恢复）
@@ -6825,6 +6847,9 @@ index 0000000..603a3d0
 +        if (dragging < 0) return@LaunchedEffect
 +        while (true) {
 +            withFrameNanos { }
++            // 与参考实现同序：先消费本帧累计的手指位置（合帧的命中判定），再算边缘翻滚；
++            // 翻滚真滚了一帧的话，autoScroll 内部会立刻再补一轮命中判定。
++            state.drainStep()
 +            state.autoScroll(edgeMin, edgeMax, velMin, velRange)
 +        }
 +    }

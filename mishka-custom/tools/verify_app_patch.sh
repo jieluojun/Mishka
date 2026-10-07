@@ -230,6 +230,18 @@ assert_contains 'return coords.positionInWindow().y + localY' \
 assert_contains 'dragTo(index, change.position.y)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'onDrag converts the local offset to a window Y instead of adding deltas'
+assert_contains 'private var stepPending = false' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'pointer events only mark a pending hit-test'
+assert_contains 'internal fun drainStep()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'hit-testing is drained once per frame (reference batches pointermove into rAF)'
+assert_contains 'state.drainStep()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the per-frame drag loop drains the pending hit-test before the edge scroll'
+assert_not_contains 'fingerY +=' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the finger Y is never accumulated (node-local deltas drift by a row height per swap)'
 assert_not_contains 'dragAmount' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'no local-delta accumulation: the dragged row jumps a whole row height per swap and the auto-scroll moves the content under the finger, so node-local deltas contain phantom motion (it drifted the finger Y by one row per swap -> swap flicker + stray up-scroll)'

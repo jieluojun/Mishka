@@ -204,15 +204,42 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
 `LayoutCoordinates` 是 `androidx.compose.ui.layout` 的**包级扩展函数 / 类型**（不是接口成员），
 漏 import 会重演 §7 那类 CI `Unresolved reference`。
 
+## 9. 四修（拖动排序）：录屏里量出来的两个真问题 —— 命中判定合帧 + 手指位置只认窗口坐标
+
+用户 10:48 的录屏（本轮逐帧量过：61.7fps / 463 帧 / 7.51s，路由规则页）拆出四段：
+
+| 时间 | 画面 | 量到的东西 |
+| --- | --- | --- |
+| 1.07–2.33s | 向上拖动排序，逐行实时换位 | 正常：每越过一行的中线换一次位 |
+| 2.33–3.40s | **画面完全静止**（逐帧比特级相同），手指还在动 | App 约 1 秒没处理任何拖动事件（主线程被拖住/事件积压） |
+| 3.50–4.18s | 内容持续上滑，行标签逐帧闪烁；4.40s 起停在滚动区间尽头 | 积压事件猛冲后 **自动翻滚以 ≈2250px/s 全速上滚**（= 我这边满档 14dp/帧 × 61.7fps ≈ 2160px/s），把列表扫回区间头 |
+| 4.10s 前后 | 弹出「已移动 MATCH」，末尾整列表一跳复位 | 拖动被中途收尾 + 提交帧键位重整 |
+
+两个根因（都在参考实现里有现成的对应写法，v3 漏了）：
+
+**（1）命中判定没有合帧（主线程被拖住 → 「打断拖动排序」）。** 参考实现把 `pointermove` 也合帧进
+rAF（`if (moveRaf) return; moveRaf = requestAnimationFrame(() => step())`），注释原话：
+「否则命中检测与重排直接吃掉全部帧预算（**卡顿主因**）」。v3/v4 是每个 pointer 事件都跑一轮
+`step()`：高刷触摸一帧 2~4 个事件 = 每帧 2~4 次整列表重排 + 一堆 FLIP 位移动画，真机上直接
+表现为「拖动中卡死约一秒、随后积压事件猛冲」。修法：`dragTo()` 只更新指尖位置并置
+`stepPending`，帧循环里 `drainStep()` 每帧最多消费一次。
+
+**（2）那一秒的猛冲为什么是「上滑」。** 猛冲时引擎的指尖 Y 落在列表上边缘带里（E = 88dp ≈ 242px，
+手指离列表顶 242px 以内即触发，深度 83% ≈ 满速），于是满速上滚——这正是 v3 的局部坐标漂移把
+指尖 Y 虚拟地抬高了约小半行（真手指在边缘带外、引擎以为在带内）的结果；v4 的 `fingerWindowY`
+（见 §8）已把这条掐死，本节再补上第（1）条合帧，两条一起才是录屏里那四段现象的完整解。
+
+防回归：verify 新增 4 条 —— `stepPending` 标记存在、`drainStep()` 存在、帧循环里
+`state.drainStep()` 在位、`fingerY +=` 全文件禁止（局部位移累加是同一个坑的写法本身）。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 61 → 67 条（总计 **146 条
-  ok / 0 FAIL**）——本轮的 6 条全在拖动排序上：指尖窗口坐标解算（`fingerWindowY`）、每次事件
-  读实时 `positionInWindow()`、`onDrag` 只做「局部 Y → 窗口 Y」换算、`dragAmount` 局部位移
-  累加被禁、`positionInWindow` / `LayoutCoordinates` 两个 import 在位。上一轮（50 → 61）把拖动
-  排序换成 v3 口径（实时换位 / 插入下标修正 / 手指在拖行上不抖 / FLIP 缓动 / 无中途写回），
-  另加 4 处宿主按 `order` 渲染、合集 ✎ 语义 2 条。
+  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 67 → 71 条（总计 **150 条
+  ok / 0 FAIL**）——本轮 4 条：`stepPending` 标记、`drainStep()`、帧循环接线、`fingerY +=` 禁止。
+  §8 的 6 条（指尖窗口坐标解算 / 每次事件读实时 `positionInWindow()` / `onDrag` 只做换算 /
+  `dragAmount` 禁 / 两个 import 在位）与更早的 v3 批次（实时换位 / 插入下标修正 / 手指在拖行上
+  不抖 / FLIP 缓动 / 无中途写回 / 4 处宿主按 `order` 渲染 / 合集 ✎ 语义 2 条）一并保留。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 
