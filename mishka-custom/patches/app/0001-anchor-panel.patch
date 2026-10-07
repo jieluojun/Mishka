@@ -2429,10 +2429,10 @@ index 0000000..44c2097
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 new file mode 100644
-index 0000000..128e33a
+index 0000000..ebca09d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
-@@ -0,0 +1,748 @@
+@@ -0,0 +1,750 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -2537,7 +2537,9 @@ index 0000000..128e33a
 +            showToast(toast)
 +            return
 +        }
-+        val lines = newText.split('\n')
++        // 与配置表单面板同一条约定：replaceRange 的 END 在**替换前**的坐标系里，必须按旧文本算。
++        // 拿 newText 的行数去算，删行（摘锚点 / 删定义）后旧文档的尾巴会粘在新文本末尾。
++        val lines = text.split('\n')
 +        controller.replaceRange(
 +            TextPosition(0, 0),
 +            TextPosition(lines.lastIndex, lines[lines.lastIndex].length),
@@ -4411,10 +4413,10 @@ index 0000000..d4c6508
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..1a05e5a
+index 0000000..88f72ab
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1497 @@
+@@ -0,0 +1,1545 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4507,7 +4509,11 @@ index 0000000..1a05e5a
 +            showToast(toast)
 +            return
 +        }
-+        val lines = newText.split('\n')
++        // 整篇替换的两个端点都在**替换前**的文档坐标系里：END 必须按旧文本算。
++        // 以前拿 newText 的行数算 END，新文本比旧文本短（删键 / 行数变少）时，
++        // 旧文档从对应位置往后的尾巴会整段留在新文本后面——规则列表 `MATCH,国外出口 CT`、
++        // 开关行 `enable: trueCT`、`override-destination: truee` 都是这一处来的。
++        val lines = text.split('\n')
 +        controller.replaceRange(
 +            TextPosition(0, 0),
 +            TextPosition(lines.lastIndex, lines[lines.lastIndex].length),
@@ -4636,7 +4642,17 @@ index 0000000..1a05e5a
 +        }
 +        val dumped = out.dump()
 +        if (dumped == doc.dump()) {
-+            showToast("$label 没有变化")
++            // 写不动的原因要说清：值本身来自锚点继承 / 别名（共享同一个值）时，
++            // 「没有变化」会让人以为是面板坏了——点和没点一样，而共用处的另一个开关却是它说了算
++            val eff = reveal?.let { FormValues.effectiveBool(out, it) }
++            showToast(
++                if (eff != null) {
++                    "$label 没有变化：这个开关的生效值来自锚点继承 / 别名（当前${if (eff) "开" else "关"}），本处没有可改的本地行。要单独改它，先在编辑器里把这一行的 `*别名`（或 `<<:` 行）换成字面值"
++                } else {
++                    "$label 没有变化"
++                },
++                long = eff != null,
++            )
 +            return false
 +        }
 +        applyText(dumped, "$verb $label", reveal?.let { lineOfPath(out, it) })
@@ -4650,8 +4666,30 @@ index 0000000..1a05e5a
 +        }
 +        // 继承感知：值来自 `<<:` 继承时按参考实现写穿锚点 / 物化整块，绝不建半块本地映射顶掉继承内容
 +        val w = AnchorInheritance.applySetAware(doc, path, value)
-+        val named = if (w.anchor != null) "$label（已同步到锚点 &${w.anchor}，继承它的所有条目一起生效）" else label
++        val named = if (w.anchor != null) "$label（已同步到锚点 &${w.anchor}，继承它的所有条目一起生效）" else {
++            // 键本身挂着 `&定义`、别处又用 `*别名` / `<<:` 共用它时，写这一处会连带改所有使用者。
++            // 以前只 toast「已写入」，用户看到的是「切一个开关，另一个开关也变了」——这里把锚点点名。
++            val shared = sharedAnchorOf(doc, path)
++            if (shared != null) "$label（&$shared 被 ${AnchorInheritance.anchorRefCounts(doc)[shared] ?: 1} 处引用共用，会一起生效）" else label
++        }
 +        return commit(w.doc, named, "已写入", w.path)
++    }
++
++    /**
++     * [path] 所在节点（含所在块）上挂的 `&定义`：写它会连带改所有 `*别名` / `<<:` 引用它的位置。
++     * 返回锚点名，没挂锚点返回 null（普通本地写不会影响别处）。
++     */
++    private fun sharedAnchorOf(doc: YamlDoc, path: YPath): String? {
++        if (path.isEmpty()) return null
++        val defs = AnchorInheritance.anchorDefPaths(doc)
++        if (defs.isEmpty()) return null
++        for (i in path.size downTo 1) {
++            val prefix = path.subList(0, i)
++            val hit = defs.firstOrNull { it.third == prefix } ?: continue
++            val refs = AnchorInheritance.anchorRefCounts(doc)[hit.first] ?: 0
++            if (refs > 0) return hit.first
++        }
++        return null
 +    }
 +
 +    fun clear(path: YPath, label: String): Boolean {
@@ -5554,10 +5592,16 @@ index 0000000..1a05e5a
 +    var dialog by remember(field.path, base) { mutableStateOf(false) }
 +    val p3 = isP3(field)
 +    val tri = isTriBool(field)
++    // 开关状态按**生效值**显示：本地没写但经 `<<:` 锚点继承 / `*别名` 引用进来时，
++    // 旧写法（只看本地 hasVal）会把一个实际为「开」的参数画成关——用户点它等于把已经开的值
++    // 再写一遍（「没有变化」），而旁边共用同一个锚点的开关看起来也跟着变。显示与生效值对齐。
++    val effBool = FormValues.effectiveBool(doc, path)
 +    val switchShown = when {
 +        field.type != FormFieldType.BOOL -> false
-+        field.asSwitch && !hasVal -> field.default == true
-+        else -> hasVal && FormValues.readBool(doc, path) == true
++        hasVal -> FormValues.readBool(doc, path) == true
++        effBool != null -> effBool
++        field.asSwitch -> field.default == true
++        else -> false
 +    }
 +
 +    /** 统一出口：先问详情页的拦截钩子，没人管再按「null = 删键，其余 = 写值」落到 FormHost。 */
@@ -5598,12 +5642,18 @@ index 0000000..1a05e5a
 +            showToast("${field.label} 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
 +            return
 +        }
++        // 「本来就这样」只在**生效值**层面成立才算数：本地没写行、但锚点继承 / 别名引用已经把
++        // 这个开关置成目标值时才是 no-op；否则必须落写（写本地覆写行），不然用户会看到
++        // 「点不动」+「没有变化」，而共用同一处的另一个开关却跟着变。
++        val sameAsEffective = effBool != null && effBool == value
 +        if (field.asSwitch) {
 +            val defaultValue = field.default == true
-+            if (value == defaultValue && !hasVal) showToast("${field.label} 本来就是默认值")
++            if (value == defaultValue && !hasVal && effBool == null) showToast("${field.label} 本来就是默认值")
++            else if (sameAsEffective && !hasVal) showToast("${field.label} 生效值已经是${if (value) "开" else "关"}（来自锚点继承 / 别名）")
 +            else write(value)
 +        } else {
-+            if (!value && field.optional && !hasVal) showToast("${field.label} 本来就没有设置")
++            if (!value && field.optional && !hasVal && effBool == null) showToast("${field.label} 本来就没有设置")
++            else if (sameAsEffective && !hasVal) showToast("${field.label} 生效值已经是${if (value) "开" else "关"}（来自锚点继承 / 别名）")
 +            else write(value)
 +        }
 +    }
@@ -6471,10 +6521,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..8d0139c
+index 0000000..244efd6
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,531 @@
+@@ -0,0 +1,559 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6719,6 +6769,13 @@ index 0000000..8d0139c
 +            }
 +    }
 +
++    /**
++     * 这一行当前还在布局里吗：被 lazy 列表回收的行，它的把手节点会解绑（`isAttached == false`），
++     * 而 [tops] / [heights] 里留着的是上一次量到的旧值。命中判定只认还在布局里的行——
++     * 否则自动翻滚把行带出窗口后，一个过期矩形就能把行指到列表里别的档位去。
++     */
++    private fun live(index: Int): Boolean = handleCoords[index]?.isAttached == true
++
 +    /** 命中判定：窗口坐标 (x, y) 落在哪个把手的窗口矩形里（只认当前还挂着的手柄）。没有 → -1。 */
 +    private fun hitHandle(x: Float, y: Float): Int {
 +        for ((i, coords) in handleCoords) {
@@ -6797,33 +6854,54 @@ index 0000000..8d0139c
 +     * （否则换位后手指仍在原行身里，会被判成「又越过一行」来回抖）。
 +     * 指到行间缝里（行距）或容器留白时，按「手指 Y 离哪一行中线最近」兜底——与参考实现的
 +     * 「留白投影命中」同口径。
++     *
++     * 手指**跑到容器外**（快拖之下、或自动翻滚把行带出窗口后）不再走 nearest 兜底：那会儿
++     * [tops] / [heights] 是过期的量测值，nearest 常常命中列表中间某一行，于是被拖行被「钉」在中途、
++     * 自动翻滚继续把它带出窗口，松手时就落在一个错误的下标上——表现就是「拖到顶上又被弹回下面」。
++     * 容器上沿之外 = 列表头（第 0 位），下沿之外 = 列表尾，和手指真正的意图一致。
 +     */
 +    private fun step() {
 +        val from = dragging
 +        if (from < 0) return
 +        val cur = orderState.indexOf(from)
 +        if (cur < 0) return
-+        val curTop = tops[from]
-+        val curH = heights[from]
-+        if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return
++        val outside = fingerY < containerTop || fingerY > containerBottom
++        val curTop = if (live(from)) tops[from] else null
++        val curH = if (live(from)) heights[from] else null
++        // 手指在容器外时不认「落在自己身上」这条早退：被拖行可能已经滚出窗口，它的矩形是过期值，
++        // 认它会把「拖到容器外」误判成「还压在自己身上」，于是拖着不动
++        if (!outside && curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return
 +        var over = -1
 +        var nearest = -1
 +        var best = Float.MAX_VALUE
 +        for (o in orderState) {
 +            if (o == from) continue
++            // 被 lazy 列表回收的行：把手节点已解绑，tops / heights 留的是上一次量到的旧值，
++            // 拿它做命中判定会把行指到列表里别的档位（自动翻滚把行带出窗口后尤其明显）
++            if (!live(o)) continue
 +            val top = tops[o] ?: continue
 +            val h = heights[o] ?: continue
 +            if (fingerY >= top && fingerY <= top + h) { over = o; break }
 +            val d = abs(fingerY - (top + h / 2f))
 +            if (d < best) { best = d; nearest = o }
 +        }
-+        if (over < 0) over = nearest
-+        if (over < 0) return
-+        val overTop = tops[over] ?: return
-+        val overH = heights[over] ?: return
-+        val ov = orderState.indexOf(over)
-+        if (ov < 0) return
-+        var at = ov + if (fingerY >= overTop + overH / 2f) 1 else 0
++        // 落点档位：容器外直接落极值位（上沿外 = 列表头、下沿外 = 列表尾），不做「命中行 +
++        // 上半/下半」换算——窗口外的行量测值不可靠，拿它们比中线会把方向反过来（越拖越往下），
++        // 松手时就落在中途（= 「拖到顶上又被弹回下面」）。容器内仍保持原判定。
++        var at: Int
++        when {
++            fingerY < containerTop -> at = 0
++            fingerY > containerBottom -> at = orderState.size - 1
++            else -> {
++                val target = if (over >= 0) over else nearest
++                if (target < 0) return
++                val top = tops[target] ?: return
++                val h = heights[target] ?: return
++                val ov = orderState.indexOf(target)
++                if (ov < 0) return
++                at = ov + if (fingerY >= top + h / 2f) 1 else 0
++            }
++        }
 +        if (cur < at) at -= 1   // 先把被拖行摘掉，下标会左移一格（与 insertBefore 同算法）
 +        if (at == cur || at < 0 || at >= orderState.size) return
 +        val item = orderState.removeAt(cur)
@@ -7070,10 +7148,10 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..8de1116
+index 0000000..ec299c2
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2300 @@
+@@ -0,0 +1,2331 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -7099,6 +7177,8 @@ index 0000000..8de1116
 +import androidx.compose.runtime.setValue
 +import androidx.compose.ui.Alignment
 +import androidx.compose.ui.Modifier
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
 +import androidx.compose.ui.text.font.FontFamily
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.unit.sp
@@ -7179,6 +7259,8 @@ index 0000000..8de1116
 +    rowSummary: (Int, YamlNode) -> String?,
 +    onOpen: (Int, YamlNode) -> Unit,
 +    onDelete: ((Int, YamlNode) -> Unit)? = null,
++    /** 传了就在行尾多给 ↑ / ↓ 两个按钮（拖动把手的替代入口，见 RuleListPage）。 */
++    onMove: ((from: Int, to: Int) -> Unit)? = null,
 +) {
 +    val doc = host.doc
 +    val seq = doc.get(seqPath)
@@ -7205,6 +7287,7 @@ index 0000000..8de1116
 +        item(key = "hdr") {
 +            ListHeader(
 +                summary = "`${pathText(seqPath)}` · ${items.size} $unit · 按住行首把手拖动排序" +
++                    (if (onMove != null) "，或用行尾 ↑ / ↓ 逐条挪" else "") +
 +                    (if (broken) " · 这个键不是列表（别名 / 映射 / 纯值），只能在编辑器里改" else ""),
 +                actions = headerActions,
 +            )
@@ -7230,6 +7313,28 @@ index 0000000..8de1116
 +                        onClick = { onOpen(i, node) },
 +                        dragHandle = { DragHandle(dragSort, i) },
 +                        endActions = {
++                            // ↑ / ↓：按住把手拖动之外的逐条挪位入口（拖动在图省事，但长列表里
++                            // 一行一行挪、或者精确调到某位，按钮更稳），列表头 / 尾自动置灰
++                            if (onMove != null) {
++                                TextButton(
++                                    text = "↑",
++                                    onClick = { onMove(i, i - 1) },
++                                    enabled = i > 0,
++                                    minWidth = 32.dp,
++                                    minHeight = 36.dp,
++                                    modifier = Modifier.semantics { contentDescription = "上移" },
++                                )
++                                Spacer(Modifier.width(4.dp))
++                                TextButton(
++                                    text = "↓",
++                                    onClick = { onMove(i, i + 1) },
++                                    enabled = i < items.size - 1,
++                                    minWidth = 32.dp,
++                                    minHeight = 36.dp,
++                                    modifier = Modifier.semantics { contentDescription = "下移" },
++                                )
++                                Spacer(Modifier.width(8.dp))
++                            }
 +                            MiniIconButton(MiuixIcons.Edit, "编辑") { onOpen(i, node) }
 +                            Spacer(Modifier.width(8.dp))
 +                            MiniIconButton(MiuixIcons.Delete, "删除") {
@@ -8706,6 +8811,10 @@ index 0000000..8de1116
 +        onOpen = { i, node ->
 +            if (ruleOf(node) == null) showToast("这一项不是规则字符串，请在编辑器里直接改", long = true)
 +            else edit = RuleEditTarget(index = i, insertAt = null)
++        },
++        // 规则顺序 = 匹配顺序，逐条 ↑ / ↓ 比拖把手更稳（把手仍在，长距离拖动用它）
++        onMove = { from, to ->
++            host.moveItem(seqPath, from, to, "规则 ${from + 1}")
 +        },
 +    )
 +
@@ -16458,10 +16567,10 @@ index 0000000..1796296
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 new file mode 100644
-index 0000000..8e92a0f
+index 0000000..eaf032d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
-@@ -0,0 +1,1164 @@
+@@ -0,0 +1,1178 @@
 +package top.yukonga.mishka.custom.forms
 +
 +// 配置表单用的 YAML 引擎（Kotlin 侧实现）。
@@ -17240,6 +17349,19 @@ index 0000000..8e92a0f
 +/** 写回：手术式优先，块级次之，路径不可编辑则原样返回。对应 forms_model.py 的 set_value / remove_key / 序列项操作。 */
 +object YamlPatch {
 +
++    /**
++     * 行内替换标量值时 `&锚点` 的补写规则。`scalarNode` 解析带锚点的行（`key: &a value`）时会把
++     * valueStart 推进到锚点**之后**，于是 before 里已经带着 `&a`——再无条件补一次就会写出
++     * `key: &a &a false`（那句在 YAML 里是「锚点 + 字符串 `&a false`」，内核直接拒绝加载，
++     * 面板自己再读就成了怪值：切开关变成「切一个、坏一个」）。
++     * 规则：before 里已经有这个锚点就不再补；只有锚点、值要新写的空值行补一个空格。
++     */
++    private fun anchorPrefix(before: String, anchor: String?, emptyValue: Boolean): String = when {
++        anchor == null -> ""
++        before.contains("&$anchor") -> if (emptyValue) " " else ""
++        else -> "&$anchor "
++    }
++
 +    fun setValue(doc: YamlDoc, path: String, value: Any?): YamlDoc = setValue(doc, YamlDoc.splitPath(path), value)
 +
 +    fun setValue(doc: YamlDoc, parts: List<Any>, value: Any?): YamlDoc {
@@ -17274,7 +17396,7 @@ index 0000000..8e92a0f
 +                    val line = lines[n.start]
 +                    val before = line.substring(0, n.valueStart.coerceAtMost(line.length))
 +                    val after = line.substring(n.valueEnd.coerceAtMost(line.length))
-+                    val prefix = if (n.anchor != null) "&${n.anchor} " else ""
++                    val prefix = anchorPrefix(before, n.anchor, n.valueEnd <= n.valueStart)
 +                    lines[n.start] = before + prefix + leaf + after
 +                    return reparse(doc, lines)
 +                }
@@ -17375,8 +17497,9 @@ index 0000000..8e92a0f
 +        val scalarLike = (item.kind == YamlNode.Kind.SCALAR || item.kind == YamlNode.Kind.RAW) && item.inline && !item.multi
 +        if (scalarLike && value !is Map<*, *> && value !is List<*>) {
 +            val line = lines[item.start]
-+            val prefix = if (item.anchor != null) "&${item.anchor} " else ""
-+            lines[item.start] = line.substring(0, item.valueStart.coerceAtMost(line.length)) + prefix +
++            val before = line.substring(0, item.valueStart.coerceAtMost(line.length))
++            val prefix = anchorPrefix(before, item.anchor, item.valueEnd <= item.valueStart)
++            lines[item.start] = before + prefix +
 +                YamlValue.renderScalar(value) + line.substring(item.valueEnd.coerceAtMost(line.length))
 +            return reparse(doc, lines)
 +        }

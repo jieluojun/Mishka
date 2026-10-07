@@ -1,4 +1,147 @@
-# 本次改动（2026-10-07）——与 mihomo_box 模块对齐的三处交互
+# 本次改动（2026-10-08）——实机反馈四轮：写坏配置的写通道 / 分区页开关 / 规则页上移下移 / 拖到顶弹回
+
+> **本包是「只换补丁」的修复版**：同一 base commit（`5e6743592b9c465eb015db7b05c588c50cd2b874`），
+> `patches/app/0001-anchor-panel.patch` 换成带本轮修复的全量补丁（`patch_sha256` = `1f5cadbc…`，见
+> `patches/app/BASELINE.txt`）。与上一版补丁的差异**只落在 5 个文件**：
+> `custom/anchor/AnchorPanel.kt`、`custom/forms/{ConfigFormPanel,FlowFormPages,YamlEngine,DragSort}.kt`，
+> 其余 **69 个文件逐字节相同**。
+>
+> 用法（仓库先回到 base commit，再应用本包补丁；细节见 `README.md`）：
+>
+> ```bash
+> cd <Mishka 仓库>
+> git checkout 5e6743592b9c465eb015db7b05c588c50cd2b874 && git clean -fd
+> git apply mishka-custom/patches/app/0001-anchor-panel.patch
+> ```
+
+本轮修 4 件事，全部对应实机反馈（① 路由 / 规则页 ② 分区页开关）。
+
+## 1. 拖完规则行，倒数第二行的策略后面多了「CT」（写坏配置的根因）
+
+症状：拖动排序之后规则列表里出现 `- MATCH,国外出口 CT`（正常是 `- MATCH,国外出口`）；同一族的症状还有开关行
+`enable: trueCT`、`override-destination: truee`。共同点：都发生在**整篇文本替换**的路径上，而且都是**删行**
+（新文本行数比旧文本少）之后。
+
+根因（一句话）：`TextBuffer.replaceRange(start, end, newText)` 的两个端点都在**替换前**的坐标系里，旧代码却用
+**newText** 的行数算 END：
+
+```kotlin
+val lines = newText.split('\n')                     // ← 错：用新文本的尺寸去定旧文档的终点
+controller.replaceRange(TextPosition(0, 0), TextPosition(lines.lastIndex, lines[lines.lastIndex].length), newText)
+```
+
+新文本更短时，END 落在旧文档的中间，于是**旧文档从那里往后的尾巴整段被留在新文本后面**——`CT` 就是这么
+粘上去的（拖动排序把「删掉 + 插入」合成了一次整篇写回，行数少了 1）。
+
+修法：两个端点一律按**旧文本**算（`text.split('\n')`）。改的站点只有两处「整篇替换」：
+`custom/forms/ConfigFormPanel.kt` 的 `applyText(...)`、`custom/anchor/AnchorPanel.kt` 的同一处（锚点面板写回）。
+
+顺带修掉同一族的第二个写坏值：**行内标量写回重复补锚点**。`dns.ipv6: &on true` 切开关后曾被写成
+`dns.ipv6: &on &on false`（在 YAML 里那是「锚点 + 字符串 `&on false`」，内核直接拒绝加载）。根因：`scalarNode`
+解析带锚点的行时已经把 `valueStart` 推到锚点**之后**，`before` 里已经带着 `&on`，代码又无条件补一次。
+修法：`YamlEngine` 新增私有 `anchorPrefix(before, anchor, emptyValue)`——`before` 里已有该锚点就不再补，
+「锚点 + 空值」的行补一个空格；映射行内标量、序列项标量两处调用都改走它。
+
+## 2. 分区页开关：切一个、另一个跟着变（共用值 / 继承）
+
+症状：分区页（全局配置 / DNS / 嗅探 / TUN …）切一个开关，另一个开关的显示跟着变，或者「点了没反应、再点
+还是原样」。用户侧判断是「共用参数 / 共用值」。
+
+排查结论（先排除两个想当然）：
+
+- **不是两行字段共用同一个 YAML path**：把 154 行字段表（`FormSpecs.kt` / `FormSpecsP2.kt`，含 `only=` 门控的
+  重复行）按 path 全量对扫，**没有任何两行指向同一个键**；`tolerance` 在「通用参数 / Smart 专属」两处出现，
+  但 `only=` 交叉后不会同时显示。
+- **不是写通道把值串了**：`FormHost.set` → `AnchorInheritance.applySetAware` → `commit` 的语义用 Regress7
+  回归 19/19 通过；同一批用例喂给旧实现 `applyOld` 会造出 21 个坏例，新实现 0 个。
+
+真正的原因：**锚点 / 别名继承——两处显示的是同一个值**。一个键挂着 `&定义`、别处用 `*别名` / `<<:` 引用它，
+写一处当然两处都变；而面板原先**只认本地行**：本地没写、值其实来自继承时，开关被画成「关」，点一下只是把
+已经开的值又写一遍（toast「没有变化」）——看起来就是「这个开关坏了，旁边那个却不听我的」。
+
+本轮把这条链路**显示与提示**改对（写回语义一行未动，那部分已被回归锁死）：
+
+- 开关状态按**生效值**显示：`FieldRow` 的 `switchShown` 先认本地行，本地没写时用
+  `FormValues.effectiveBool(doc, path)`（锚点继承 / 别名展开后的值），最后才是 `field.default`。继承来的「开」
+  不再画成关。
+- 「本来就没有设置 / 本来就是默认值」只在**生效值层面**成立时才短路（`sameAsEffective`）：本地没写但生效值
+  已经是目标值时，toast 说明「生效值已经是开 / 关（来自锚点继承 / 别名）」；否则照常落写（写一条本地覆写
+  行），不再出现「点了没反应」。
+- 写共用键时**点名**：`FormHost.set` 原来只对「继承写穿」点名 `&anchor`；现在补 `sharedAnchorOf(doc, path)`
+  ——键本身挂 `&定义`、别处有 `*别名` 引用时，toast 变成「已写入（&xxx 被 N 处引用共用，会一起生效）」；
+  `commit` 的「没有变化」也解释成「生效值来自锚点继承 / 别名（当前开 / 关），本处没有可改的本地行」。
+
+> 说明：开关联动的**真机复现**本轮没拿到（需要知道「哪个分区页 + 哪两个开关名」，才能把 YAML 片段对上号）。
+> 上面 4 条覆盖了「看起来跟着变 / 点不动 / 没有变化」的全部 UI 侧成因。若真机上仍有联动，请给出
+> **分区页名 + 两个开关的显示名**（配置文件里对应的键更好），我按实际 YAML 定点复现。
+
+## 3. 规则页 / 序列列表：行尾 ↑ / ↓ 逐条挪位
+
+`SeqListPage` 新增可选参数 `onMove: ((from, to) -> Unit)?`：传了就在每行行尾、拖动把手之外再加两个
+`TextButton`（`↑` / `↓`，`minWidth = 32.dp`、`minHeight = 36.dp`，无障碍语义标签「上移」/「下移」），列表头 /
+尾自动置灰（`enabled = i > 0` / `enabled = i < size - 1`）。规则页（`RuleListPage`）接上：
+
+```kotlin
+onMove = { from, to -> host.moveItem(seqPath, from, to, "规则 ${from + 1}") }
+```
+
+`FormHost.moveItem(seqPath, from, to, label)` → `YamlPatch.moveItem`（块级交换；流式列表走 `flowSeqRewrite`），
+越界 / 不可编辑路径原样返回、不写坏文档。列表头提示同步改成「按住行首把手拖动排序，或用行尾 ↑ / ↓ 逐条挪」。
+**拖动把手保留**（长距离挪位还是拖更快），两条入口并存。
+
+## 4. 拖到顶又被弹回下面（拖动落位算错）
+
+症状：快速往上拖到顶（手指跑到列表上沿之外）松手，被拖行没落到第 1 位，反而回到列表中部。
+
+根因两条，都在 `DragSort.step()`：
+
+1. **容器外仍走「最近行中线」兜底**：手指跑到容器外时 `tops` / `heights` 里是**过期的量测值**（自动翻滚已经
+   把行带出窗口），「离哪一行中线最近」常常命中列表中间某行，被拖行就被钉在中途，松手落在错位置。
+2. **自命中早退用错矩形**：`if (fingerY in curTop..curTop+curH) return` 拿的是被拖行自己的矩形——它已经滚出
+   窗口，矩形同样是过期值，于是「拖到容器外」被判成「还压在自己身上」，拖着不动。
+
+修法（对齐参考实现口径）：
+
+- 手指在**容器上沿之外** → 直接落 `at = 0`；**下沿之外** → `at = orderState.size - 1`（即列表头 / 列表尾），
+  不再做「命中行 + 上半 / 下半」换算；容器**内**保持原判定（命中行 + 中线判上下，命中不到时最近行兜底）。
+- `live(index) = handleCoords[index]?.isAttached == true`：命中循环跳过被 lazy 列表**回收**的行——它们的把手
+  节点已解绑，`tops` / `heights` 里留的是旧值，一个过期矩形就能把落点指到别的档位（根因 1 的同一个来源）。
+- 被拖行不在布局里（`!live(from)`）时**不认**自命中早退。
+
+状态机复现（`DragSim`：12 行、首行加高、容器 0–1000；「旧」= 上一版的整段实现，「v1」= 本轮中间版本，
+「新」= 本轮最终）：
+
+| 场景 | 旧 | v1 | 新 |
+| --- | --- | --- | --- |
+| 快拖到顶（手指 Y = -80） | 落在中部（实机复现 = 用户截图） | (11,4) ✗ | **(11,0)** ✓ |
+| 慢拖到顶（手指 Y = -20） | — | — | **(11,0)** ✓ |
+| 抓第 9 行拖出上沿 | — | — | **(10,0)** ✓ |
+| 容器内手指 Y = 300 | — | — | **(11,7)** ✓ |
+
+> `live()` 是针对「行被回收」的加固（过期矩形的来源）；状态机里没有重建 lazy 回收行为，它补齐的是 `hitHandle`
+> 已有的 `isAttached` 过滤口径。**请在真机上按原路径复验一次**：快速上甩到顶、快甩到底、以及拖回自己那一行
+> 再松手。
+
+## 验证
+
+- `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆（`apply` / `apply -R`），
+  应用结果与 `BASELINE.txt` 的 74 个 blob **逐文件一致**；文本断言 **109 条**（上一版 79 条 + 本轮 5 类：
+  整篇替换 END 取旧文本 ×2、`&锚点`不重复 ×3、开关生效值 / 写穿点名 / 「没有变化」解释 ×4、行尾 ↑ / ↓ ×4、
+  拖动落位 + `live()` ×5；原「自命中早退」断言按新口径改成 `!outside && …`）。
+- 写通道回归（`regress7`，19 项）：pass = 19 / fail = 0；同一批用例在旧实现下 21 个坏例 → 新实现 0 个
+  （`&on &on`、尾巴粘连、`<<:` 继承物化、别名侧写入不落空块、锚点定义 ≤1 个 `&`）。
+- 「整篇替换」站点全量核对：`replaceRange` 只有 `ConfigFormPanel.applyText` 与 `AnchorPanel` 两处在写整篇
+  文本，其余站点（编辑器内核 `TextBuffer`）不受影响。
+- **Kotlin 语法门**：对 `custom/forms` + `custom/anchor` 全量跑 `kotlinc`（沙箱无 Android / Compose 依赖），
+  报错数与上一版基线同量级（3229 vs 3206，全部是缺依赖导致的 `unresolved reference` 级联），**0 条语法
+  错误**；本轮新增标识符（`anchorPrefix` / `sharedAnchorOf` / `effBool` / `onMove` / `live`）只在预期的
+  「缺依赖」类别里出现。**没有跑 Gradle 类型检查**（沙箱无 SDK）。落地后请先编译一次：
+
+```bash
+./gradlew :app:compileDebugKotlin -x buildMihomo_arm64_v8a
+```
+
+# 上一轮改动（2026-10-07）——与 mihomo_box 模块对齐的三处交互
 
 > **追加（CI 构建报错修复）**：首轮 CI 在 `:app:compileReleaseKotlin` 失败（3m37s），**94 条**错误全是同一处——
 > `MiniIconButton` 的 `onClick` 被排在 `modifier` **前面**，而 47 处调用全用尾随 lambda
