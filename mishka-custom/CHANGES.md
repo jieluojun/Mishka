@@ -160,14 +160,29 @@ mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/c
 - 代理集合、规则集合两页不再往列表页传 `renameNote` / `onRename`（参数改成可空）；子规则没有
   详情页，额外保留一个「改名」图标按钮（`MiuixIcons.Rename`）。
 
+## 7. 修复（编译）：SubscriptionOverridesScreen 漏 `import dragSortItem`
+
+CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
+（`ui/screen/overrides/SubscriptionOverridesScreen.kt:181`）。调用点本身是对的：该文件
+（`ui.screen.overrides` 包）引用了 `custom.forms` 的 `dragSortItem`，但 import 只补到
+`DragSortRow` / `DragSortState` / `rememberDragSortState`，漏了它——`FlowFormPages` 与
+定义同包所以不需要 import，全树只有覆写页这一处会报。补上
+`import top.yukonga.mishka.custom.forms.dragSortItem` 即可。
+
+防回归：新增 `tools/check_cross_package_imports.py`（解析 `custom/**` 顶层声明 →
+逐文件检查「引用了该符号却没 import」），并挂进 `verify_app_patch.sh`。已双向自测：
+当前全树 0 误报（166 个符号 / 17 处跨包引用）；把这一行 import 删掉，检查器能精确报出
+同一处缺失。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 50 → 61 条（总计 138 条
+  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 50 → 61 条（总计 140 条
   ok / 0 FAIL）——本轮把拖动排序那一段整体换成 v3 口径（实时换位 / 插入下标修正 / 手指在
   拖行上不抖 / FLIP 缓动 / 无中途写回），另加 4 处宿主按 `order` 渲染、合集 ✎ 语义 2 条。
   上一轮本文写的「42 → 47」是笔误：当时脚本里已经是 50 条。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
+- 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 
 - 沙箱内存 2GB，`:app:compileDebugKotlin` 跑不动，**本轮没有跑通 Gradle 编译验证**；
   落地后请先跑一次编译（改动面在 Compose 表单层与 ViewModel，重点看漏改的引用）。

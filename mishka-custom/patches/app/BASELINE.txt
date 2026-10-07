@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=401bcf288e231682fad4367c8f1528e4891261f26d542491a9126dce692f2aa4
+patch_sha256=0fa873b14db4c21ebf911667c791ee4da5514f20ac7adaef4f789ec771f6afa0
 blob_after=0ebf6af7fb0238b52e41188f5bb8897f86dc07a4 app/build.gradle.kts
 blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
 blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -52,7 +52,7 @@ blob_after=7e2415da58acbc121233ddf707fd84efffeabd8e app/src/main/kotlin/top/yuko
 blob_after=3e42813d7a8a731e7e9b32483b829016fa258748 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 blob_after=c5f897059a3970523105e2b323cb757a2f641a09 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
 blob_after=4623ff2cbeab1396764a2ba10a02fe48b3d3da9a app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
-blob_after=6a00ea6c77774e6457ff9fe655471b51f87160b1 app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
+blob_after=f3b883b4de174461d2f022f3fa62c05f14167e06 app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 blob_after=3eeddd12299063087a9a6a410e0f2458dd26facf app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
 blob_after=91c33aa312162e29e21ae88ffafe8d90ed1b5469 app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 blob_after=7da18acdd4ed9794d6e6ce9ad5a858a4aba9a9fd app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt

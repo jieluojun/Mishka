@@ -271,6 +271,20 @@ else
   echo "warn 没有 python3，跳过 tools/check_trailing_lambda.py（bash 守护仍在）"
 fi
 
+# --- 跨包 import 检查（防「调用点对、import 漏」类编译错误）---
+# 教训：SubscriptionOverridesScreen 调用 dragSortItem 但漏 import，CI 报
+# Unresolved reference 'dragSortItem'。没有编译器时用本脚本兜底。
+if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_cross_package_imports.py" ]]; then
+  if python3 "$ROOT/tools/check_cross_package_imports.py" --repo "$REPO"; then
+    echo "ok  跨包 import 全树检查通过"
+  else
+    echo "FAIL 跨包 import 全树检查发现缺失（见上方清单）" >&2
+    fail=1
+  fi
+else
+  echo "warn 没有 python3，跳过 tools/check_cross_package_imports.py"
+fi
+
 # --- web 界面已完全移除（防回归）---
 assert_not_contains 'PanelScreen' \
   app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \
