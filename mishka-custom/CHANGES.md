@@ -174,13 +174,45 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
 当前全树 0 误报（166 个符号 / 17 处跨包引用）；把这一行 import 删掉，检查器能精确报出
 同一处缺失。
 
+## 8. 三修（拖动排序）：往上拖时列表自己上滑、拖动被打断 —— 指尖位置不再累加局部位移
+
+症状（2026-10-07 10:18，路由规则页）：**往上拖动排序时列表自己上滑（内容向前滚）并打断拖动排序**；
+截图里列表停在滚动末尾、首行压在标题栏下，并弹出「已移动 RULE-SET 海外域名」。
+
+根因：`DragSortState` 曾用 `PointerInputChange` 的**节点局部位移**（`dragAmount.y`）累加 `fingerY`，
+而 `position` 是相对「把手节点」的坐标 —— 拖动中这个节点自己在动：
+1. 被拖行「即换即到位」（换位不给动画，参考实现的口径）：换一次位节点就**整行高瞬跳**，
+   局部坐标跟着跳 —— 手指没动，`dragAmount.y` 却是 ±一整行高；
+2. 边缘自动翻滚让内容在指下滚动，每帧再注入 ±1~14dp 的假位移。
+
+于是每越过一行 `fingerY` 就被带偏一整行：命中判定立刻落到被拖行身后那一行、把刚换上去的位置
+又换回来 —— 来回抖，正是用户说的「拖动被打断」；偏出去的 Y 落进上/下边缘带还会触发**误翻滚**，
+列表自己滚起来，就是「触发上滑」。松手时按抖动的最后一格提交 `onMove`，于是有了那张截图
+和那条「已移动 RULE-SET 海外域名」提示。
+
+修法：指尖位置改为**每次事件当场换算成窗口坐标** —— `handleModifier` 记下把手节点的
+`LayoutCoordinates`，`fingerWindowY()` 返回 `positionInWindow().y + change.position.y`
+（节点已解绑 / 还没量过时退回最后一次 `onGloballyPositioned` 记下的窗口顶），`dragTo()`
+每次**覆写** `fingerY` 而不是 `+=`。这与参考实现全程只用 `e.clientY` 同口径：行在视口里怎么挪、
+内容怎么滚，都不影响指尖位置，误差没有再累积的通道。参考实现踩过同一类坑：它 pointerdown 时
+特意从活动指针重新播种 `pendX/pendY`，注释原话是「否则边缘翻滚用的是残留 / 0 的 Y → 点一下
+把手页面就滚」——两种表现、同一个错，这次一并掐掉。
+
+防回归：`DragSort.kt` 里**不允许再出现 `dragAmount`**（verify 用 `assert_not_contains` 钉住），
+并断言 `fingerWindowY` 存在、每次事件读实时 `positionInWindow()`、`onDrag` 接线为
+`dragTo(index, change.position.y)`；另补 2 条 import 断言 —— `positionInWindow` 与
+`LayoutCoordinates` 是 `androidx.compose.ui.layout` 的**包级扩展函数 / 类型**（不是接口成员），
+漏 import 会重演 §7 那类 CI `Unresolved reference`。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 50 → 61 条（总计 140 条
-  ok / 0 FAIL）——本轮把拖动排序那一段整体换成 v3 口径（实时换位 / 插入下标修正 / 手指在
-  拖行上不抖 / FLIP 缓动 / 无中途写回），另加 4 处宿主按 `order` 渲染、合集 ✎ 语义 2 条。
-  上一轮本文写的「42 → 47」是笔误：当时脚本里已经是 50 条。
+  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 61 → 67 条（总计 **146 条
+  ok / 0 FAIL**）——本轮的 6 条全在拖动排序上：指尖窗口坐标解算（`fingerWindowY`）、每次事件
+  读实时 `positionInWindow()`、`onDrag` 只做「局部 Y → 窗口 Y」换算、`dragAmount` 局部位移
+  累加被禁、`positionInWindow` / `LayoutCoordinates` 两个 import 在位。上一轮（50 → 61）把拖动
+  排序换成 v3 口径（实时换位 / 插入下标修正 / 手指在拖行上不抖 / FLIP 缓动 / 无中途写回），
+  另加 4 处宿主按 `order` 渲染、合集 ✎ 语义 2 条。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 

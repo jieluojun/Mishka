@@ -6471,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..db6f1fc
+index 0000000..603a3d0
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,483 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6510,8 +6510,10 @@ index 0000000..db6f1fc
 +import androidx.compose.ui.graphics.drawscope.Stroke
 +import androidx.compose.ui.graphics.vector.ImageVector
 +import androidx.compose.ui.input.pointer.pointerInput
++import androidx.compose.ui.layout.LayoutCoordinates
 +import androidx.compose.ui.layout.boundsInWindow
 +import androidx.compose.ui.layout.onGloballyPositioned
++import androidx.compose.ui.layout.positionInWindow
 +import androidx.compose.ui.platform.LocalDensity
 +import androidx.compose.ui.semantics.contentDescription
 +import androidx.compose.ui.semantics.semantics
@@ -6534,6 +6536,13 @@ index 0000000..db6f1fc
 + *  - 行身段（窗口坐标）只用于命中判定，来自真实布局测量：每帧重算，不缓存槽位差、不模拟让位
 + *    位移——上一版按「实测槽位差」让位，行长不等（多行 AND 规则等）时被拖行会压到邻行身上，
 + *    且滚动中槽位表变旧，正是错位的根源；
++ *  - **指尖位置只认窗口坐标**：每次事件按「把手节点实时的窗口顶 + 事件在手把内的局部 Y」当场还原成
++ *    指尖的窗口 Y（[fingerWindowY]）——与参考实现全程用 `e.clientY` 同口径。Compose 的 `position`
++ *    是节点局部坐标，被拖行「即换即到位」是整行高瞬跳、自动翻滚又在指下滚内容，局部坐标会「手指
++ *    没动却变了」；把这种假位移累加，每换一次位手指 Y 就偏一整行：命中判定落回被拖行身后那一行、
++ *    刚换上去又被换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进边缘带触发误翻滚（列表自己上滑）。
++ *    参考实现 pointerdown 时特意从活动指针重新播种 pendX/pendY，注释原话：否则边缘翻滚用的是
++ *    残留 / 0 的 Y，「点一下把手页面就滚」——同一类错的两种表现，这里一并掐掉；
 + *  - 被拖行永远停在手指命中的那一档里（手指在屏幕内），容器不可能把它回收掉——所以不再需要
 + *    「拖到视口外就先写回一段」的中途提交：宿主的数据只在松手时动一次（[DragSortState.endDrag]），
 + *    拖动过程中零文档写入、零重组风暴；
@@ -6606,6 +6615,7 @@ index 0000000..db6f1fc
 +    private val tops = HashMap<Int, Float>()
 +    private val heights = HashMap<Int, Float>()
 +    private val handleTops = HashMap<Int, Float>()
++    private val handleCoords = HashMap<Int, LayoutCoordinates>()
 +
 +    internal var onMove: (from: Int, to: Int) -> Unit = { _, _ -> }
 +
@@ -6661,15 +6671,21 @@ index 0000000..db6f1fc
 +    fun handleModifier(index: Int): Modifier =
 +        Modifier
 +            // 记把手的窗口位置：手指的窗口 Y = 把手顶 + 把手内局部 Y，落点判定才不会带上系统偏差
-+            .onGloballyPositioned { handleTops[index] = it.boundsInWindow().top }
++            .onGloballyPositioned { coords ->
++                handleTops[index] = coords.boundsInWindow().top
++                handleCoords[index] = coords
++            }
 +            .pointerInput(index) {
 +                detectDragGestures(
 +                    onDragStart = { local -> startDrag(index, local.y) },
 +                    onDragCancel = { endDrag() },
 +                    onDragEnd = { endDrag() },
-+                    onDrag = { change, dragAmount ->
++                    onDrag = { change, _ ->
 +                        change.consume()
-+                        drag(dragAmount.y)
++                        // 只用「事件在手把里的局部 Y」+ 手把现在的窗口顶还原指尖的窗口 Y（[dragTo]）：
++                        // pointer 的局部位移里混着行自己挪动的假位移，累加它会每换一次位把 Y 带偏一整行 ——
++                        // 参考实现用的是 e.clientY（窗口坐标），这里按同一口径取，见 [fingerWindowY]。
++                        dragTo(index, change.position.y)
 +                    },
 +                )
 +            }
@@ -6678,19 +6694,39 @@ index 0000000..db6f1fc
 +        if (index < 0 || index !in orderState) return
 +        draggingHeight = heights[index] ?: 0f
 +        dragging = index
-+        val handleTop = handleTops[index]
 +        val top = tops[index]
-+        fingerY = when {
-+            handleTop != null -> handleTop + localY
-+            top != null -> top + draggingHeight / 2f
-+            else -> containerTop + draggingHeight / 2f
-+        }
++        fingerY = fingerWindowY(index, localY)
++            ?: if (top != null) top + draggingHeight / 2f
++            else containerTop + draggingHeight / 2f
 +    }
 +
-+    /** 手指移动：只更新窗口 Y 并跑一轮命中判定；被拖行的位置由它命中的档位决定（不跟手漂浮）。 */
-+    fun drag(dy: Float) {
-+        if (dragging < 0) return
-+        fingerY += dy
++    /**
++     * 指尖的窗口 Y = 把手节点**现在**的窗口顶 + 事件在手把内的局部 Y。
++     *
++     * 参考实现全程只用 `e.clientY`（窗口坐标）：行在视口里怎么挪都不影响指尖位置。
++     * Compose 的 `PointerInputChange.position` 是**节点局部坐标**——被拖行「即换即到位」（换位没有动画，
++     * 行会整行高整行高地瞬跳）、边缘自动翻滚让内容在指下滚动，这些都会让局部坐标「手指没动却变了」。
++     * 把这种位移当手指位移累加，每换一次位就偏一行高：命中判定于是落到被拖行身后那一行、把刚换上去的
++     * 位置又换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进上/下边缘触发误翻滚（= 拖着拖着列表自己上滑）。
++     * 所以这里不累加任何位移，每次事件当场把局部 Y 换算成窗口 Y。
++     *
++     * 优先读把手节点**实时**的 `positionInWindow()`（事件与坐标同属一帧的几何），拿不到（节点已解绑 / 还没量过）
++     * 再退回最后一次 `onGloballyPositioned` 记下的窗口顶；两者都没有才返回 null（这一事件不更新手指位置）。
++     */
++    private fun fingerWindowY(index: Int, localY: Float): Float? {
++        val coords = handleCoords[index]
++        if (coords != null && coords.isAttached) return coords.positionInWindow().y + localY
++        val top = handleTops[index] ?: return null
++        return top + localY
++    }
++
++    /**
++     * 手指移动：把事件换算成指尖的窗口 Y 后跑一轮命中判定；被拖行的位置由它命中的档位决定
++     * （不跟手漂浮）。
++     */
++    fun dragTo(index: Int, localY: Float) {
++        if (dragging < 0 || dragging != index) return
++        fingerY = fingerWindowY(index, localY) ?: return
 +        step()
 +    }
 +

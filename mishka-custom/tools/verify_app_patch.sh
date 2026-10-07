@@ -221,6 +221,26 @@ assert_contains 'if (cur < at) at -= 1' \
 assert_contains 'if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'finger over the dragged row itself is a no-op (no swap oscillation)'
+assert_contains 'private fun fingerWindowY(index: Int, localY: Float): Float?' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the finger Y is resolved in window coordinates (reference e.clientY, never accumulated)'
+assert_contains 'return coords.positionInWindow().y + localY' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the handle node position is read live for every pointer event'
+assert_contains 'dragTo(index, change.position.y)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'onDrag converts the local offset to a window Y instead of adding deltas'
+assert_not_contains 'dragAmount' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'no local-delta accumulation: the dragged row jumps a whole row height per swap and the auto-scroll moves the content under the finger, so node-local deltas contain phantom motion (it drifted the finger Y by one row per swap -> swap flicker + stray up-scroll)'
+# positionInWindow / boundsInWindow 是 androidx.compose.ui.layout 包里的扩展函数（不是接口成员）：
+# 少了 import，K2 报 Unresolved reference —— 与曾经漏 import dragSortItem 的 CI 失败同一类。
+assert_contains 'import androidx.compose.ui.layout.positionInWindow' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'positionInWindow is imported (it is an extension, not a LayoutCoordinates member)'
+assert_contains 'import androidx.compose.ui.layout.LayoutCoordinates' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'LayoutCoordinates is imported for the live handle coordinates map'
 assert_contains 'placementSpec = FlipSpec' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'non-dragged rows get the reference FLIP easing, dragged row stays instant'
