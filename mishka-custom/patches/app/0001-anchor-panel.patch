@@ -6469,10 +6469,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..d0e0bf0
+index 0000000..36dcc28
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,283 @@
+@@ -0,0 +1,405 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.Canvas
@@ -6480,6 +6480,7 @@ index 0000000..d0e0bf0
 +import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.offset
 +import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.shape.RoundedCornerShape
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.Stable
@@ -6491,7 +6492,16 @@ index 0000000..d0e0bf0
 +import androidx.compose.runtime.withFrameNanos
 +import androidx.compose.ui.Alignment
 +import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.alpha
++import androidx.compose.ui.draw.drawBehind
++import androidx.compose.ui.draw.drawWithContent
++import androidx.compose.ui.draw.shadow
++import androidx.compose.ui.geometry.CornerRadius
 +import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.geometry.Size
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.PathEffect
++import androidx.compose.ui.graphics.drawscope.Stroke
 +import androidx.compose.ui.graphics.vector.ImageVector
 +import androidx.compose.ui.input.pointer.pointerInput
 +import androidx.compose.ui.layout.boundsInWindow
@@ -6502,21 +6512,39 @@ index 0000000..d0e0bf0
 +import androidx.compose.ui.unit.IntOffset
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.zIndex
++import kotlin.math.roundToInt
 +import top.yukonga.miuix.kmp.basic.Icon
 +import top.yukonga.miuix.kmp.basic.IconButton
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +
 +/*
-+ * 按住把手拖动排序（对齐 mihomo_box WebUI `js/core.js` 的 `enableDragSort` 与 `.drag-handle`）：
-+ *  - 行首/行尾一个两列三点的把手（[DragHandle]），**按住即拖**——不做长按等待，与把手上的
-+ *    `touch-action: none` 同效；没有把手以外的排序入口（「⋯」菜单里的上移/下移已全部下线）；
-+ *  - 拖动期间**不改数据**：被拖行跟手，其它行按落点让出一行的空位，露出将要落下的空隙
-+ *    （落点在松手时才一次性写回，等价于 WebUI 芯片拖动的「松手换位一次」）；
-+ *  - 手指进入容器上下边缘时自动翻滚，长列表也能拖到首尾。
++ * 按住把手拖动排序（对齐 mihomo_box WebUI `js/core.js` 的 `enableDragSort`）：
++ *  - 行首一个两列三点的把手（[DragHandle]），**按住即拖**——不做长按等待，与把手上的
++ *    `touch-action: none` 同效；没有把手以外的排序入口；
++ *  - **列表内实时换位**：手指越过哪一行的中线，被拖行就落到那一档（即换即到位），其余行
++ *    按实测槽位让位。被拖行不做「跟手漂浮」——不累计手指位移，就没有翻滚时的漂移错位：
++ *    参考实现的注释写得很清楚，「被拖行必须即换即到位：给它补滑移动画 = 不跟手」；
++ *  - 拖动中的行加参考实现 `.rule-item.dragging` 的视觉：整行降透明 + 强调色淡底 +
++ *    1.5dp 虚线描边 + 淡阴影；
++ *  - 手指进入容器上下边缘时自动翻滚；虚拟化容器（LazyColumn）会回收滚出视口的行，
++ *    `recycleRows = true` 时把已拖动的距离先提交给宿主，让被拖行始终待在列表里
++ *    （与参考实现的 DOM 实时换位同构，代价是长距离拖动会分几次写回）。
 + *
-+ * 度量（行高、行窗口坐标、手指窗口 Y）只服务于手势判定，不进组合快照：拖动中每帧改快照状态
++ * 度量（槽位窗口坐标、手指窗口 Y）只服务于手势判定，不进组合快照：拖动中每帧改快照状态
 + * 只会让长列表反复重组。
 + */
++
++/** `.rule-item.dragging { opacity: .55 }`。 */
++private const val DragItemAlpha = 0.55f
++
++/** `.rule-item.dragging { background: var(--accent-soft) }`：--accent-soft = rgba(52,130,255,.12)。 */
++private const val DragItemTint = 0.12f
++
++/** 形状取 miuix `Card` 的默认圆角（CardDefaults.CornerRadius = 16.dp），虚线框贴着卡片走。 */
++private val DragItemRadius = 16.dp
++
++/** `outline-offset: -2px`：虚线画在行内 2dp 处。 */
++private val DragItemOutlineInset = 2.dp
 +
 +@Stable
 +internal class DragSortState {
@@ -6531,25 +6559,24 @@ index 0000000..d0e0bf0
 +    internal var target by mutableStateOf(-1)
 +        private set
 +
-+    /** 被拖行相对原位的位移（px）。 */
-+    internal var dragOffset by mutableStateOf(0f)
-+        private set
-+
 +    private var draggingHeight = 0f
 +    private var fingerY = 0f
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
-+    private var scrollBy: ((Float) -> Unit)? = null
++    private var scrollBy: ((Float) -> Float)? = null
++    /** 容器会回收滚出视口的行（LazyColumn 等）时为 true：见 [checkpointIfRecycled]。 */
++    internal var recycleRows = false
 +    private val tops = HashMap<Int, Float>()
 +    private val heights = HashMap<Int, Float>()
++    private val handleTops = HashMap<Int, Float>()
 +
 +    internal var onMove: (from: Int, to: Int) -> Unit = { _, _ -> }
 +
 +    /**
 +     * 行容器（Column / LazyColumn 都可以）：量容器窗口位置，并接上滚动能力。
-+     * 滚动能力用于拖动时的边缘自动翻滚。
++     * 滚动能力用于拖动时的边缘自动翻滚；返回本轮实际吃掉的位移（用于判断是否真的滚了）。
 +     */
-+    fun containerModifier(scrollBy: ((Float) -> Unit)? = null): Modifier {
++    fun containerModifier(scrollBy: ((Float) -> Float)? = null): Modifier {
 +        this.scrollBy = scrollBy
 +        return Modifier.onGloballyPositioned { coords ->
 +            val b = coords.boundsInWindow()
@@ -6558,10 +6585,14 @@ index 0000000..d0e0bf0
 +        }
 +    }
 +
-+    /** 行：量自己的槽位，并按拖动状态让位 / 跟手。顺序由宿主列表决定。 */
++    /**
++     * 行：量自己的槽位，并按拖动状态让位 / 落到目标档位。顺序由宿主列表决定。
++     *
++     * 位置回调放在 offset 外层：量到的永远是行的「槽位」窗口坐标（不含让位位移），
++     * 槽位差就是让位量——行高不一、带行距也照样准确。
++     */
 +    fun rowModifier(index: Int): Modifier =
 +        Modifier
-+            // 位置回调放在 offset 外层：量到的永远是行的「槽位」，不会被拖动位移污染
 +            .onGloballyPositioned { coords ->
 +                val b = coords.boundsInWindow()
 +                tops[index] = b.top
@@ -6570,34 +6601,52 @@ index 0000000..d0e0bf0
 +            .offset { IntOffset(0, offsetFor(index)) }
 +            .zIndex(if (index == dragging) 1f else 0f)
 +
-+    /** 被拖行跟手；其它行按落点让出一行的空位。 */
++    /** 被拖行落到目标槽位；其余行按槽位差让出一行。 */
 +    fun offsetFor(index: Int): Int {
 +        val from = dragging
 +        if (from < 0) return 0
-+        if (index == from) return dragOffset.toInt()
 +        val to = target
-+        if (to < 0 || to == from) return 0
-+        val h = draggingHeight.toInt()
++        if (to < 0) return 0
 +        return when {
-+            from < to && index in (from + 1)..to -> -h
-+            to < from && index in to until from -> h
++            index == from -> slotShift(to, from)
++            from < to && index in (from + 1)..to -> slotShift(index - 1, index)
++            to < from && index in to until from -> slotShift(index + 1, index)
++            else -> 0
++        }
++    }
++
++    /**
++     * 槽位位移：由两行的实测窗口坐标相减得到（自然含行距与行长不一的情况，
++     * 不再假设所有行等高——那是上一版错位的第二个来源）。
++     */
++    private fun slotShift(destSlot: Int, index: Int): Int {
++        val dest = tops[destSlot]
++        val here = tops[index]
++        if (dest != null && here != null) return (dest - here).roundToInt()
++        val h = draggingHeight.roundToInt()
++        return when {
++            destSlot < index -> -h
++            destSlot > index -> h
 +            else -> 0
 +        }
 +    }
 +
 +    /** 把手：按住即拖（越过触摸阈值后进入拖动，与 WebUI 把手上 touch-action:none 同效果）。 */
 +    fun handleModifier(index: Int): Modifier =
-+        Modifier.pointerInput(index) {
-+            detectDragGestures(
-+                onDragStart = { local -> startDrag(index, local.y, size.height.toFloat()) },
-+                onDragCancel = { cancelDrag() },
-+                onDragEnd = { endDrag() },
-+                onDrag = { change, dragAmount ->
-+                    change.consume()
-+                    drag(dragAmount.y)
-+                },
-+            )
-+        }
++        Modifier
++            // 记把手的窗口位置：手指的窗口 Y = 把手顶 + 把手内局部 Y，落点判定才不会带上系统偏差
++            .onGloballyPositioned { handleTops[index] = it.boundsInWindow().top }
++            .pointerInput(index) {
++                detectDragGestures(
++                    onDragStart = { local -> startDrag(index, local.y) },
++                    onDragCancel = { cancelDrag() },
++                    onDragEnd = { endDrag() },
++                    onDrag = { change, dragAmount ->
++                        change.consume()
++                        drag(dragAmount.y)
++                    },
++                )
++            }
 +
 +    private fun rowCenter(index: Int): Float? {
 +        val top = tops[index] ?: return null
@@ -6605,20 +6654,23 @@ index 0000000..d0e0bf0
 +        return top + h / 2f
 +    }
 +
-+    fun startDrag(index: Int, localY: Float, handleHeight: Float) {
++    fun startDrag(index: Int, localY: Float) {
 +        if (index < 0) return
 +        draggingHeight = heights[index] ?: 0f
 +        dragging = index
 +        target = index
-+        dragOffset = 0f
-+        // 手指按在把手上任意位置：先换算成行中心，之后一律用「手指窗口 Y」判定落点
-+        val center = rowCenter(index) ?: (containerTop + draggingHeight / 2f)
-+        fingerY = center + (localY - handleHeight / 2f)
++        val handleTop = handleTops[index]
++        val center = rowCenter(index)
++        fingerY = when {
++            handleTop != null -> handleTop + localY
++            center != null -> center
++            else -> containerTop + draggingHeight / 2f
++        }
 +    }
 +
++    /** 手指移动：只更新落点判定用的窗口 Y，被拖行的位置由「目标槽位」决定（不累计位移）。 */
 +    fun drag(dy: Float) {
 +        if (dragging < 0) return
-+        dragOffset += dy
 +        fingerY += dy
 +        target = targetFor(fingerY)
 +    }
@@ -6635,11 +6687,10 @@ index 0000000..d0e0bf0
 +    private fun reset() {
 +        dragging = -1
 +        target = -1
-+        dragOffset = 0f
 +        draggingHeight = 0f
 +    }
 +
-+    /** 落点判定与 WebUI 同口径：手指越过哪一行的中线，就把它插到那一行之前 / 之后。 */
++    /** 落点判定与参考实现同口径：手指越过哪一行的中线，就落到那一档。 */
 +    private fun targetFor(y: Float): Int {
 +        val from = dragging
 +        if (from < 0) return -1
@@ -6655,7 +6706,10 @@ index 0000000..d0e0bf0
 +        return t
 +    }
 +
-+    /** 边缘自动翻滚：手指进入容器上下 [edge] 内按深度滚动，滚一帧就重算一次落点。 */
++    /**
++     * 边缘自动翻滚：手指进入容器上下 [edge] 内按深度滚动一帧；滚一帧 = 行在指下挪了，
++     * 立刻补一轮落点判定。
++     */
 +    internal fun autoScroll(edge: Float, step: Float) {
 +        if (dragging < 0) return
 +        val scroller = scrollBy ?: return
@@ -6665,17 +6719,41 @@ index 0000000..d0e0bf0
 +        if (depth <= 0f) return
 +        val ratio = (depth / edge).coerceAtMost(1f)
 +        val delta = step * ratio * (if (depthUp > depthDown) -1f else 1f)
-+        scroller(delta)
++        if (scroller(delta) == 0f) return  // 已到尽头：不空转
 +        target = targetFor(fingerY)
++        checkpointIfRecycled()
++    }
++
++    /**
++     * 虚拟化容器（LazyColumn）会回收滚出视口的行：被拖行的槽位一旦离开容器，就先把
++     * 已拖动的这一段提交给宿主（下标顺带前移到落点），被拖行于是始终留在列表里。
++     * 提交后所有让位位移归零，视觉位置不变 —— 与参考实现「顺序早已在 DOM 里实时换好」同构。
++     */
++    private fun checkpointIfRecycled() {
++        if (!recycleRows) return
++        val from = dragging
++        val to = target
++        if (from < 0 || to < 0 || to == from) return
++        val top = tops[from] ?: return
++        val h = heights[from] ?: draggingHeight
++        val center = top + h / 2f
++        if (center > containerTop && center < containerBottom) return  // 还在视口里：不提前提交
++        dragging = to
++        onMove(from, to)
 +    }
 +}
 +
 +@Composable
-+internal fun rememberDragSortState(count: Int, onMove: (from: Int, to: Int) -> Unit): DragSortState {
++internal fun rememberDragSortState(
++    count: Int,
++    recycleRows: Boolean = false,
++    onMove: (from: Int, to: Int) -> Unit,
++): DragSortState {
 +    val state = remember { DragSortState() }
 +    val move = rememberUpdatedState(onMove)
-+    // 两个都是普通字段（非快照状态）：拖动中每帧改快照状态只会让长列表反复重组
++    // 三个都是普通字段（非快照状态）：拖动中每帧改快照状态只会让长列表反复重组
 +    state.count = count
++    state.recycleRows = recycleRows
 +    state.onMove = { from, to -> move.value(from, to) }
 +    // 拖动期间的边缘自动翻滚：只在拖动存在时跑帧循环，松手立刻停（不做常驻定时器）
 +    val density = LocalDensity.current
@@ -6700,8 +6778,52 @@ index 0000000..d0e0bf0
 +    modifier: Modifier = Modifier,
 +    content: @Composable () -> Unit,
 +) {
-+    Box(modifier = modifier.then(state.rowModifier(index))) { content() }
++    val active = state.dragging == index
++    val accent = MiuixTheme.colorScheme.primary
++    Box(
++        modifier = modifier
++            .then(state.rowModifier(index))
++            .then(if (active) Modifier.dragChrome(accent) else Modifier),
++    ) {
++        // 内容降到 .55：淡底与虚线框在外层画，保持清晰（参考实现整行 opacity .55，边框也一起淡，
++        // 这里把描边留在满不透明度——用户要的是「看得见虚线框」）
++        Box(modifier = Modifier.then(if (active) Modifier.alpha(DragItemAlpha) else Modifier)) {
++            content()
++        }
++    }
 +}
++
++/** 拖动中的行：强调色淡底（画在内容后）+ 1.5dp 虚线描边（画在内容上）+ 淡阴影。 */
++private fun Modifier.dragChrome(accent: Color): Modifier =
++    this
++        .shadow(
++            elevation = 6.dp,
++            shape = RoundedCornerShape(DragItemRadius),
++            clip = false,
++            ambientColor = accent.copy(alpha = 0.18f),
++            spotColor = accent.copy(alpha = 0.18f),
++        )
++        .drawBehind {
++            drawRoundRect(
++                color = accent.copy(alpha = DragItemTint),
++                cornerRadius = CornerRadius(DragItemRadius.toPx()),
++            )
++        }
++        .drawWithContent {
++            drawContent()
++            val inset = DragItemOutlineInset.toPx()
++            val radius = (DragItemRadius.toPx() - inset).coerceAtLeast(0f)
++            drawRoundRect(
++                color = accent,
++                topLeft = Offset(inset, inset),
++                size = Size((size.width - inset * 2).coerceAtLeast(0f), (size.height - inset * 2).coerceAtLeast(0f)),
++                cornerRadius = CornerRadius(radius),
++                style = Stroke(
++                    width = 1.5.dp.toPx(),
++                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(9f, 6f)),
++                ),
++            )
++        }
 +
 +/** 拖动排序的把手：与 WebUI `.drag-handle` 同形（两列三点），按住即拖。 */
 +@Composable
@@ -6820,7 +6942,7 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..7a2c3a0
+index 0000000..08ad154
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 @@ -0,0 +1,2281 @@
@@ -6932,7 +7054,7 @@ index 0000000..7a2c3a0
 +    val broken = seq != null && seq.kind != YamlNode.Kind.SEQ && !doc.isNullText(seq)
 +    var plainDelete by remember { mutableStateOf(-1) }
 +    val listState = rememberLazyListState()
-+    val dragSort = rememberDragSortState(items.size) { from, to ->
++    val dragSort = rememberDragSortState(items.size, recycleRows = true) { from, to ->
 +        val label = items.getOrNull(from)?.let { rowTitle(from, it) } ?: unit
 +        host.moveItem(seqPath, from, to, label)
 +    }
@@ -20135,7 +20257,7 @@ index 018c54d..4623ff2 100644
  private fun tunStackLabel(stack: String): String =
      TUN_STACK_OPTIONS.firstOrNull { it.first == stack.lowercase() }?.second ?: stack.ifEmpty { "--" }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
-index 119695c..61135e5 100644
+index 119695c..e57dd51 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 @@ -7,13 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
@@ -20178,7 +20300,7 @@ index 119695c..61135e5 100644
 +    // 列表就是「覆写生效顺序」本身：按住行尾把手拖动即改顺序，不再用一对上/下箭头一点点挪。
 +    // 拖动只改 order 的顺序，落点判定与校验仍走原有保存路径。
 +    val listState = rememberLazyListState()
-+    val dragSort = rememberDragSortState(displayed.size) { from, to ->
++    val dragSort = rememberDragSortState(displayed.size, recycleRows = true) { from, to ->
 +        val moved = displayed.toMutableList().also { it.add(to, it.removeAt(from)) }
 +        order = moved + order.filter { it !in moved }
 +    }

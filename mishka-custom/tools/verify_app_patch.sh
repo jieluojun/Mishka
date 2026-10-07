@@ -157,9 +157,12 @@ assert_contains '0.0.0.0' \
   'Chinese external-control hint warns about wildcard unauthenticated exposure'
 
 # --- 与 mihomo_box 对齐的三处交互：拖动排序 / 图标按钮 / 并发测速 ---
-assert_contains 'internal fun rememberDragSortState(count: Int, onMove: (from: Int, to: Int) -> Unit): DragSortState' \
+assert_contains 'internal fun rememberDragSortState(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'hold-and-drag sorting helper is present'
+assert_contains 'recycleRows: Boolean = false' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'drag state exposes the recycling-container switch'
 assert_contains 'DragSortRow(state = dragSort, index = i) {' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
   'sequence list rows use the drag-sort handle'
@@ -202,6 +205,23 @@ check_last_param_is_lambda() {
     fail=1
   fi
 }
+# --- 拖动排序：与参考实现同构（列表内实时换位 + 虚线描边 + 虚拟化容器保活）---
+assert_contains 'PathEffect.dashPathEffect' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'dragged row draws the reference dashed outline'
+assert_contains 'return (dest - here).roundToInt()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'row shifting uses measured slot geometry (spacing and uneven heights)'
+assert_not_contains 'dragOffset' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'dragged row no longer accumulates a finger offset (no auto-scroll drift)'
+assert_contains 'private fun checkpointIfRecycled' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'recycling containers keep the dragged row alive'
+assert_contains 'recycleRows = true' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'lazy sequence list opts into recycle-aware dragging'
+
 check_last_param_is_lambda MiniIconButton app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 check_last_param_is_lambda DragSortRow app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 check_last_param_is_lambda rememberDragSortState app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
