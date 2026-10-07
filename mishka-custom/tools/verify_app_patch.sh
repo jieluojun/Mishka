@@ -181,6 +181,15 @@ assert_not_contains 'ItemMenuDialog' \
 assert_not_contains 'override_move_up' \
   app/src/main/res/values/strings.xml \
   'unused move-up strings are removed (default locale)'
+# --- 2026-10-08：补丁变基到 c94f3bc（上游给 API 路径段加了 pathSegment 编码，与补丁的 pathSeg
+# 同行相撞致 CI 三方合并冲突）。合流结论：上游的 Ktor encodeURLPath 实现更正确（表单编码的
+# URLEncoder 会把空格编成 +），补丁侧删掉 pathSeg/URLEncoder，调用点统一用上游 pathSegment。
+assert_not_contains 'pathSeg(' \
+  app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
+  'obsolete URLEncoder-based pathSeg is gone (unified on upstream pathSegment)'
+assert_not_contains 'URLEncoder' \
+  app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
+  'URLEncoder import is gone with pathSeg'
 assert_contains 'suspend fun getGroupDelay(' \
   app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
   'group-level delay endpoint is wired'

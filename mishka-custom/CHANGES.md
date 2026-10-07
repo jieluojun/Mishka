@@ -1,3 +1,21 @@
+# 本次改动（2026-10-08）——补丁变基到 c94f3bc（修 CI 冲突）
+
+> **背景**：CI 在 `setup.sh` 5/6 步失败：`MihomoApiClient.kt` 三方合并冲突。
+> fork 已从补丁基线 `5e67435` 前进到 `c94f3bc`，上游给 API 路径段加了 URL 编码
+> （`pathSegment()` + Ktor `encodeURLPath`，调用点 7 处），与补丁的自研编码
+> （`pathSeg()` + `URLEncoder`，调用点 3 处）改了相同的行。
+>
+> **合流结论**：采用上游实现——`URLEncoder` 是表单编码（空格→`+`，路径段里是错的，
+> 之前靠 `.replace("+", "%20")` 打补丁），`encodeURLPath(encodeSlash=true)` 才是
+> 路径段的正确编码，且上游注释把 chi 路由/内核二次解码的约束写全了。补丁侧删掉
+> `pathSeg` helper + `URLEncoder` import，3 处调用点改用 `pathSegment`；其余改动
+> （`delayBodyOrThrow`、`getGroupDelay`、companion 常量、异常类）原样保留。
+> 其余 66 个文件与变基前逐字节一致（已对拍，无三方错位）。
+>
+> 补丁与 `BASELINE.txt` 已按 `c94f3bc` 重新导出（`upstream_commit` 已更新）；
+> `setup.sh` 在 CI 上走普通 `apply` 直打分支，不再需要 `--3way`。
+> `verify_app_patch.sh` 新增 2 条断言（`pathSeg(`/`URLEncoder` 不得回潮），182 项全过。
+
 # 本次改动（2026-10-08）——编辑器残留 / 锚点重复 / 拖动落点 / find-process-mode 四处修复
 
 > **背景**：真机反馈三个问题——① 路由规则拖动排序后倒数第二条的策略名多出 `CT`
