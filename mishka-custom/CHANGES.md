@@ -1,5 +1,25 @@
 # 本次改动（2026-10-07）——与 mihomo_box 模块对齐的三处交互
 
+> **追加（CI 构建报错修复）**：首轮 CI 在 `:app:compileReleaseKotlin` 失败（3m37s），**94 条**错误全是同一处——
+> `MiniIconButton` 的 `onClick` 被排在 `modifier` **前面**，而 47 处调用全用尾随 lambda
+> （`MiniIconButton(icon, desc) { … }`）。Kotlin 的尾随 lambda 永远绑给**声明里最后一个参数**，
+> 于是 lambda 被当成 `Modifier`：`No value passed for parameter 'onClick'` +
+> `actual type is '() -> Unit', but 'Modifier' was expected`（含少量 `() -> String` /
+> `() -> List<String>` / `() -> FormMapEdit` 等变体，都是同一个根因）。
+>
+> 修法：声明改为 `(icon, contentDescription, modifier = …, enabled = …, onClick)`——`onClick`
+> 放最后，47 处调用一字不改。同时补上两道防回归：
+> - `tools/check_trailing_lambda.py`（新增，纯文本检查）：扫 `custom/` 下所有「尾随 lambda 调用」，
+>   要求被调函数声明的最后一个参数是函数类型；当前 **83 处调用全部匹配**，负测试（把 `onClick`
+>   挪回中间）能精确列出 47 处站点并退出 1。工具的切分逻辑踩过两个坑并已修：`->` 里的 `>`
+>   曾被当成泛型收尾把深度减成负数（导致漏报）、注释里的反引号/引号会带偏引号状态（先用
+>   `blank_comments` 置空注释再扫）。
+> - `tools/verify_app_patch.sh` 内联 bash 守护：检查 `MiniIconButton` / `DragSortRow` /
+>   `rememberDragSortState` 的最后一个参数是不是函数类型（无 python3 时也生效）。
+>
+> 补丁与 `BASELINE.txt` 已按修复后的源码重新导出（`patch_sha256` 见该文件）；本条之外
+> 的改动与三处交互的实现细节不变。
+
 基线未变：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`。参考实现是
 mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/core.js` /
 `js/page-proxies.js` / `css/style.css`）；三处交互全部落在原生 Compose，不涉及 web 面板

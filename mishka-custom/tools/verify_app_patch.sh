@@ -188,6 +188,36 @@ assert_contains 'private val batchTesting = mutableSetOf<String>()' \
   app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
   'batch test re-entrancy lock is wired'
 
+# --- 结构检查：尾随 lambda 调用的函数，最后参数必须是函数类型（无编译器环境的防回归）---
+# 教训：MiniIconButton 曾把 onClick 排在 modifier 之前，47 处 `MiniIconButton(icon, desc) { … }`
+# 的尾随 lambda 全部绑到 Modifier 上，CI 报 108 条 "No value passed for parameter 'onClick'"。
+check_last_param_is_lambda() {
+  local fn="$1" path="$2" last
+  last="$(awk -v fn="$fn" '$0 ~ ("^(internal |private )?fun " fn "\\(") {f=1; next} f { if ($0 ~ /^\)/) exit; if ($0 ~ /[^ \t]/ && $0 !~ /^[ \t]*\/\//) last=$0 } END{print last}' "$REPO/$path" | tr -s ' ')"
+  if [[ "$last" == *"->"* || "$last" == *"@Composable"* ]]; then
+    echo "ok  $fn 的最后一个参数是函数类型（尾随 lambda 调用可用）"
+  else
+    echo "FAIL $fn 的最后一个参数不是函数类型：${last:0:80}" >&2
+    echo '     调用方用尾随 lambda 时会绑到最后一个参数上——K2 会报 No value passed for parameter …' >&2
+    fail=1
+  fi
+}
+check_last_param_is_lambda MiniIconButton app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
+check_last_param_is_lambda DragSortRow app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
+check_last_param_is_lambda rememberDragSortState app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
+
+# 全树版检查（custom/ 下所有尾随 lambda 调用）；没有 python3 就跳过，上面的 bash 守护仍在
+if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_trailing_lambda.py" ]]; then
+  if python3 "$ROOT/tools/check_trailing_lambda.py" --repo "$REPO"; then
+    echo "ok  尾随 lambda 全树检查通过"
+  else
+    echo "FAIL 尾随 lambda 全树检查发现不匹配（见上方清单）" >&2
+    fail=1
+  fi
+else
+  echo "warn 没有 python3，跳过 tools/check_trailing_lambda.py（bash 守护仍在）"
+fi
+
 # --- web 界面已完全移除（防回归）---
 assert_not_contains 'PanelScreen' \
   app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \

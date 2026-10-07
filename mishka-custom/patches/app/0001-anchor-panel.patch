@@ -6469,10 +6469,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..7c1790a
+index 0000000..d0e0bf0
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,281 @@
+@@ -0,0 +1,283 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.Canvas
@@ -6733,9 +6733,11 @@ index 0000000..7c1790a
 +internal fun MiniIconButton(
 +    icon: ImageVector,
 +    contentDescription: String,
-+    onClick: () -> Unit,
-+    enabled: Boolean = true,
 +    modifier: Modifier = Modifier,
++    enabled: Boolean = true,
++    // onClick 必须是最后一个参数：47 处调用全用尾随 lambda（`MiniIconButton(icon, desc) { … }`），
++    // 排到 modifier 前面时 lambda 会绑到 Modifier 上，K2 直接报 "No value passed for parameter 'onClick'"
++    onClick: () -> Unit,
 +) {
 +    IconButton(
 +        onClick = onClick,
