@@ -32,6 +32,13 @@
 > 提前触发（`endDrag` 提交），残余事件又被外层滚动容器接走变成「整体上滑」。修法：把手改经
 > `pointerInteropFilter` **独占**触摸流（DOWN 返回 true 后这根手指对 Compose 手势仲裁不可见），
 > 结束条件只剩真抬指 ACTION_UP 与系统级 ACTION_CANCEL —— **手指按住不松就不打断排序**（§9）。
+>
+> **追加（2026-10-07 实机反馈四轮）**：§9 落地后「按住排序按钮无法拖动排序、只能上下翻动
+> 列表」。根因：`pointerInteropFilter` 认领流后默认给移动事件挂 `suppressMovementConsumption`
+> ——**只返回 true 不够**，外层 scrollable 仍能在触摸 slop 后像 ViewGroup 拦截子 View 一样接走
+> 这条流（我们收 ACTION_CANCEL，把手按下退化成纯滚动）。修法：每个把手一个
+> `RequestDisallowInterceptTouchEvent` 开关（`DragHandle` 里 remember，与 interop 节点一一绑定），
+> DOWN 时 `invoke(true)` 禁止外层拦截，移动事件改在 Initial 趟消费，外层再无机会接走（§10）。
 
 基线未变：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`。参考实现是
 mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/core.js` /
@@ -234,9 +241,38 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
 - **只要手指按住不松、事件还在来，排序就继续**，不以任何 Compose 侧取消为结束条件。
   命中判定 / 实时换位 / FLIP / 边缘自动翻滚 / 松手一次性写回全部不变。
 
-防回归：verify 新增 3 条 —— `pointerInteropFilter { event -> handleTouch(index, event) }` 在位、
-结束分支只剩 `MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->`、`detectDragGestures(` 不再
-允许出现（旧仲裁路径整段移除）；`dragAmount` 禁用断言维持。
+防回归：verify 新增 3 条 —— `pointerInteropFilter` 独占接线在位、结束分支只剩
+`MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->`、`detectDragGestures(` 不再允许出现
+（旧仲裁路径整段移除）；`dragAmount` 禁用断言维持。
+
+## 10. 五修（拖动排序）：禁止外层拦截，恢复「按住即排序」
+
+症状（§9 落地后实机）：按住排序按钮无法拖动排序了，只能上下翻动列表。
+
+根因（androidx `PointerInteropFilter` 源码）：interop 认领流后会给内部指针事件挂
+`suppressMovementConsumption = !disallowIntercept` —— 移动事件即使被我们消费，对祖先仍算
+「可拦截」；外层 scrollable 在触摸 slop 后消费移动 → interop 看到消费且 `!disallowIntercept` →
+给我们发 ACTION_CANCEL（`endDrag`，此次没换位、无 toast），列表归 scrollable 滚。表现上把手按下
+= 纯滚动：§9 只做到了「DOWN 认领流」，没做 View 体系里 `requestDisallowInterceptTouchEvent`
+这半步。
+
+修法：
+
+- `handleModifier` 增加 `disallow: RequestDisallowInterceptTouchEvent` 参数，经
+  `pointerInteropFilter(requestDisallowInterceptTouchEvent = disallow)` 挂上；`DragHandle` 里
+  `remember { RequestDisallowInterceptTouchEvent() }` **每把手一个实例**——该实例与 interop 节点
+  一一绑定（赋值会把实例解绑旧节点、绑到新节点），全列表共享一个会让 `invoke(true)` 作用到
+  最后组合的那个把手上；
+- DOWN：`startDrag` 后立刻 `disallow(true)`。此后移动事件在 Initial 趟即消费
+  （`shouldConsumeNow = disallowIntercept`），外层 scrollable 在任何趟都拿不到未消费的移动，
+  拦截无从发生；
+- 全抬指后 interop 自动 `reset()` 恢复允许拦截，无需手动复位；
+- 命中判定 / 实时换位 / FLIP / 边缘自动翻滚 / 松手一次性写回 / 结束条件（UP、系统级 CANCEL）
+  一律维持 §9。
+
+防回归：verify 断言替换 / 新增 —— `requestDisallowInterceptTouchEvent = disallow` 在位、DOWN
+调 `disallow(true)`、回调穿参 `handleTouch(index, event, disallow)`；「结束分支只剩
+UP/CANCEL」「`detectDragGestures(` 禁现」两条维持。
 
 ## 验证
 
@@ -247,6 +283,9 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
   替换为把手触摸回调接线 `dragTo(index, event.getY(i))`。此前各轮断言（指尖窗口坐标解算
   `fingerWindowY`、每次事件读实时 `positionInWindow()`、局部 Y → 窗口 Y 换算、`dragAmount`
   禁用、两个 import 在位、v3 实时换位口径、4 处宿主按 `order` 渲染、合集 ✎ 语义等）全部维持通过。
+- §10 落地后同脚本复跑 → **150 条 ok / 0 FAIL**：本轮 2 条新增（`disallow(true)` 禁拦截在 DOWN
+  在位、开关穿参进触摸回调）+ 1 条替换（独占接线断言改钉 `requestDisallowInterceptTouchEvent =
+  disallow`）；尾随 lambda（84 处）与跨包 import（166 符号）全树检查继续全绿。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 

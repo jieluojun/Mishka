@@ -237,9 +237,15 @@ assert_not_contains 'dragAmount' \
 # 实时换位移动指下内容时拖动手势被外层取消/抢走 → 排序中途打断 + 残留事件带着列表整体上滑。
 # 换成 pointerInteropFilter 独占触摸流：DOWN 返回 true 后外层任何手势都看不到这根手指，
 # 结束条件只剩真抬指 / 系统级 CANCEL —— 手指按住不松就不打断。
-assert_contains 'pointerInteropFilter { event -> handleTouch(index, event) }' \
+assert_contains 'requestDisallowInterceptTouchEvent = disallow' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the drag handle exclusively owns the raw touch stream (no Compose arbitration can cancel the drag)'
+assert_contains 'disallow(true)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'DOWN forbids ancestor interception: without it the interop filter leaves moves interceptable and the outer scrollable steals the stream after slop (handle press degrades to plain scrolling)'
+assert_contains 'handleTouch(index, event, disallow)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the per-handle disallow switch is threaded into the touch callback'
 assert_contains 'MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the drag ends only on a real finger lift or a framework stream cancel'

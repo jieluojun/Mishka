@@ -6471,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..7a413b2
+index 0000000..b52a805
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,527 @@
+@@ -0,0 +1,547 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import android.view.MotionEvent
@@ -6510,6 +6510,7 @@ index 0000000..7a413b2
 +import androidx.compose.ui.graphics.PathEffect
 +import androidx.compose.ui.graphics.drawscope.Stroke
 +import androidx.compose.ui.graphics.vector.ImageVector
++import androidx.compose.ui.input.pointer.RequestDisallowInterceptTouchEvent
 +import androidx.compose.ui.input.pointer.pointerInteropFilter
 +import androidx.compose.ui.layout.LayoutCoordinates
 +import androidx.compose.ui.layout.boundsInWindow
@@ -6548,6 +6549,9 @@ index 0000000..7a413b2
 + *    手势仲裁（外层滚动容器、整行点击等）完全不可见。旧实现走 `detectDragGestures`，与外层
 + *    scrollable 抢同一条指针流——自动翻滚 + 实时换位让内容在指下移动时，拖动手势会被外层取消 / 抢走：
 + *    排序中途被打断（虚线框消失、提前写回），残留事件又被外层滚动容器接走变成「整体上滑」。
++ *    **只返回 true 还不够**：interop 默认给移动挂 `suppressMovementConsumption`（外层仍可在触摸
++ *    slop 后像 ViewGroup 拦截子 View 一样接走这条流——把手按下会退化成纯滚动），所以 DOWN 还要经
++ *    每把手一个的 `RequestDisallowInterceptTouchEvent` invoke(true) 禁止外层拦截。
 + *    现在结束条件只有真抬指（ACTION_UP）与系统级 ACTION_CANCEL（之后这条流确实再无事件）；
 + *    **只要手指按住不松、事件还在来，排序就继续**，不以任何 Compose 侧的取消为结束条件；
 + *  - 被拖行永远停在手指命中的那一档里（手指在屏幕内），容器不可能把它回收掉——所以不再需要
@@ -6680,33 +6684,47 @@ index 0000000..7a413b2
 +    /**
 +     * 把手：按住即拖（DOWN 立刻进入拖动，与 WebUI 把手上 touch-action:none 同效果）。
 +     *
-+     * 触摸流经 [pointerInteropFilter] 由把手**独占**：DOWN 返回 true 后 Compose 把手势消费的
-+     * 变化全部吃掉，外层 scrollable / 整行点击等任何手势都看不到这根手指——不存在「仲裁输给外层、
-+     * 拖动被取消」的路径（旧实现 `detectDragGestures` 在自动翻滚 + 实时换位移动指下内容时会被外层
-+     * 取消 / 抢流：排序中途打断 + 残留事件带着列表「整体上滑」）。结束条件只有真抬指（ACTION_UP）
-+     * 与系统级 ACTION_CANCEL；**手指按住不松，排序就不打断**。
++     * 触摸流经 [pointerInteropFilter] 由把手**独占**：DOWN 返回 true 且 [disallowIntercept] 调了
++     * true 后，移动事件在 Initial 趟就被消费、外层 scrollable / 整行点击等任何手势都看不到这根手指
++     * ——不存在「仲裁输给外层、拖动被取消」的路径（旧实现 `detectDragGestures` 在自动翻滚 + 实时
++     * 换位移动指下内容时会被外层取消 / 抢流：排序中途打断 + 残留事件带着列表「整体上滑」）。
++     * **只返回 true 不够**：不 invoke(true) 时 interop 给移动挂 `suppressMovementConsumption`，
++     * 外层 scrollable 仍可在触摸 slop 后拦截这条流（把手按下变成纯滚动）——必须经 [disallow]
++     * 禁拦截。结束条件只有真抬指（ACTION_UP）与系统级 ACTION_CANCEL；
++     * **手指按住不松，排序就不打断**。
++     *
++     * @param disallow 每个把手实例自己的「禁止外层拦截」开关（[DragHandle] 里 remember）：
++     *   该实例与**本把手**的 interop 节点一一绑定，invoke(true) 只作用于本把手这条流。
 +     */
 +    @OptIn(ExperimentalComposeUiApi::class)
-+    fun handleModifier(index: Int): Modifier =
++    fun handleModifier(index: Int, disallow: RequestDisallowInterceptTouchEvent): Modifier =
 +        Modifier
 +            // 记把手的窗口位置：手指的窗口 Y = 把手顶 + 把手内局部 Y，落点判定才不会带上系统偏差
 +            .onGloballyPositioned { coords ->
 +                handleTops[index] = coords.boundsInWindow().top
 +                handleCoords[index] = coords
 +            }
-+            .pointerInteropFilter { event -> handleTouch(index, event) }
++            .pointerInteropFilter(requestDisallowInterceptTouchEvent = disallow) { event ->
++                handleTouch(index, event, disallow)
++            }
 +
 +    /**
 +     * 把手的触摸回调：事件坐标已被 Compose 换算到把手节点局部坐标（与旧版 `change.position` 同口径，
 +     * 见 [fingerWindowY] 的窗口 Y 还原）。返回 true = 独占这条流，Compose 其它手势不再收到它。
 +     */
-+    private fun handleTouch(index: Int, event: MotionEvent): Boolean =
++    private fun handleTouch(
++        index: Int,
++        event: MotionEvent,
++        disallow: RequestDisallowInterceptTouchEvent,
++    ): Boolean =
 +        when (event.actionMasked) {
 +            MotionEvent.ACTION_DOWN -> {
 +                // 已在拖（另一根手指按着）：把新流也吞掉，别让它漏给外层滚动容器
 +                if (touchPointerId >= 0) return true
 +                touchPointerId = event.getPointerId(0)
 +                startDrag(index, event.getY(0))
++                // 禁止外层拦截：这条流从此归把手，scrollable 不能在 slop 后接走（全抬指后 interop 自动复位）
++                disallow(true)
 +                true
 +            }
 +            MotionEvent.ACTION_MOVE -> {
@@ -6953,10 +6971,12 @@ index 0000000..7a413b2
 +@Composable
 +internal fun DragHandle(state: DragSortState, index: Int, modifier: Modifier = Modifier) {
 +    val tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
++    // 每个把手自己的「禁止外层拦截」开关：与 interop 节点一一绑定（实例被复用到别的节点会解绑旧节点）
++    val disallow = remember { RequestDisallowInterceptTouchEvent() }
 +    Box(
 +        modifier = modifier
 +            .size(40.dp)
-+            .then(state.handleModifier(index))
++            .then(state.handleModifier(index, disallow))
 +            .semantics { contentDescription = "按住拖动排序" },
 +        contentAlignment = Alignment.Center,
 +    ) {
