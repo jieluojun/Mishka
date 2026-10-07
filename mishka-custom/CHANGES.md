@@ -232,14 +232,56 @@ rAF（`if (moveRaf) return; moveRaf = requestAnimationFrame(() => step())`），
 防回归：verify 新增 4 条 —— `stepPending` 标记存在、`drainStep()` 存在、帧循环里
 `state.drainStep()` 在位、`fingerY +=` 全文件禁止（局部位移累加是同一个坑的写法本身）。
 
+## 10. 五修（拖动排序）：手势改挂容器（对齐参考实现的 setPointerCapture）+ 翻滚只在手指推过可见行边界时启动
+
+用户录屏（10:48，路由规则页，61.7fps / 463 帧）本轮又逐帧量了一遍，用**单行文字**（"NETWORK  UDP"，
+唯一、匹配度恒为 1.00）跟踪，得到一段没有歧义的时间线：
+
+| 时间 | 测到的东西 |
+| --- | --- |
+| 0.00–3.40s | 该行固定在 y=867——拖动行在换位（虚线框从 2794 逐档爬到 1090），其余行纹丝不动 |
+| 2.33–3.40s | 手指继续上移 374px（点迹 1163→789），画面**完全没有响应**：拖动在这段时间没跟上手指 |
+| 3.50–4.18s | 手指几乎不动（636→619），行却以 **≈2300px/s 连续下移 0.68s**（≈8 档/秒）——换位在无人驱动下狂奔 |
+| 4.18–4.28s | 手指仍按着，拖动被收尾并写回（弹出「已移动 MATCH」），视口**瞬跳 -2022px** |
+| 4.28–6.61s | 稳定；6.61s 手指抬起后弹层收起 |
+
+两个结构性问题，都出在「手势挂在哪」：
+
+**（1）手势挂在把手上**（`detectDragGestures` 装在 40dp 把手节点，而把手身处在被拖行里、跟着整行瞬跳）。
+Compose 里指针流绑定在节点上：行一换位、被回收、或节点被重建，手势就可能被判 Cancel —— **这就是
+「拖动被打断」**（4.18s 那一下：手指还按着，却走了收尾 + 写回 + 弹 toast）。参考实现恰好在同一点上留过
+血泪注释：捕获要挂 **container**，不能挂把手（「挂不再能命中事件的节点，引擎会悄悄解捕获」）。
+
+**（2）自动翻滚的触发条件太宽**（手指进容器上下 88dp 带内就滚，与参考实现一致）。用户拖到列表上方时
+手指本来就在带内，加上（1）造成的事件积压 / 坐标漂移，列表就整片滑走——「往上拖动排序时会触发上滑」。
+
+修法（`custom/forms/DragSort.kt`）：
+
+- **手势搬到容器**：`containerModifier` 里挂容器级 `pointerInput`，在 **Initial 趟**收事件——
+  ① 按下先做把手命中判定（`handleAt`，等价 `e.target.closest('.drag-handle')`），不在把手上就完全不干预
+  （列表照常滚动、卡片照常点击）；② 在把手上按下即开始拖（参考实现同款，无长按等待），并在 Initial 趟消费
+  整串指针，列表滚动 / 卡片点击 / 弹层下拉都抢不走；③ 指尖位置 = 容器窗口顶 + 事件局部坐标，**一次算出、
+  不累加**（容器拖动中不动，所以这就是参考实现的 `e.clientY` 口径）；④ 指针流属于稳定节点，换位 / 回收都
+  不会把手势打断——不再有中途收尾与中途写回；
+- **参考实现的 `dragMoved`**：只按下没真拖动（< 8dp）时，任何情况下都不启动翻滚（「光点把手绝不能把列表带着走」）；
+- **翻滚加方向校验**：只有当手指**已经推过可见行的上 / 下边界**（要够到视口外的行）时才翻滚；指尖还落在
+  列表里、拖动行还有换位空间时绝不滚动。斜坡与带宽仍按参考实现
+  （E = clamp(容器高×15%, 44dp, 88dp)，v = 1 + depth/E×13 dp/帧），只是不再「提前抢跑」。
+
+防回归：verify 新增 8 条并删掉 5 条已失效的旧断言（窗口坐标解算那套随实现一起退场）——
+容器 Initial 趟捕获、`PointerEventPass` import、把手命中判定、`dragTo(index, change.position.y)` 直读、
+把手不再挂手势、`moved` 门闩、上 / 下两条边界校验、`detectDragGestures` 不复存在。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 67 → 71 条（总计 **150 条
-  ok / 0 FAIL**）——本轮 4 条：`stepPending` 标记、`drainStep()`、帧循环接线、`fingerY +=` 禁止。
-  §8 的 6 条（指尖窗口坐标解算 / 每次事件读实时 `positionInWindow()` / `onDrag` 只做换算 /
-  `dragAmount` 禁 / 两个 import 在位）与更早的 v3 批次（实时换位 / 插入下标修正 / 手指在拖行上
-  不抖 / FLIP 缓动 / 无中途写回 / 4 处宿主按 `order` 渲染 / 合集 ✎ 语义 2 条）一并保留。
+  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 71 → 77 条（总计 **156 条
+  ok / 0 FAIL**）——本轮的 8 条：容器 Initial 趟捕获、`PointerEventPass` import、把手命中判定
+  `handleAt`、`dragTo(index, change.position.y)` 直读事件、把手不再挂手势（`.pointerInput(index)`
+  禁止）、`moved` 门闩（`!moved` 直接返回）、上边界与下边界两条方向校验、`detectDragGestures`
+  与 `import ...detectDragGestures` 均不存在。§9 的 4 条（合帧 `drainStep` / `stepPending`、
+  `dragAmount` 禁、`fingerY +=` 禁）与 v3 批次（实时换位 / 插入下标修正 / 手指在拖行上不抖 /
+  FLIP 缓动 / 无中途写回 / 4 处宿主按 `order` 渲染 / 合集 ✎ 语义 2 条）一并保留。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 

@@ -6471,17 +6471,16 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..d3a7f77
+index 0000000..7c66228
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,552 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
 +import androidx.compose.animation.core.FiniteAnimationSpec
 +import androidx.compose.animation.core.tween
 +import androidx.compose.foundation.Canvas
-+import androidx.compose.foundation.gestures.detectDragGestures
 +import androidx.compose.foundation.layout.Box
 +import androidx.compose.foundation.layout.size
 +import androidx.compose.foundation.lazy.LazyItemScope
@@ -6509,11 +6508,11 @@ index 0000000..d3a7f77
 +import androidx.compose.ui.graphics.PathEffect
 +import androidx.compose.ui.graphics.drawscope.Stroke
 +import androidx.compose.ui.graphics.vector.ImageVector
++import androidx.compose.ui.input.pointer.PointerEventPass
++import androidx.compose.ui.input.pointer.awaitPointerEventScope
 +import androidx.compose.ui.input.pointer.pointerInput
-+import androidx.compose.ui.layout.LayoutCoordinates
 +import androidx.compose.ui.layout.boundsInWindow
 +import androidx.compose.ui.layout.onGloballyPositioned
-+import androidx.compose.ui.layout.positionInWindow
 +import androidx.compose.ui.platform.LocalDensity
 +import androidx.compose.ui.semantics.contentDescription
 +import androidx.compose.ui.semantics.semantics
@@ -6536,20 +6535,22 @@ index 0000000..d3a7f77
 + *  - 行身段（窗口坐标）只用于命中判定，来自真实布局测量：每帧重算，不缓存槽位差、不模拟让位
 + *    位移——上一版按「实测槽位差」让位，行长不等（多行 AND 规则等）时被拖行会压到邻行身上，
 + *    且滚动中槽位表变旧，正是错位的根源；
-+ *  - **指尖位置只认窗口坐标**：每次事件按「把手节点实时的窗口顶 + 事件在手把内的局部 Y」当场还原成
-+ *    指尖的窗口 Y（[fingerWindowY]）——与参考实现全程用 `e.clientY` 同口径。Compose 的 `position`
-+ *    是节点局部坐标，被拖行「即换即到位」是整行高瞬跳、自动翻滚又在指下滚内容，局部坐标会「手指
-+ *    没动却变了」；把这种假位移累加，每换一次位手指 Y 就偏一整行：命中判定落回被拖行身后那一行、
-+ *    刚换上去又被换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进边缘带触发误翻滚（列表自己上滑）。
-+ *    参考实现 pointerdown 时特意从活动指针重新播种 pendX/pendY，注释原话：否则边缘翻滚用的是
-+ *    残留 / 0 的 Y，「点一下把手页面就滚」——同一类错的两种表现，这里一并掐掉；
++ *  - **手势挂在容器上、指尖位置直接读事件**（[DragSortState.containerModifier]）：与参考实现
++ *    `container.setPointerCapture(capId)` 同构（它特意不挂把手：挂「拖起来后不再命中事件的节点」会被
++ *    引擎悄悄解捕获，手指一滑出行就丢 move/up，表现为拖动卡住 + 虚线框残留）。容器节点拖动中不动，
++ *    所以事件局部坐标 = 视口坐标，指尖 Y 一次算出、**不累加**——被拖行「即换即到位」的整行高瞬跳、
++ *    自动翻滚在指下滚内容，都不会再污染指尖位置（此前累加局部位移，每换一次位偏一行：命中判定落回
++ *    身后那一行来回抖 = 打断排序，偏出的 Y 落进边缘带 = 列表自己上滑）。消费在 **Initial 趟**，
++ *    列表滚动 / 卡片点击 / 弹层下拉都抢不走这一串指针；
 + *  - 被拖行永远停在手指命中的那一档里（手指在屏幕内），容器不可能把它回收掉——所以不再需要
 + *    「拖到视口外就先写回一段」的中途提交：宿主的数据只在松手时动一次（[DragSortState.endDrag]），
 + *    拖动过程中零文档写入、零重组风暴；
 + *  - 非被拖行只在「真的挪了位置」时补一段 FLIP 滑移（lazy 列表用 [dragSortItem] 接
 + *    `Modifier.animateItem`，.26s cubic-bezier(.2,.8,.25,1)，与参考实现同一段缓动）；
 + *  - 手指进入容器上下边缘时自动翻滚：E = clamp(容器高×15%, 44dp, 88dp)，v = 1 + (depth/E)×13
-+ *    dp/帧（同参考实现 ≈1~14px/帧）；滚一帧立刻补一轮命中判定；
++ *    dp/帧（同参考实现 ≈1~14px/帧）；滚一帧立刻补一轮命中判定。**但只在手指已经推过可见行的
++ *    上下边界时才翻滚**——指尖还落在列表里（拖动行还有换位空间）时不滚动，见
++ *    [DragSortState.autoScroll]（用户报告的「往上拖动排序时会触发上滑」就出在这里）；
 + *  - **命中判定合帧到每帧一次**（[drainStep]）：pointer 事件只更新指尖位置并置标记，帧循环里每帧
 + *    最多跑一轮 `step()`——参考实现把 `pointermove` 也合帧进 rAF（`if (moveRaf) return`），注释原话
 + *    「否则命中检测与重排直接吃掉全部帧预算（卡顿主因）」。高刷屏一帧 2~4 个 move 事件，逐事件
@@ -6615,16 +6616,21 @@ index 0000000..d3a7f77
 +
 +    /** 有新的手指位置等待命中判定（每帧最多消费一次，见 [drainStep]）。 */
 +    private var stepPending = false
-+    private var draggingHeight = 0f
++    /** 按下时的窗口 Y 与「真的拖起来了」标记（参考实现 `dragMoved`：只按下未动不许翻滚）。 */
++    private var downY = 0f
++    private var moved = false
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
 +    private var scrollBy: ((Float) -> Float)? = null
 +    private val tops = HashMap<Int, Float>()
 +    private val heights = HashMap<Int, Float>()
 +    private val handleTops = HashMap<Int, Float>()
-+    private val handleCoords = HashMap<Int, LayoutCoordinates>()
++    private val handleHeights = HashMap<Int, Float>()
 +
 +    internal var onMove: (from: Int, to: Int) -> Unit = { _, _ -> }
++
++    /** 「真的动了」的阈值（dp → px，见 [rememberDragSortState]）。 */
++    internal var dragSlopPx = 0f
 +
 +    /**
 +     * 宿主每次组合时同步项数。数变了（新增 / 删除 / 换了个文档）就重建恒等序；
@@ -6636,7 +6642,7 @@ index 0000000..d3a7f77
 +        if (dragging >= 0) {
 +            dragging = -1
 +            fingerY = 0f
-+            draggingHeight = 0f
++            moved = false
 +        }
 +        resetOrder()
 +    }
@@ -6648,16 +6654,70 @@ index 0000000..d3a7f77
 +    }
 +
 +    /**
-+     * 行容器（Column / LazyColumn 都可以）：量容器窗口位置，并接上滚动能力。
-+     * 滚动能力用于拖动时的边缘自动翻滚；返回本轮实际吃掉的位移（用于判断是否真的滚了）。
++     * 行容器（Column / LazyColumn 都可以）：量容器窗口位置，接上滚动能力（拖动时边缘自动翻滚用，
++     * 返回本轮实际吃掉的位移），并**在这里接管拖动手势**。
++     *
++     * 指针捕获挂在容器上，与参考实现 `container.setPointerCapture(capId)` 同构（它特意不挂把手：
++     * 挂「拖起来后就不再命中事件的节点」会被引擎悄悄解捕获，手指一滑出行就丢 move/up，表现是
++     * 拖动卡住 / 虚线框残留）。Compose 里的对应物就是**容器级 pointerInput**，它一次解决三件事：
++     *  1. 容器节点在整个拖动过程中不动 ⇒ 事件坐标 = 视口坐标，指尖位置直接读事件、不累加、不被
++     *     「被拖行整行瞬跳」「列表滚动」污染（此前两种错都出现过）；
++     *  2. 指针流属于稳定节点 ⇒ 行被重排 / 回收也不会把手势打断（此前的 `detectDragGestures` 挂在
++     *     把手上，拖到一半被判 Cancel，正是用户看到的「打断拖动排序」+ 中途写回）；
++     *  3. 在 **Initial 趟**消费事件 ⇒ 列表自己的滚动、卡片点击、底部弹层的下拉手势都拿不到这一串
++     *     指针，不会与拖动抢手势。
 +     */
 +    fun containerModifier(scrollBy: ((Float) -> Float)? = null): Modifier {
 +        this.scrollBy = scrollBy
-+        return Modifier.onGloballyPositioned { coords ->
-+            val b = coords.boundsInWindow()
-+            containerTop = b.top
-+            containerBottom = b.bottom
++        return Modifier
++            .onGloballyPositioned { coords ->
++                val b = coords.boundsInWindow()
++                containerTop = b.top
++                containerBottom = b.bottom
++            }
++            .pointerInput(Unit) {
++                awaitPointerEventScope {
++                    while (true) {
++                        val event = awaitPointerEvent(PointerEventPass.Initial)
++                        // 新按下的手指：落在某个把手上才开始拖（参考实现 e.target.closest('.drag-handle')）
++                        val down = event.changes.firstOrNull { it.pressed && !it.previousPressed } ?: continue
++                        val index = handleAt(down.position.y) ?: continue
++                        down.consume()
++                        startDrag(index, down.position.y)
++                        var active = true
++                        while (active) {
++                            val next = awaitPointerEvent(PointerEventPass.Initial)
++                            val change = next.changes.firstOrNull { it.id == down.id }
++                            when {
++                                // 指针流被别处吃掉 / 结束时收尾（正常路径不会走到这里，兜底不残留虚线框）
++                                change == null || change.isConsumed -> {
++                                    endDrag()
++                                    active = false
++                                }
++                                change.previousPressed && !change.pressed -> {
++                                    change.consume()
++                                    endDrag()
++                                    active = false
++                                }
++                                change.position != change.previousPosition -> {
++                                    change.consume()
++                                    dragTo(index, change.position.y)
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++    }
++
++    /** 按下的位置落在哪个把手上：容器局部 Y 换算回窗口 Y 后与各把手的窗口身段比对。 */
++    private fun handleAt(localY: Float): Int? {
++        val y = containerTop + localY
++        for ((index, top) in handleTops) {
++            val h = handleHeights[index] ?: continue
++            if (y >= top && y <= top + h) return index
 +        }
++        return null
 +    }
 +
 +    /**
@@ -6674,70 +6734,37 @@ index 0000000..d3a7f77
 +            }
 +            .zIndex(if (index == dragging) 1f else 0f)
 +
-+    /** 把手：按住即拖（越过触摸阈值后进入拖动，与 WebUI 把手上 touch-action:none 同效果）。 */
++    /**
++     * 把手：只留「身段」（给容器级的按点命中判定用）——手势由 [containerModifier] 接管，
++     * 与参考实现把捕获挂容器、把手上只留 `.drag-handle` 标记同构。
++     */
 +    fun handleModifier(index: Int): Modifier =
-+        Modifier
-+            // 记把手的窗口位置：手指的窗口 Y = 把手顶 + 把手内局部 Y，落点判定才不会带上系统偏差
-+            .onGloballyPositioned { coords ->
-+                handleTops[index] = coords.boundsInWindow().top
-+                handleCoords[index] = coords
-+            }
-+            .pointerInput(index) {
-+                detectDragGestures(
-+                    onDragStart = { local -> startDrag(index, local.y) },
-+                    onDragCancel = { endDrag() },
-+                    onDragEnd = { endDrag() },
-+                    onDrag = { change, _ ->
-+                        change.consume()
-+                        // 只用「事件在手把里的局部 Y」+ 手把现在的窗口顶还原指尖的窗口 Y（[dragTo]）：
-+                        // pointer 的局部位移里混着行自己挪动的假位移，累加它会每换一次位把 Y 带偏一整行 ——
-+                        // 参考实现用的是 e.clientY（窗口坐标），这里按同一口径取，见 [fingerWindowY]。
-+                        dragTo(index, change.position.y)
-+                    },
-+                )
-+            }
++        Modifier.onGloballyPositioned { coords ->
++            val b = coords.boundsInWindow()
++            handleTops[index] = b.top
++            handleHeights[index] = b.height
++        }
 +
-+    fun startDrag(index: Int, localY: Float) {
++    fun startDrag(index: Int, viewportY: Float) {
 +        if (index < 0 || index !in orderState) return
-+        draggingHeight = heights[index] ?: 0f
 +        dragging = index
 +        stepPending = false
-+        val top = tops[index]
-+        fingerY = fingerWindowY(index, localY)
-+            ?: if (top != null) top + draggingHeight / 2f
-+            else containerTop + draggingHeight / 2f
++        moved = false
++        fingerY = containerTop + viewportY
++        downY = fingerY
 +    }
 +
 +    /**
-+     * 指尖的窗口 Y = 把手节点**现在**的窗口顶 + 事件在手把内的局部 Y。
-+     *
-+     * 参考实现全程只用 `e.clientY`（窗口坐标）：行在视口里怎么挪都不影响指尖位置。
-+     * Compose 的 `PointerInputChange.position` 是**节点局部坐标**——被拖行「即换即到位」（换位没有动画，
-+     * 行会整行高整行高地瞬跳）、边缘自动翻滚让内容在指下滚动，这些都会让局部坐标「手指没动却变了」。
-+     * 把这种位移当手指位移累加，每换一次位就偏一行高：命中判定于是落到被拖行身后那一行、把刚换上去的
-+     * 位置又换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进上/下边缘触发误翻滚（= 拖着拖着列表自己上滑）。
-+     * 所以这里不累加任何位移，每次事件当场把局部 Y 换算成窗口 Y。
-+     *
-+     * 优先读把手节点**实时**的 `positionInWindow()`（事件与坐标同属一帧的几何），拿不到（节点已解绑 / 还没量过）
-+     * 再退回最后一次 `onGloballyPositioned` 记下的窗口顶；两者都没有才返回 null（这一事件不更新手指位置）。
++     * 手指移动：事件坐标来自**容器**（容器拖动中不动），所以指尖窗口 Y = 容器窗口顶 + 事件局部 Y，
++     * 直接读、**不累加**——参考实现全程只用 `e.clientY`，同一个口径。事件只更新指尖位置并置一个
++     * 待判定的标记，命中判定合帧到每帧一次（[drainStep]）：参考实现同样把 `pointermove` 合帧到
++     * rAF 里跑 `step()`，注释原话「否则命中检测与重排直接吃掉全部帧预算（卡顿主因）」；高刷触摸
++     * 一帧能来 2~4 个 move，逐事件换位 = 每帧多次整列表重排 + 一堆 FLIP，帧预算会被吃光。
 +     */
-+    private fun fingerWindowY(index: Int, localY: Float): Float? {
-+        val coords = handleCoords[index]
-+        if (coords != null && coords.isAttached) return coords.positionInWindow().y + localY
-+        val top = handleTops[index] ?: return null
-+        return top + localY
-+    }
-+
-+    /**
-+     * 手指移动：把事件换算成指尖的窗口 Y，**只置一个待判定的标记**——命中判定合帧到每帧一次
-+     * （[drainStep]）。参考实现同样把 `pointermove` 合帧到 `requestAnimationFrame` 里跑 `step()`，
-+     * 注释原话：「否则命中检测与重排直接吃掉全部帧预算（卡顿主因）」：高刷触摸设备一帧能来 2~4 个
-+     * move 事件，逐事件换位 = 每帧 2~4 次列表重排 + 一堆 FLIP 位移动画，正是上一版在真机上
-+     * 「拖动中卡死约一秒、随后事件猛冲」的放大器。
-+     */
-+    fun dragTo(index: Int, localY: Float) {
++    fun dragTo(index: Int, viewportY: Float) {
 +        if (dragging < 0 || dragging != index) return
-+        fingerY = fingerWindowY(index, localY) ?: return
++        fingerY = containerTop + viewportY
++        if (!moved && abs(fingerY - downY) > dragSlopPx) moved = true
 +        stepPending = true
 +    }
 +
@@ -6758,7 +6785,7 @@ index 0000000..d3a7f77
 +        dragging = -1
 +        fingerY = 0f
 +        stepPending = false
-+        draggingHeight = 0f
++        moved = false
 +        val moved = reordered && to >= 0 && to != from
 +        flipSuppressed = true   // 提交帧：键位随数据整体重排，这一帧不做位移动画（下一帧恢复）
 +        resetOrder()            // 视觉顺序已由宿主接住（或本次没换过位）：恢复恒等序，行不会跳
@@ -6811,7 +6838,7 @@ index 0000000..d3a7f77
 +     * 换位判定跟着更新，不会错位。
 +     */
 +    internal fun autoScroll(edgeMin: Float, edgeMax: Float, velMin: Float, velRange: Float) {
-+        if (dragging < 0) return
++        if (dragging < 0 || !moved) return   // 参考实现 dragMoved：只按下没动，绝不翻滚
 +        val scroller = scrollBy ?: return
 +        val span = containerBottom - containerTop
 +        if (span <= 0f) return
@@ -6819,9 +6846,24 @@ index 0000000..d3a7f77
 +        val up = (containerTop + edge) - fingerY
 +        val down = fingerY - (containerBottom - edge)
 +        if (up <= 0f && down <= 0f) return
++        val scrollingUp = up > down
++        // 方向校验（本 fork 补的一条，见 CHANGES §10）：手指必须**已经推过可见行的上下边界**才翻滚。
++        // 指尖还落在列表里（拖动行还有换位空间）时不滚动——否则整片列表会跟着手滑走、排序被打断，
++        // 正是用户报告「往上拖动排序时会触发上滑」的现象。手指真的顶过界（要够到视口外的行）时，
++        // 仍按参考实现的斜坡翻滚。
++        var firstTop = Float.MAX_VALUE
++        var lastBottom = -Float.MAX_VALUE
++        for ((index, top) in tops) {
++            val h = heights[index] ?: continue
++            if (top < firstTop) firstTop = top
++            if (top + h > lastBottom) lastBottom = top + h
++        }
++        if (firstTop <= lastBottom) {
++            if (scrollingUp) { if (fingerY > firstTop) return } else { if (fingerY < lastBottom) return }
++        }
 +        val depth = maxOf(up, down).coerceIn(0f, edge)
 +        val v = velMin + (depth / edge) * velRange
-+        if (scroller(if (up > down) -v else v) == 0f) return   // 已到尽头：不空转
++        if (scroller(if (scrollingUp) -v else v) == 0f) return   // 已到尽头：不空转
 +        step()
 +    }
 +}
@@ -6842,6 +6884,8 @@ index 0000000..d3a7f77
 +    val edgeMax = with(density) { 88.dp.toPx() }
 +    val velMin = with(density) { 1.dp.toPx() }
 +    val velRange = with(density) { 13.dp.toPx() }
++    // 「真的拖起来了」的阈值（参考实现 dragMoved 用「发生过 pointermove」，这里取 8dp 更耐手抖）
++    state.dragSlopPx = with(density) { 8.dp.toPx() }
 +    val dragging = state.dragging
 +    LaunchedEffect(dragging) {
 +        if (dragging < 0) return@LaunchedEffect
