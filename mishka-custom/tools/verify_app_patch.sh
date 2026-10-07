@@ -248,6 +248,21 @@ assert_contains 'if (fingerY > firstTop) return' \
 assert_contains 'if (fingerY < lastBottom) return' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'auto-scroll down only once the finger has pushed past the last visible row'
+assert_contains 'if (bottom <= containerTop || top >= containerBottom) continue' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the first/last visible row are computed only from rows intersecting the viewport (stale off-screen bounds must not defeat the guard)'
+assert_contains 'if (edgeHoldNanos < EdgeHoldNanos) {' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'edge auto-scroll needs the out-of-bounds condition to hold ~150ms before it starts (no fly-by scrolls)'
+assert_contains 'private fun consumeStrays(changes: List<PointerInputChange>, tracked: PointerInputId?): Int' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'a second finger can neither re-arm the drag nor scroll the list during one (reference capId guard)'
+assert_contains 'internal const val DragSortRevision = "r7"' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the drag revision is a single constant (temporary build marker, remove once confirmed)'
+assert_contains '按住行首把手拖动排序 · 拖动 $DragSortRevision' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'the sequence list header shows the drag revision (so any screenshot tells us which build is installed)'
 assert_contains 'private var stepPending = false' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'pointer events only mark a pending hit-test'

@@ -6471,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..7c66228
+index 0000000..4cac708
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,552 @@
+@@ -0,0 +1,598 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6509,6 +6509,8 @@ index 0000000..7c66228
 +import androidx.compose.ui.graphics.drawscope.Stroke
 +import androidx.compose.ui.graphics.vector.ImageVector
 +import androidx.compose.ui.input.pointer.PointerEventPass
++import androidx.compose.ui.input.pointer.PointerInputChange
++import androidx.compose.ui.input.pointer.PointerInputId
 +import androidx.compose.ui.input.pointer.awaitPointerEventScope
 +import androidx.compose.ui.input.pointer.pointerInput
 +import androidx.compose.ui.layout.boundsInWindow
@@ -6562,6 +6564,9 @@ index 0000000..7c66228
 + * 不拖动时恒为恒等序。松手时把被拖行的最终档位 [DragSortState.endDrag] 交给宿主的 `onMove(from, to)`
 + * ——序列的 `removeAt(from)` + `add(to)` 口径，与 YamlPatch.moveItem 一致。
 + */
++
++/** 拖动手势的修订号：临时挂在列表页表头上，用来一眼确认设备上装的是哪一版（确认后连同表头文案一起撤掉）。 */
++internal const val DragSortRevision = "r7"
 +
 +/** `.rule-item.dragging { opacity: .55 }`。 */
 +private const val DragItemAlpha = 0.55f
@@ -6619,6 +6624,9 @@ index 0000000..7c66228
 +    /** 按下时的窗口 Y 与「真的拖起来了」标记（参考实现 `dragMoved`：只按下未动不许翻滚）。 */
 +    private var downY = 0f
 +    private var moved = false
++
++    /** 越界条件已连续保持的时长（起步去抖用，见 [autoScroll]）。 */
++    private var edgeHoldNanos = 0L
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
 +    private var scrollBy: ((Float) -> Float)? = null
@@ -6631,6 +6639,11 @@ index 0000000..7c66228
 +
 +    /** 「真的动了」的阈值（dp → px，见 [rememberDragSortState]）。 */
 +    internal var dragSlopPx = 0f
++
++    private companion object {
++        /** 边缘翻滚起步去抖：越界连续保持这么久才真的开始滚（掠过不算）。 */
++        const val EdgeHoldNanos = 150_000_000L
++    }
 +
 +    /**
 +     * 宿主每次组合时同步项数。数变了（新增 / 删除 / 换了个文档）就重建恒等序；
@@ -6679,6 +6692,11 @@ index 0000000..7c66228
 +                awaitPointerEventScope {
 +                    while (true) {
 +                        val event = awaitPointerEvent(PointerEventPass.Initial)
++                        // 拖动尚未收尾时不再武装第二次拖动（多指守卫，参考实现 capId 口径）
++                        if (dragging >= 0) {
++                            consumeStrays(event.changes, null)
++                            continue
++                        }
 +                        // 新按下的手指：落在某个把手上才开始拖（参考实现 e.target.closest('.drag-handle')）
 +                        val down = event.changes.firstOrNull { it.pressed && !it.previousPressed } ?: continue
 +                        val index = handleAt(down.position.y) ?: continue
@@ -6688,6 +6706,8 @@ index 0000000..7c66228
 +                        while (active) {
 +                            val next = awaitPointerEvent(PointerEventPass.Initial)
 +                            val change = next.changes.firstOrNull { it.id == down.id }
++                            // 别的手指的位移一律吃掉：拖动期间不许第二根手指把列表带走
++                            consumeStrays(next.changes, down.id)
 +                            when {
 +                                // 指针流被别处吃掉 / 结束时收尾（正常路径不会走到这里，兜底不残留虚线框）
 +                                change == null || change.isConsumed -> {
@@ -6708,6 +6728,16 @@ index 0000000..7c66228
 +                    }
 +                }
 +            }
++    }
++
++    /** 拖动期间把其它手指的位移一并吃掉（多指守卫）：返回的是被吃掉的数量，仅为语义清晰。 */
++    private fun consumeStrays(changes: List<PointerInputChange>, tracked: PointerInputId?): Int {
++        var n = 0
++        for (c in changes) {
++            if (c.id == tracked) continue
++            if (c.pressed && c.position != c.previousPosition) { c.consume(); n++ }
++        }
++        return n
 +    }
 +
 +    /** 按下的位置落在哪个把手上：容器局部 Y 换算回窗口 Y 后与各把手的窗口身段比对。 */
@@ -6750,6 +6780,7 @@ index 0000000..7c66228
 +        dragging = index
 +        stepPending = false
 +        moved = false
++        edgeHoldNanos = 0L
 +        fingerY = containerTop + viewportY
 +        downY = fingerY
 +    }
@@ -6786,6 +6817,7 @@ index 0000000..7c66228
 +        fingerY = 0f
 +        stepPending = false
 +        moved = false
++        edgeHoldNanos = 0L
 +        val moved = reordered && to >= 0 && to != from
 +        flipSuppressed = true   // 提交帧：键位随数据整体重排，这一帧不做位移动画（下一帧恢复）
 +        resetOrder()            // 视觉顺序已由宿主接住（或本次没换过位）：恢复恒等序，行不会跳
@@ -6837,7 +6869,7 @@ index 0000000..7c66228
 +     * v = 1 + (depth/E)×13 dp/帧，同参考实现），滚了就立刻补一轮命中判定——行在指下挪了，
 +     * 换位判定跟着更新，不会错位。
 +     */
-+    internal fun autoScroll(edgeMin: Float, edgeMax: Float, velMin: Float, velRange: Float) {
++    internal fun autoScroll(edgeMin: Float, edgeMax: Float, velMin: Float, velRange: Float, dtNanos: Long) {
 +        if (dragging < 0 || !moved) return   // 参考实现 dragMoved：只按下没动，绝不翻滚
 +        val scroller = scrollBy ?: return
 +        val span = containerBottom - containerTop
@@ -6845,21 +6877,32 @@ index 0000000..7c66228
 +        val edge = (span * 0.15f).coerceIn(edgeMin, edgeMax)
 +        val up = (containerTop + edge) - fingerY
 +        val down = fingerY - (containerBottom - edge)
-+        if (up <= 0f && down <= 0f) return
++        if (up <= 0f && down <= 0f) { edgeHoldNanos = 0L; return }
 +        val scrollingUp = up > down
-+        // 方向校验（本 fork 补的一条，见 CHANGES §10）：手指必须**已经推过可见行的上下边界**才翻滚。
-+        // 指尖还落在列表里（拖动行还有换位空间）时不滚动——否则整片列表会跟着手滑走、排序被打断，
-+        // 正是用户报告「往上拖动排序时会触发上滑」的现象。手指真的顶过界（要够到视口外的行）时，
-+        // 仍按参考实现的斜坡翻滚。
++        // 方向校验（本 fork 补的一条，见 CHANGES §10/§11）：手指必须**已经推过可见行的上下边界**
++        // 才翻滚。指尖还落在列表里（拖动行还有换位空间）时不滚动——否则整片列表会跟着手滑走、
++        // 排序被打断，正是用户报告「往上拖动排序时会触发上滑」的现象。
++        // 关键：边界只统计**与可视区相交**的行——已经滚出视口的行在 [tops]/[heights] 里留的是
++        // 最后一帧的旧值（可能是很负的 top），拿它当「可见首行」会让「手指没顶过界」永远成立、
++        // 校验形同虚设（v6 的写法就吃了这一枪，这里补上）。
 +        var firstTop = Float.MAX_VALUE
 +        var lastBottom = -Float.MAX_VALUE
 +        for ((index, top) in tops) {
 +            val h = heights[index] ?: continue
++            val bottom = top + h
++            if (bottom <= containerTop || top >= containerBottom) continue   // 不在可视区：旧值不采信
 +            if (top < firstTop) firstTop = top
-+            if (top + h > lastBottom) lastBottom = top + h
++            if (bottom > lastBottom) lastBottom = bottom
 +        }
 +        if (firstTop <= lastBottom) {
 +            if (scrollingUp) { if (fingerY > firstTop) return } else { if (fingerY < lastBottom) return }
++        }
++        // 起步去抖（本 fork 补的，见 CHANGES §11）：边界条件要**连续保持** edgeHoldNanos 才开始滚，
++        // 掠过一下不算——快速上甩收尾时指尖短暂越界不该把列表带走。翻滚途中重置为 0 也不影响，
++        // 因为持续越界时条件连续成立、计时累积到阈值后一直保持。
++        if (edgeHoldNanos < EdgeHoldNanos) {
++            edgeHoldNanos += dtNanos
++            return
 +        }
 +        val depth = maxOf(up, down).coerceIn(0f, edge)
 +        val v = velMin + (depth / edge) * velRange
@@ -6889,12 +6932,15 @@ index 0000000..7c66228
 +    val dragging = state.dragging
 +    LaunchedEffect(dragging) {
 +        if (dragging < 0) return@LaunchedEffect
++        var lastFrame = 0L
 +        while (true) {
-+            withFrameNanos { }
++            val frame = withFrameNanos { it }
++            val dt = if (lastFrame == 0L) 0L else (frame - lastFrame).coerceIn(0L, 100_000_000L)
++            lastFrame = frame
 +            // 与参考实现同序：先消费本帧累计的手指位置（合帧的命中判定），再算边缘翻滚；
 +            // 翻滚真滚了一帧的话，autoScroll 内部会立刻再补一轮命中判定。
 +            state.drainStep()
-+            state.autoScroll(edgeMin, edgeMax, velMin, velRange)
++            state.autoScroll(edgeMin, edgeMax, velMin, velRange, dt)
 +        }
 +    }
 +    // 提交帧抑制 FLIP：下一帧把位移动画挂回去（见 [DragSortState.flipSuppressed]）
@@ -7091,7 +7137,7 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..c7362cc
+index 0000000..ffcdae7
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 @@ -0,0 +1,2297 @@
@@ -7222,7 +7268,7 @@ index 0000000..c7362cc
 +    ) {
 +        item(key = "hdr") {
 +            ListHeader(
-+                summary = "`${pathText(seqPath)}` · ${items.size} $unit · 按住行首把手拖动排序" +
++                summary = "`${pathText(seqPath)}` · ${items.size} $unit · 按住行首把手拖动排序 · 拖动 $DragSortRevision" +
 +                    (if (broken) " · 这个键不是列表（别名 / 映射 / 纯值），只能在编辑器里改" else ""),
 +                actions = headerActions,
 +            )

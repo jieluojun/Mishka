@@ -272,16 +272,43 @@ Compose 里指针流绑定在节点上：行一换位、被回收、或节点被
 容器 Initial 趟捕获、`PointerEventPass` import、把手命中判定、`dragTo(index, change.position.y)` 直读、
 把手不再挂手势、`moved` 门闩、上 / 下两条边界校验、`detectDragGestures` 不复存在。
 
+## 11. 六修（拖动排序）：规则回放定量对表 + 三个真 bug（旧值抹平边界校验 / 多指重武装 / 掠过误滚）+ 版本标记
+
+本轮先做了一件「不让修改再靠猜」的事：把录屏里**实测的指尖轨迹**（触摸点迹，61.7fps 逐帧）回放给
+两套翻滚规则，用正确单位（px/s = dp/帧 × 3.55px/dp × 61.7fps）对表：
+
+| 规则 | 真手指 | 叠加 v3/v4 的指尖漂移(−100px) |
+| --- | --- | --- |
+| 旧（进带即滚，参考实现原样） | 3.40s 起，峰值 1367px/s | 3.30s 起，**峰值 2278px/s** |
+| 新（先过可见行边界） | 不触发 | 不触发 |
+| 录屏实测（3.50–4.18s 连续翻滚） | — | **≈2300px/s** |
+
+即：录屏里那段狂奔 = 旧规则 × 指尖漂移，数值几乎完全重合（2278 vs 2300）。新规则对同一段轨迹
+一次都不触发，并且对指尖位置误差有 <176px 的容忍度（实测指尖最低 606px，阈值 430px）。
+
+随后复查 v6 代码，找出并修掉三个真 bug（都会让「不滚」的保证漏气）：
+
+1. **旧值抹平边界校验**：`tops/heights` 里留着已经滚出视口的行的旧坐标，`min(top)` 取到很负的旧值，
+   于是「手指没顶过界」永远成立、边界校验形同虚设。修法：只统计**与可视区相交**的行
+   （`bottom <= containerTop || top >= containerBottom` 直接跳过）。
+2. **多指重武装**：拖动未收尾时，第二根手指按下会重新走一遍「按下 → 命中把手 → startDrag」，
+   把拖动指针换成新手指。修法：`dragging >= 0` 时不再武装；拖动期间所有非追踪指针的位移一律吃掉
+   （`consumeStrays`，参考实现 capId 口径），第二根手指也不能把列表带走。
+3. **掠过误滚**：指尖短暂越界（快速上甩收尾那一下）也会触发翻滚。修法：边界条件需**连续保持
+   150ms** 才真的开始滚（`edgeHoldNanos` 去抖，由帧循环传 dt 累积；条件一断即清零）。
+
+另外加一个**临时版本标记**：序列列表页表头显示「· 拖动 r7」（常量 `DragSortRevision`）。
+它只为一件事——下次截图/录屏就能一眼确认设备上装的到底是哪一版；确认问题闭环后我会连同表头文案
+一起撤掉。**若表头没有「拖动 r7」，说明设备上跑的不是本包。**
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
-  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 71 → 77 条（总计 **156 条
-  ok / 0 FAIL**）——本轮的 8 条：容器 Initial 趟捕获、`PointerEventPass` import、把手命中判定
-  `handleAt`、`dragTo(index, change.position.y)` 直读事件、把手不再挂手势（`.pointerInput(index)`
-  禁止）、`moved` 门闩（`!moved` 直接返回）、上边界与下边界两条方向校验、`detectDragGestures`
-  与 `import ...detectDragGestures` 均不存在。§9 的 4 条（合帧 `drainStep` / `stepPending`、
-  `dragAmount` 禁、`fingerY +=` 禁）与 v3 批次（实时换位 / 插入下标修正 / 手指在拖行上不抖 /
-  FLIP 缓动 / 无中途写回 / 4 处宿主按 `order` 渲染 / 合集 ✎ 语义 2 条）一并保留。
+  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 77 → 82 条（总计 **161 条
+  ok / 0 FAIL**）——本轮的 5 条：可见行过滤（旧值不具备资格）、150ms 起步去抖、`consumeStrays`
+  多指守卫、`DragSortRevision` 常量、表头标记在位。§10 的 8 条（容器 Initial 趟捕获 / 把手命中
+  判定 / 直读事件 / 把手不挂手势 / `moved` 门闩 / 上下边界两条 / `detectDragGestures` 不复存在）
+  与更早批次一并保留。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 
