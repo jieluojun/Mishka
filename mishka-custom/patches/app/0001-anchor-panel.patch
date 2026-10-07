@@ -4411,10 +4411,10 @@ index 0000000..d4c6508
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..9699d41
+index 0000000..1a05e5a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1495 @@
+@@ -0,0 +1,1497 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4994,7 +4994,9 @@ index 0000000..9699d41
 +            verticalArrangement = Arrangement.spacedBy(8.dp),
 +        ) {
 +            if (node?.kind == YamlNode.Kind.SEQ) {
-+                node.items.indices.forEach { index ->
++                // 顺序由 DragSortState.order 定（拖动中实时换位）；行内容与回调按原始下标取
++                dragSort.order.forEach { index ->
++                    if (index !in node.items.indices) return@forEach
 +                    val name = listenerName(doc, index).ifBlank { "监听器 #${index + 1}" }
 +                    val type = listenerType(doc, index).ifBlank { "未知协议" }
 +                    DragSortRow(state = dragSort, index = index) {
@@ -6469,22 +6471,26 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..36dcc28
+index 0000000..db6f1fc
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,405 @@
+@@ -0,0 +1,447 @@
 +package top.yukonga.mishka.custom.forms
 +
++import androidx.compose.animation.core.CubicBezierEasing
++import androidx.compose.animation.core.FiniteAnimationSpec
++import androidx.compose.animation.core.tween
 +import androidx.compose.foundation.Canvas
 +import androidx.compose.foundation.gestures.detectDragGestures
 +import androidx.compose.foundation.layout.Box
-+import androidx.compose.foundation.layout.offset
 +import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.lazy.LazyItemScope
 +import androidx.compose.foundation.shape.RoundedCornerShape
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.Stable
 +import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateListOf
 +import androidx.compose.runtime.mutableStateOf
 +import androidx.compose.runtime.remember
 +import androidx.compose.runtime.rememberUpdatedState
@@ -6512,7 +6518,7 @@ index 0000000..36dcc28
 +import androidx.compose.ui.unit.IntOffset
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.zIndex
-+import kotlin.math.roundToInt
++import kotlin.math.abs
 +import top.yukonga.miuix.kmp.basic.Icon
 +import top.yukonga.miuix.kmp.basic.IconButton
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -6521,17 +6527,26 @@ index 0000000..36dcc28
 + * 按住把手拖动排序（对齐 mihomo_box WebUI `js/core.js` 的 `enableDragSort`）：
 + *  - 行首一个两列三点的把手（[DragHandle]），**按住即拖**——不做长按等待，与把手上的
 + *    `touch-action: none` 同效；没有把手以外的排序入口；
-+ *  - **列表内实时换位**：手指越过哪一行的中线，被拖行就落到那一档（即换即到位），其余行
-+ *    按实测槽位让位。被拖行不做「跟手漂浮」——不累计手指位移，就没有翻滚时的漂移错位：
-+ *    参考实现的注释写得很清楚，「被拖行必须即换即到位：给它补滑移动画 = 不跟手」；
++ *  - **列表内实时换位**：命中判定 =「手指窗口 Y 落在哪一行的身位里、在该行中线的上半还是
++ *    下半」，命中后直接把被拖行在视觉顺序 [DragSortState.order] 里搬到该档——这正是参考实现
++ *    `elementFromPoint` + `insertBefore` 的 Compose 版：顺序在「列表」里实时改，被拖行
++ *    **即换即到位**（参考实现原话：给它补滑移动画 = 不跟手），其余行由宿主给 FLIP 位移动画；
++ *  - 行身段（窗口坐标）只用于命中判定，来自真实布局测量：每帧重算，不缓存槽位差、不模拟让位
++ *    位移——上一版按「实测槽位差」让位，行长不等（多行 AND 规则等）时被拖行会压到邻行身上，
++ *    且滚动中槽位表变旧，正是错位的根源；
++ *  - 被拖行永远停在手指命中的那一档里（手指在屏幕内），容器不可能把它回收掉——所以不再需要
++ *    「拖到视口外就先写回一段」的中途提交：宿主的数据只在松手时动一次（[DragSortState.endDrag]），
++ *    拖动过程中零文档写入、零重组风暴；
++ *  - 非被拖行只在「真的挪了位置」时补一段 FLIP 滑移（lazy 列表用 [dragSortItem] 接
++ *    `Modifier.animateItem`，.26s cubic-bezier(.2,.8,.25,1)，与参考实现同一段缓动）；
++ *  - 手指进入容器上下边缘时自动翻滚：E = clamp(容器高×15%, 44dp, 88dp)，v = 1 + (depth/E)×13
++ *    dp/帧（同参考实现 ≈1~14px/帧）；滚一帧立刻补一轮命中判定；
 + *  - 拖动中的行加参考实现 `.rule-item.dragging` 的视觉：整行降透明 + 强调色淡底 +
-+ *    1.5dp 虚线描边 + 淡阴影；
-+ *  - 手指进入容器上下边缘时自动翻滚；虚拟化容器（LazyColumn）会回收滚出视口的行，
-+ *    `recycleRows = true` 时把已拖动的距离先提交给宿主，让被拖行始终待在列表里
-+ *    （与参考实现的 DOM 实时换位同构，代价是长距离拖动会分几次写回）。
++ *    1.5dp 虚线描边 + 淡阴影。
 + *
-+ * 度量（槽位窗口坐标、手指窗口 Y）只服务于手势判定，不进组合快照：拖动中每帧改快照状态
-+ * 只会让长列表反复重组。
++ * [DragSortState.order] 是「原始下标的排列」：宿主按它渲染列表（`items(order)` / `order.forEach`），
++ * 不拖动时恒为恒等序。松手时把被拖行的最终档位 [DragSortState.endDrag] 交给宿主的 `onMove(from, to)`
++ * ——序列的 `removeAt(from)` + `add(to)` 口径，与 YamlPatch.moveItem 一致。
 + */
 +
 +/** `.rule-item.dragging { opacity: .55 }`。 */
@@ -6546,31 +6561,74 @@ index 0000000..36dcc28
 +/** `outline-offset: -2px`：虚线画在行内 2dp 处。 */
 +private val DragItemOutlineInset = 2.dp
 +
++/**
++ * 换位时给其它行的 FLIP 位移动画：参考实现 `transform .26s cubic-bezier(.2, .8, .25, 1)`。
++ * 被拖行不给（即换即到位），宿主用 [dragSortItem] 拿到这个修饰符。
++ */
++private val FlipSpec: FiniteAnimationSpec<IntOffset> =
++    tween(durationMillis = 260, easing = CubicBezierEasing(0.2f, 0.8f, 0.25f, 1f))
++
 +@Stable
 +internal class DragSortState {
-+    /** 列表项数，宿主每次组合时同步。 */
++    /** 列表项数，宿主每次组合时同步（[syncCount]）。 */
 +    internal var count: Int = 0
++        private set
 +
-+    /** 正在拖动的行下标；-1 = 没在拖。 */
++    /** 视觉顺序：元素是「原始下标」，不拖动时恒为 0 until count。拖动中宿主按它渲染。 */
++    private val orderState = mutableStateListOf<Int>()
++    val order: List<Int> get() = orderState
++
++    /** 正在拖动的行（原始下标）；-1 = 没在拖。 */
 +    internal var dragging by mutableStateOf(-1)
 +        private set
 +
-+    /** 目标落点（最终下标，与 [dragging] 同一坐标系）。 */
-+    internal var target by mutableStateOf(-1)
++    /** 拖动中是否真的换过位（换过才在松手时写回宿主）。 */
++    private var reordered = false
++
++    /**
++     * 提交帧抑制 FLIP：宿主数据一换序，键位（= 原始下标）整体重排，如果这时挂着位移动画，
++     * 动画会把「键的旧位置 → 新位置」当成被拖行的移动、把内容挪错位（动画结束才归位）。
++     * 提交那一帧把位移动画摘掉、下一帧再挂回去 —— 松手瞬间视觉位置本来就不变，
++     * 摘掉动画没有任何观感损失。
++     */
++    internal var flipSuppressed by mutableStateOf(false)
 +        private set
 +
-+    private var draggingHeight = 0f
++    internal fun resumeFlip() {
++        flipSuppressed = false
++    }
++
 +    private var fingerY = 0f
++    private var draggingHeight = 0f
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
 +    private var scrollBy: ((Float) -> Float)? = null
-+    /** 容器会回收滚出视口的行（LazyColumn 等）时为 true：见 [checkpointIfRecycled]。 */
-+    internal var recycleRows = false
 +    private val tops = HashMap<Int, Float>()
 +    private val heights = HashMap<Int, Float>()
 +    private val handleTops = HashMap<Int, Float>()
 +
 +    internal var onMove: (from: Int, to: Int) -> Unit = { _, _ -> }
++
++    /**
++     * 宿主每次组合时同步项数。数变了（新增 / 删除 / 换了个文档）就重建恒等序；
++     * 拖动中数变了（正常拖不到：没有中途写入）视为数据已被外部改，放弃本次拖动。
++     */
++    internal fun syncCount(n: Int) {
++        if (n == count) return
++        count = n
++        if (dragging >= 0) {
++            dragging = -1
++            fingerY = 0f
++            draggingHeight = 0f
++        }
++        resetOrder()
++    }
++
++    private fun resetOrder() {
++        orderState.clear()
++        for (i in 0 until count) orderState.add(i)
++        reordered = false
++    }
 +
 +    /**
 +     * 行容器（Column / LazyColumn 都可以）：量容器窗口位置，并接上滚动能力。
@@ -6586,10 +6644,9 @@ index 0000000..36dcc28
 +    }
 +
 +    /**
-+     * 行：量自己的槽位，并按拖动状态让位 / 落到目标档位。顺序由宿主列表决定。
-+     *
-+     * 位置回调放在 offset 外层：量到的永远是行的「槽位」窗口坐标（不含让位位移），
-+     * 槽位差就是让位量——行高不一、带行距也照样准确。
++     * 行：量自己的身段（窗口坐标，命中判定用），被拖行抬到最上层。
++     * 位置回调放在最外层：量到的永远是行的**布局**位置（lazy 列表的换位动画是画在层上的，
++     * 不影响这里的布局坐标——命中判定因此不会被动画中的半程位置带偏）。
 +     */
 +    fun rowModifier(index: Int): Modifier =
 +        Modifier
@@ -6598,38 +6655,7 @@ index 0000000..36dcc28
 +                tops[index] = b.top
 +                heights[index] = b.height
 +            }
-+            .offset { IntOffset(0, offsetFor(index)) }
 +            .zIndex(if (index == dragging) 1f else 0f)
-+
-+    /** 被拖行落到目标槽位；其余行按槽位差让出一行。 */
-+    fun offsetFor(index: Int): Int {
-+        val from = dragging
-+        if (from < 0) return 0
-+        val to = target
-+        if (to < 0) return 0
-+        return when {
-+            index == from -> slotShift(to, from)
-+            from < to && index in (from + 1)..to -> slotShift(index - 1, index)
-+            to < from && index in to until from -> slotShift(index + 1, index)
-+            else -> 0
-+        }
-+    }
-+
-+    /**
-+     * 槽位位移：由两行的实测窗口坐标相减得到（自然含行距与行长不一的情况，
-+     * 不再假设所有行等高——那是上一版错位的第二个来源）。
-+     */
-+    private fun slotShift(destSlot: Int, index: Int): Int {
-+        val dest = tops[destSlot]
-+        val here = tops[index]
-+        if (dest != null && here != null) return (dest - here).roundToInt()
-+        val h = draggingHeight.roundToInt()
-+        return when {
-+            destSlot < index -> -h
-+            destSlot > index -> h
-+            else -> 0
-+        }
-+    }
 +
 +    /** 把手：按住即拖（越过触摸阈值后进入拖动，与 WebUI 把手上 touch-action:none 同效果）。 */
 +    fun handleModifier(index: Int): Modifier =
@@ -6639,7 +6665,7 @@ index 0000000..36dcc28
 +            .pointerInput(index) {
 +                detectDragGestures(
 +                    onDragStart = { local -> startDrag(index, local.y) },
-+                    onDragCancel = { cancelDrag() },
++                    onDragCancel = { endDrag() },
 +                    onDragEnd = { endDrag() },
 +                    onDrag = { change, dragAmount ->
 +                        change.consume()
@@ -6648,129 +6674,147 @@ index 0000000..36dcc28
 +                )
 +            }
 +
-+    private fun rowCenter(index: Int): Float? {
-+        val top = tops[index] ?: return null
-+        val h = heights[index] ?: return null
-+        return top + h / 2f
-+    }
-+
 +    fun startDrag(index: Int, localY: Float) {
-+        if (index < 0) return
++        if (index < 0 || index !in orderState) return
 +        draggingHeight = heights[index] ?: 0f
 +        dragging = index
-+        target = index
 +        val handleTop = handleTops[index]
-+        val center = rowCenter(index)
++        val top = tops[index]
 +        fingerY = when {
 +            handleTop != null -> handleTop + localY
-+            center != null -> center
++            top != null -> top + draggingHeight / 2f
 +            else -> containerTop + draggingHeight / 2f
 +        }
 +    }
 +
-+    /** 手指移动：只更新落点判定用的窗口 Y，被拖行的位置由「目标槽位」决定（不累计位移）。 */
++    /** 手指移动：只更新窗口 Y 并跑一轮命中判定；被拖行的位置由它命中的档位决定（不跟手漂浮）。 */
 +    fun drag(dy: Float) {
 +        if (dragging < 0) return
 +        fingerY += dy
-+        target = targetFor(fingerY)
++        step()
 +    }
 +
 +    fun endDrag() {
 +        val from = dragging
-+        val to = target
-+        reset()
-+        if (from >= 0 && to >= 0 && to != from) onMove(from, to)
-+    }
-+
-+    fun cancelDrag() = reset()
-+
-+    private fun reset() {
++        if (from < 0) return
++        val to = orderState.indexOf(from)
 +        dragging = -1
-+        target = -1
++        fingerY = 0f
 +        draggingHeight = 0f
-+    }
-+
-+    /** 落点判定与参考实现同口径：手指越过哪一行的中线，就落到那一档。 */
-+    private fun targetFor(y: Float): Int {
-+        val from = dragging
-+        if (from < 0) return -1
-+        var t = from
-+        for (i in 0 until count) {
-+            if (i == from) continue
-+            val top = tops[i] ?: continue
-+            val h = heights[i] ?: continue
-+            val center = top + h / 2f
-+            if (i < from && y < center) t = minOf(t, i)
-+            if (i > from && y > center) t = maxOf(t, i)
-+        }
-+        return t
++        val moved = reordered && to >= 0 && to != from
++        flipSuppressed = true   // 提交帧：键位随数据整体重排，这一帧不做位移动画（下一帧恢复）
++        resetOrder()            // 视觉顺序已由宿主接住（或本次没换过位）：恢复恒等序，行不会跳
++        if (moved) onMove(from, to)
 +    }
 +
 +    /**
-+     * 边缘自动翻滚：手指进入容器上下 [edge] 内按深度滚动一帧；滚一帧 = 行在指下挪了，
-+     * 立刻补一轮落点判定。
++     * 命中判定 + 换位（对应参考实现的 `step()`）：手指窗口 Y 落在哪一行的身段里，
++     * 就在该行中线的上半 → 换到它前面，下半 → 换到它后面；落在被拖行自己身上 = 不动
++     * （否则换位后手指仍在原行身里，会被判成「又越过一行」来回抖）。
++     * 指到行间缝里（行距）或容器留白时，按「手指 Y 离哪一行中线最近」兜底——与参考实现的
++     * 「留白投影命中」同口径。
 +     */
-+    internal fun autoScroll(edge: Float, step: Float) {
++    private fun step() {
++        val from = dragging
++        if (from < 0) return
++        val cur = orderState.indexOf(from)
++        if (cur < 0) return
++        val curTop = tops[from]
++        val curH = heights[from]
++        if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return
++        var over = -1
++        var nearest = -1
++        var best = Float.MAX_VALUE
++        for (o in orderState) {
++            if (o == from) continue
++            val top = tops[o] ?: continue
++            val h = heights[o] ?: continue
++            if (fingerY >= top && fingerY <= top + h) { over = o; break }
++            val d = abs(fingerY - (top + h / 2f))
++            if (d < best) { best = d; nearest = o }
++        }
++        if (over < 0) over = nearest
++        if (over < 0) return
++        val overTop = tops[over] ?: return
++        val overH = heights[over] ?: return
++        val ov = orderState.indexOf(over)
++        if (ov < 0) return
++        var at = ov + if (fingerY >= overTop + overH / 2f) 1 else 0
++        if (cur < at) at -= 1   // 先把被拖行摘掉，下标会左移一格（与 insertBefore 同算法）
++        if (at == cur || at < 0 || at >= orderState.size) return
++        val item = orderState.removeAt(cur)
++        orderState.add(at, item)
++        reordered = true
++    }
++
++    /**
++     * 边缘自动翻滚：手指进入容器上下边缘后按深度滚一帧（E = clamp(容器高×15%, 44dp, 88dp)，
++     * v = 1 + (depth/E)×13 dp/帧，同参考实现），滚了就立刻补一轮命中判定——行在指下挪了，
++     * 换位判定跟着更新，不会错位。
++     */
++    internal fun autoScroll(edgeMin: Float, edgeMax: Float, velMin: Float, velRange: Float) {
 +        if (dragging < 0) return
 +        val scroller = scrollBy ?: return
-+        val depthUp = (containerTop + edge) - fingerY
-+        val depthDown = fingerY - (containerBottom - edge)
-+        val depth = maxOf(depthUp, depthDown)
-+        if (depth <= 0f) return
-+        val ratio = (depth / edge).coerceAtMost(1f)
-+        val delta = step * ratio * (if (depthUp > depthDown) -1f else 1f)
-+        if (scroller(delta) == 0f) return  // 已到尽头：不空转
-+        target = targetFor(fingerY)
-+        checkpointIfRecycled()
-+    }
-+
-+    /**
-+     * 虚拟化容器（LazyColumn）会回收滚出视口的行：被拖行的槽位一旦离开容器，就先把
-+     * 已拖动的这一段提交给宿主（下标顺带前移到落点），被拖行于是始终留在列表里。
-+     * 提交后所有让位位移归零，视觉位置不变 —— 与参考实现「顺序早已在 DOM 里实时换好」同构。
-+     */
-+    private fun checkpointIfRecycled() {
-+        if (!recycleRows) return
-+        val from = dragging
-+        val to = target
-+        if (from < 0 || to < 0 || to == from) return
-+        val top = tops[from] ?: return
-+        val h = heights[from] ?: draggingHeight
-+        val center = top + h / 2f
-+        if (center > containerTop && center < containerBottom) return  // 还在视口里：不提前提交
-+        dragging = to
-+        onMove(from, to)
++        val span = containerBottom - containerTop
++        if (span <= 0f) return
++        val edge = (span * 0.15f).coerceIn(edgeMin, edgeMax)
++        val up = (containerTop + edge) - fingerY
++        val down = fingerY - (containerBottom - edge)
++        if (up <= 0f && down <= 0f) return
++        val depth = maxOf(up, down).coerceIn(0f, edge)
++        val v = velMin + (depth / edge) * velRange
++        if (scroller(if (up > down) -v else v) == 0f) return   // 已到尽头：不空转
++        step()
 +    }
 +}
 +
 +@Composable
 +internal fun rememberDragSortState(
 +    count: Int,
-+    recycleRows: Boolean = false,
 +    onMove: (from: Int, to: Int) -> Unit,
 +): DragSortState {
 +    val state = remember { DragSortState() }
 +    val move = rememberUpdatedState(onMove)
-+    // 三个都是普通字段（非快照状态）：拖动中每帧改快照状态只会让长列表反复重组
-+    state.count = count
-+    state.recycleRows = recycleRows
++    // 普通字段（非快照状态）：拖动中每帧改快照状态只会让长列表反复重组
 +    state.onMove = { from, to -> move.value(from, to) }
++    state.syncCount(count)
 +    // 拖动期间的边缘自动翻滚：只在拖动存在时跑帧循环，松手立刻停（不做常驻定时器）
 +    val density = LocalDensity.current
-+    val edge = with(density) { 96.dp.toPx() }
-+    val step = with(density) { 7.dp.toPx() }
++    val edgeMin = with(density) { 44.dp.toPx() }
++    val edgeMax = with(density) { 88.dp.toPx() }
++    val velMin = with(density) { 1.dp.toPx() }
++    val velRange = with(density) { 13.dp.toPx() }
 +    val dragging = state.dragging
 +    LaunchedEffect(dragging) {
 +        if (dragging < 0) return@LaunchedEffect
 +        while (true) {
 +            withFrameNanos { }
-+            state.autoScroll(edge, step)
++            state.autoScroll(edgeMin, edgeMax, velMin, velRange)
 +        }
++    }
++    // 提交帧抑制 FLIP：下一帧把位移动画挂回去（见 [DragSortState.flipSuppressed]）
++    val suppressed = state.flipSuppressed
++    LaunchedEffect(suppressed) {
++        if (!suppressed) return@LaunchedEffect
++        withFrameNanos { }
++        state.resumeFlip()
 +    }
 +    return state
 +}
 +
-+/** 行容器里的每一项都包一层：序号即列表顺序。 */
++/**
++ * lazy 列表项修饰符：被拖行**不给**位移动画（即换即到位——参考实现：给它补滑移动画 = 不跟手），
++ * 其余行补参考实现同款 FLIP 滑移（只有真的挪了位置的行才会动）。
++ * 只关淡入淡出：这里是排序，不该顺带把滚入视口的行淡进来。
++ *
++ * @Composable：`Modifier.animateItem` 是列表项作用域里的组合期 API，包一层省得每个宿主各自判断。
++ */
++@Composable
++internal fun LazyItemScope.dragSortItem(state: DragSortState, index: Int): Modifier =
++    if (state.dragging == index || state.flipSuppressed) Modifier
++    else Modifier.animateItem(fadeInSpec = null, placementSpec = FlipSpec, fadeOutSpec = null)
++
++/** 行容器里的每一项都包一层：序号即列表顺序（[DragSortState.order] 里的原始下标）。 */
 +@Composable
 +internal fun DragSortRow(
 +    state: DragSortState,
@@ -6942,10 +6986,10 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..08ad154
+index 0000000..c7362cc
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2281 @@
+@@ -0,0 +1,2297 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -6958,6 +7002,7 @@ index 0000000..08ad154
 +import androidx.compose.foundation.layout.padding
 +import androidx.compose.foundation.layout.width
 +import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
 +import androidx.compose.foundation.lazy.itemsIndexed
 +import androidx.compose.foundation.lazy.rememberLazyListState
 +import androidx.compose.foundation.rememberScrollState
@@ -6982,6 +7027,7 @@ index 0000000..08ad154
 +import top.yukonga.miuix.kmp.icon.MiuixIcons
 +import top.yukonga.miuix.kmp.icon.extended.Delete
 +import top.yukonga.miuix.kmp.icon.extended.Edit
++import top.yukonga.miuix.kmp.icon.extended.Rename
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +import top.yukonga.miuix.kmp.window.WindowDialog
 +
@@ -7031,8 +7077,10 @@ index 0000000..08ad154
 + * 序列（proxies / proxy-groups / tunnels / rules）的列表页：表头 + 每项一卡。
 + *
 + * 排序与操作全部对齐 mihomo_box WebUI（pages-flow.js / pages-config.js）：
-+ *  - **按住行首把手拖动排序**（`.drag-handle` 同款两列三点），松手写回新顺序；「⋯」菜单里的
-+ *    上移 / 下移随之下线——有了把手，「在上方插入」也并入「新增 + 拖到位置」这一条路径；
++ *  - **按住行首把手拖动排序**（`.drag-handle` 同款两列三点）：拖动中按 [DragSortState.order]
++ *    实时换位（等价参考实现的 `insertBefore`），松手才把最终档位写回宿主一次；非被拖行补
++ *    FLIP 滑移，被拖行即换即到位。「⋯」菜单里的上移 / 下移随之下线——有了把手，
++ *    「在上方插入」也并入「新增 + 拖到位置」这一条路径；
 + *  - 行尾是 ✎ 编辑 / × 删除两个图标按钮；`onDelete` 给了就走调用方的删除流程（引用保护），
 + *    否则先弹一次确认再删（此前靠菜单里的两步确认）。
 + */
@@ -7054,7 +7102,7 @@ index 0000000..08ad154
 +    val broken = seq != null && seq.kind != YamlNode.Kind.SEQ && !doc.isNullText(seq)
 +    var plainDelete by remember { mutableStateOf(-1) }
 +    val listState = rememberLazyListState()
-+    val dragSort = rememberDragSortState(items.size, recycleRows = true) { from, to ->
++    val dragSort = rememberDragSortState(items.size) { from, to ->
 +        val label = items.getOrNull(from)?.let { rowTitle(from, it) } ?: unit
 +        host.moveItem(seqPath, from, to, label)
 +    }
@@ -7084,21 +7132,25 @@ index 0000000..08ad154
 +                )
 +            }
 +        }
-+        itemsIndexed(items) { i, node ->
-+            DragSortRow(state = dragSort, index = i) {
-+                RowCard(
-+                    title = rowTitle(i, node),
-+                    summary = rowSummary(i, node),
-+                    onClick = { onOpen(i, node) },
-+                    dragHandle = { DragHandle(dragSort, i) },
-+                    endActions = {
-+                        MiniIconButton(MiuixIcons.Edit, "编辑") { onOpen(i, node) }
-+                        Spacer(Modifier.width(8.dp))
-+                        MiniIconButton(MiuixIcons.Delete, "删除") {
-+                            if (onDelete != null) onDelete(i, node) else plainDelete = i
-+                        }
-+                    },
-+                )
++        // 顺序由 DragSortState.order 定：拖动中它就是「列表内实时换位」的现场，不拖动时是恒等序；
++        // 行内容与回调一律按原始下标取，换位不会让「编辑 / 删除」指到别的项上。
++        items(dragSort.order, key = { it }) { i ->
++            items.getOrNull(i)?.let { node ->
++                DragSortRow(state = dragSort, index = i, modifier = dragSortItem(dragSort, i)) {
++                    RowCard(
++                        title = rowTitle(i, node),
++                        summary = rowSummary(i, node),
++                        onClick = { onOpen(i, node) },
++                        dragHandle = { DragHandle(dragSort, i) },
++                        endActions = {
++                            MiniIconButton(MiuixIcons.Edit, "编辑") { onOpen(i, node) }
++                            Spacer(Modifier.width(8.dp))
++                            MiniIconButton(MiuixIcons.Delete, "删除") {
++                                if (onDelete != null) onDelete(i, node) else plainDelete = i
++                            }
++                        },
++                    )
++                }
 +            }
 +        }
 +    }
@@ -7118,7 +7170,9 @@ index 0000000..08ad154
 +
 +/**
 + * 映射（proxy-providers / rule-providers / sub-rules）的列表页：按名字一卡。
-+ * 行尾与序列列表同一套：✎ 改名 / × 删除两个图标按钮（映射无顺序，不给拖动把手）。
++ * 行尾 ✎ = **编辑所有配置**：进详情页改全部字段（与 mihomo_box 面板的 `.mini-btn ✎` → 全字段
++ * 编辑弹层同口径，改名也在详情页里做）；× = 删除。映射无顺序，不给拖动把手。
++ * 子规则没有详情页，额外给一个「改名」图标（[renameNote] / [onRename] 只有它传）。
 + */
 +@Composable
 +private fun MapListPage(
@@ -7129,8 +7183,8 @@ index 0000000..08ad154
 +    headerActions: @Composable () -> Unit,
 +    rowSummary: (String, YamlNode?) -> String?,
 +    onOpen: (String) -> Unit,
-+    renameNote: String,
-+    onRename: (old: String, new: String) -> Unit,
++    renameNote: String? = null,
++    onRename: ((old: String, new: String) -> Unit)? = null,
 +    onDelete: ((String) -> Unit)? = null,
 +) {
 +    val doc = host.doc
@@ -7168,7 +7222,12 @@ index 0000000..08ad154
 +                summary = rowSummary(e.key, e.node),
 +                onClick = { onOpen(e.key) },
 +                endActions = {
-+                    MiniIconButton(MiuixIcons.Edit, "改名") { renaming = e.key }
++                    // ✎ = 编辑所有配置（点整卡同效）：详情页里改全部字段，改名也在那里
++                    MiniIconButton(MiuixIcons.Edit, "编辑") { onOpen(e.key) }
++                    if (onRename != null) {
++                        Spacer(Modifier.width(8.dp))
++                        MiniIconButton(MiuixIcons.Rename, "改名") { renaming = e.key }
++                    }
 +                    Spacer(Modifier.width(8.dp))
 +                    MiniIconButton(MiuixIcons.Delete, "删除") {
 +                        if (onDelete != null) onDelete(e.key) else confirmDelete = e.key
@@ -7187,18 +7246,21 @@ index 0000000..08ad154
 +            onConfirm = { confirmDelete = null; host.clear(mapPath + key, key) },
 +        )
 +    }
++    val rename = onRename
 +    renaming?.let { key ->
-+        NameDialog(
-+            title = "改名",
-+            summary = "`${pathText(mapPath + key)}` · $renameNote",
-+            initial = key,
-+            label = "新名字",
-+            onDismiss = { renaming = null },
-+            onConfirm = { new ->
-+                renaming = null
-+                if (new != key) onRename(key, new)
-+            },
-+        )
++        if (rename != null) {
++            NameDialog(
++                title = "改名",
++                summary = "`${pathText(mapPath + key)}` · ${renameNote.orEmpty()}",
++                initial = key,
++                label = "新名字",
++                onDismiss = { renaming = null },
++                onConfirm = { new ->
++                    renaming = null
++                    if (new != key) rename(key, new)
++                },
++            )
++        }
 +    }
 +}
 +
@@ -7891,8 +7953,7 @@ index 0000000..08ad154
 +            }
 +        },
 +        onOpen = { name -> nav.push(FormRoute.Provider(name)) },
-+        renameNote = "会同步代理组 use 里的引用",
-+        onRename = { old, new -> renameProvider(host, old, new) },
++        // ✎ = 编辑所有配置（详情页有全部字段与「改名」，与 mihomo_box 面板一致）
 +        onDelete = { name -> deleting = startDelete(doc, "proxy-providers", name) },
 +    )
 +    if (creating) {
@@ -8817,8 +8878,7 @@ index 0000000..08ad154
 +            }
 +        },
 +        onOpen = { name -> nav.push(FormRoute.RuleProvider(name)) },
-+        renameNote = "会同步 rules 里的 RULE-SET,名字（子规则里的不会动）",
-+        onRename = { old, new -> renameRuleProvider(host, old, new) },
++        // ✎ = 编辑所有配置（详情页有全部字段与「改名」，与 mihomo_box 面板一致）
 +        onDelete = { name -> deleting = startDelete(doc, "rule-providers", name) },
 +    )
 +    if (creating) {
@@ -9355,10 +9415,10 @@ index 0000000..033bcf3
 +    (name.trim().ifEmpty { fallback }).replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 new file mode 100644
-index 0000000..6af6aed
+index 0000000..77a969a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
-@@ -0,0 +1,635 @@
+@@ -0,0 +1,638 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -9638,7 +9698,10 @@ index 0000000..6af6aed
 +                    .verticalScroll(scrollState),
 +            ) {
 +                if (items.isEmpty()) DialogNote("（空）")
-+                items.forEachIndexed { index, item ->
++                // 行号列显示的是**当前档位**（拖动换位后重新编号），行内容按原始下标取
++                dragSort.order.forEachIndexed { pos, index ->
++                    if (index !in items.indices) return@forEachIndexed
++                    val item = items[index]
 +                    DragSortRow(state = dragSort, index = index) {
 +                        Row(
 +                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
@@ -9646,7 +9709,7 @@ index 0000000..6af6aed
 +                        ) {
 +                            DragHandle(dragSort, index)
 +                            Text(
-+                                text = (index + 1).toString().padStart(2),
++                                text = (pos + 1).toString().padStart(2),
 +                                fontSize = 12.sp,
 +                                fontFamily = FontFamily.Monospace,
 +                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
@@ -14166,10 +14229,10 @@ index 0000000..1704d85
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
 new file mode 100644
-index 0000000..fbc0ee9
+index 0000000..4a65915
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
-@@ -0,0 +1,1069 @@
+@@ -0,0 +1,1078 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import android.content.pm.ApplicationInfo
@@ -14270,7 +14333,10 @@ index 0000000..fbc0ee9
 +                    .verticalScroll(scrollState),
 +                verticalArrangement = Arrangement.spacedBy(4.dp),
 +            ) {
-+                servers.forEachIndexed { index, value ->
++                // 顺序由 DragSortState.order 定（拖动中实时换位）；行内容与回调按原始下标取
++                dragSort.order.forEach { index ->
++                    if (index !in servers.indices) return@forEach
++                    val value = servers[index]
 +                    DragSortRow(state = dragSort, index = index) {
 +                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 +                            DragHandle(dragSort, index)
@@ -14764,7 +14830,10 @@ index 0000000..fbc0ee9
 +                    .then(dragSort.containerModifier { scrollState.dispatchRawDelta(it) })
 +                    .verticalScroll(scrollState),
 +            ) {
-+                rules.forEachIndexed { index, raw ->
++                // 顺序由 DragSortState.order 定（拖动中实时换位）；行内容与回调按原始下标取
++                dragSort.order.forEach { index ->
++                    if (index !in rules.indices) return@forEach
++                    val raw = rules[index]
 +                    DragSortRow(state = dragSort, index = index) {
 +                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 +                            DragHandle(dragSort, index)
@@ -15195,7 +15264,10 @@ index 0000000..fbc0ee9
 +                        .then(dnsValueSort.containerModifier { dnsValueScroll.dispatchRawDelta(it) })
 +                        .verticalScroll(dnsValueScroll),
 +                ) {
-+                    values.forEachIndexed { index, value ->
++                    // 顺序由 DragSortState.order 定（拖动中实时换位）；行内容与回调按原始下标取
++                    dnsValueSort.order.forEach { index ->
++                        if (index !in values.indices) return@forEach
++                        val value = values[index]
 +                        DragSortRow(state = dnsValueSort, index = index) {
 +                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 +                                DragHandle(dnsValueSort, index)
@@ -20257,7 +20329,7 @@ index 018c54d..4623ff2 100644
  private fun tunStackLabel(stack: String): String =
      TUN_STACK_OPTIONS.firstOrNull { it.first == stack.lowercase() }?.second ?: stack.ifEmpty { "--" }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
-index 119695c..e57dd51 100644
+index 119695c..6a00ea6 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 @@ -7,13 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
@@ -20267,10 +20339,11 @@ index 119695c..e57dd51 100644
 -import androidx.compose.foundation.layout.size
 -import androidx.compose.foundation.layout.width
  import androidx.compose.foundation.lazy.LazyColumn
- import androidx.compose.foundation.lazy.itemsIndexed
+-import androidx.compose.foundation.lazy.itemsIndexed
 -import androidx.compose.material.icons.Icons
 -import androidx.compose.material.icons.rounded.KeyboardArrowDown
 -import androidx.compose.material.icons.rounded.KeyboardArrowUp
++import androidx.compose.foundation.lazy.items
 +import androidx.compose.foundation.lazy.rememberLazyListState
  import androidx.compose.runtime.Composable
  import androidx.compose.runtime.LaunchedEffect
@@ -20300,7 +20373,7 @@ index 119695c..e57dd51 100644
 +    // 列表就是「覆写生效顺序」本身：按住行尾把手拖动即改顺序，不再用一对上/下箭头一点点挪。
 +    // 拖动只改 order 的顺序，落点判定与校验仍走原有保存路径。
 +    val listState = rememberLazyListState()
-+    val dragSort = rememberDragSortState(displayed.size, recycleRows = true) { from, to ->
++    val dragSort = rememberDragSortState(displayed.size) { from, to ->
 +        val moved = displayed.toMutableList().also { it.add(to, it.removeAt(from)) }
 +        order = moved + order.filter { it !in moved }
 +    }
@@ -20318,10 +20391,13 @@ index 119695c..e57dd51 100644
                      .horizontalCutoutPadding()
                      .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                      .scrollEndHaptic()
-@@ -167,18 +175,17 @@ fun SubscriptionOverridesScreen(
-                 itemsIndexed(displayed, key = { _, id -> id }) { index, id ->
-                     val profile = profilesById[id] ?: return@itemsIndexed
-                     val checked = id in selected
+@@ -164,21 +172,24 @@ fun SubscriptionOverridesScreen(
+                     }
+                 }
+ 
+-                itemsIndexed(displayed, key = { _, id -> id }) { index, id ->
+-                    val profile = profilesById[id] ?: return@itemsIndexed
+-                    val checked = id in selected
 -                    OverrideSelectionItem(
 -                        profile = profile,
 -                        checked = checked,
@@ -20334,21 +20410,28 @@ index 119695c..e57dd51 100644
 -                        onMoveDown = { order = displayed.swap(index, index + 1) },
 -                        modifier = Modifier.animateItem(),
 -                    )
-+                    DragSortRow(state = dragSort, index = index) {
-+                        OverrideSelectionItem(
-+                            profile = profile,
-+                            checked = checked,
-+                            dragSort = dragSort,
-+                            index = index,
-+                            onToggle = {
-+                                selected = if (checked) selected - id else selected + id
-+                            },
-+                        )
++                // 顺序由 DragSortState.order 定（拖动中实时换位）；key 仍是覆写 id，内容按原始下标取
++                items(dragSort.order, key = { displayed.getOrNull(it) ?: it }) { index ->
++                    val id = displayed.getOrNull(index)
++                    val profile = id?.let { profilesById[it] }
++                    if (id != null && profile != null) {
++                        val checked = id in selected
++                        DragSortRow(state = dragSort, index = index, modifier = dragSortItem(dragSort, index)) {
++                            OverrideSelectionItem(
++                                profile = profile,
++                                checked = checked,
++                                dragSort = dragSort,
++                                index = index,
++                                onToggle = {
++                                    selected = if (checked) selected - id else selected + id
++                                },
++                            )
++                        }
 +                    }
                  }
  
                  item(key = "bottom_spacer") {
-@@ -193,15 +200,12 @@ fun SubscriptionOverridesScreen(
+@@ -193,15 +204,12 @@ fun SubscriptionOverridesScreen(
  private fun OverrideSelectionItem(
      profile: OverrideProfile,
      checked: Boolean,
@@ -20367,7 +20450,7 @@ index 119695c..e57dd51 100644
              .fillMaxWidth()
              .padding(horizontal = 12.dp)
              .padding(bottom = 12.dp),
-@@ -216,49 +220,9 @@ private fun OverrideSelectionItem(
+@@ -216,49 +224,9 @@ private fun OverrideSelectionItem(
                      modifier = Modifier.padding(end = 12.dp),
                  )
              },

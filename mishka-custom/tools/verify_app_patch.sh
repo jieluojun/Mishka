@@ -160,12 +160,12 @@ assert_contains '0.0.0.0' \
 assert_contains 'internal fun rememberDragSortState(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'hold-and-drag sorting helper is present'
-assert_contains 'recycleRows: Boolean = false' \
+assert_contains 'internal fun LazyItemScope.dragSortItem(' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'drag state exposes the recycling-container switch'
-assert_contains 'DragSortRow(state = dragSort, index = i) {' \
+  'lazy hosts attach the per-item drag modifier (FLIP only for non-dragged rows)'
+assert_contains 'items(dragSort.order, key = { it }) { i ->' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'sequence list rows use the drag-sort handle'
+  'sequence list rows render the live drag order and keep the drag handle'
 assert_contains 'DragSortRow(' \
   app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
   'override list uses the drag-sort handle'
@@ -205,22 +205,55 @@ check_last_param_is_lambda() {
     fail=1
   fi
 }
-# --- 拖动排序：与参考实现同构（列表内实时换位 + 虚线描边 + 虚拟化容器保活）---
+# --- 拖动排序：与参考实现同构（列表内实时换位 = insertBefore + 虚线描边 + FLIP + 边缘翻滚）---
 assert_contains 'PathEffect.dashPathEffect' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'dragged row draws the reference dashed outline'
-assert_contains 'return (dest - here).roundToInt()' \
+assert_contains 'val order: List<Int> get() = orderState' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'row shifting uses measured slot geometry (spacing and uneven heights)'
-assert_not_contains 'dragOffset' \
+  'drag state exposes the live visual order the hosts render'
+assert_contains 'orderState.removeAt(cur)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'dragged row no longer accumulates a finger offset (no auto-scroll drift)'
-assert_contains 'private fun checkpointIfRecycled' \
+  'crossing a row swaps the dragged row in-list (reference insertBefore)'
+assert_contains 'if (cur < at) at -= 1' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'recycling containers keep the dragged row alive'
-assert_contains 'recycleRows = true' \
+  'insert index is corrected for removing the dragged row first'
+assert_contains 'if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'finger over the dragged row itself is a no-op (no swap oscillation)'
+assert_contains 'placementSpec = FlipSpec' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'non-dragged rows get the reference FLIP easing, dragged row stays instant'
+assert_contains 'internal var flipSuppressed by mutableStateOf(false)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the commit frame suppresses the FLIP (keys renumber together with the data)'
+assert_contains 'val v = velMin + (depth / edge) * velRange' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'edge auto-scroll uses the reference 1..14dp/frame depth ramp'
+assert_not_contains 'checkpointIfRecycled' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'no mid-drag doc writes anymore (that was the stutter + misalignment source)'
+assert_not_contains 'recycleRows' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'lazy sequence list opts into recycle-aware dragging'
+  'lazy sequence list needs no recycle-aware checkpointing'
+assert_contains 'items(dragSort.order, key = { displayed.getOrNull(it) ?: it })' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
+  'override list renders the live drag order (profile ids stay the keys)'
+assert_contains 'dragSort.order.forEach { index ->' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'listener list renders the live drag order'
+assert_contains 'dragSort.order.forEachIndexed { pos, index ->' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt \
+  'string-list dialog renders the live drag order (line numbers follow the slot)'
+assert_contains 'dnsValueSort.order.forEach { index ->' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt \
+  'structured editor rows render the live drag order'
+assert_contains 'MiniIconButton(MiuixIcons.Edit, "编辑") { onOpen(e.key) }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'provider / rule-set list pencil opens the full editor (edit all), not rename'
+assert_not_contains 'MiniIconButton(MiuixIcons.Edit, "改名") { renaming = e.key }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'mapping list rows no longer rename from the pencil button'
 
 check_last_param_is_lambda MiniIconButton app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 check_last_param_is_lambda DragSortRow app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
