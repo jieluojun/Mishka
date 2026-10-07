@@ -221,72 +221,54 @@ assert_contains 'if (cur < at) at -= 1' \
 assert_contains 'if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'finger over the dragged row itself is a no-op (no swap oscillation)'
-assert_contains 'awaitPointerEvent(PointerEventPass.Initial)' \
+assert_contains 'private fun fingerWindowY(index: Int, localY: Float): Float?' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the pointer is captured on the CONTAINER, in the Initial pass (reference setPointerCapture(container))'
-assert_contains 'import androidx.compose.ui.input.pointer.PointerEventPass' \
+  'the finger Y is resolved in window coordinates (reference e.clientY, never accumulated)'
+assert_contains 'return coords.positionInWindow().y + localY' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'PointerEventPass is imported (the enum itself, no hidden extension deps)'
-assert_contains 'private fun handleAt(localY: Float): Int?' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'a press is hit-tested against the drag handles (reference: target closest .drag-handle)'
+  'the handle node position is read live for every pointer event'
 assert_contains 'dragTo(index, change.position.y)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the drag owner reads the finger straight from the event (container coords = viewport, never accumulated)'
-assert_not_contains '.pointerInput(index)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the handle no longer owns a gesture: it used to be torn down mid-drag (Cancel + mid-drag commit)'
-assert_contains 'private var moved = false' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'dragMoved: a mere press must never start the edge auto-scroll (reference: 只按下未动不滚)'
-assert_contains 'if (dragging < 0 || !moved) return' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'edge auto-scroll is gated on a real drag having started'
-assert_contains 'if (fingerY > firstTop) return' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'auto-scroll up only once the finger has pushed past the first visible row'
-assert_contains 'if (fingerY < lastBottom) return' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'auto-scroll down only once the finger has pushed past the last visible row'
-assert_contains 'if (bottom <= containerTop || top >= containerBottom) continue' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the first/last visible row are computed only from rows intersecting the viewport (stale off-screen bounds must not defeat the guard)'
-assert_contains 'if (edgeHoldNanos < EdgeHoldNanos) {' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'edge auto-scroll needs the out-of-bounds condition to hold ~150ms before it starts (no fly-by scrolls)'
-assert_contains 'private fun consumeStrays(changes: List<PointerInputChange>, tracked: PointerInputId?): Int' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'a second finger can neither re-arm the drag nor scroll the list during one (reference capId guard)'
-assert_contains 'internal const val DragSortRevision = "r7"' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the drag revision is a single constant (temporary build marker, remove once confirmed)'
-assert_contains '按住行首把手拖动排序 · 拖动 $DragSortRevision' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'the sequence list header shows the drag revision (so any screenshot tells us which build is installed)'
-assert_contains 'private var stepPending = false' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'pointer events only mark a pending hit-test'
-assert_contains 'internal fun drainStep()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'hit-testing is drained once per frame (reference batches pointermove into rAF)'
-assert_contains 'state.drainStep()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the per-frame drag loop drains the pending hit-test before the edge scroll'
-assert_not_contains 'fingerY +=' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the finger Y is never accumulated (node-local deltas drift by a row height per swap)'
+  'onDrag converts the local offset to a window Y instead of adding deltas'
 assert_not_contains 'dragAmount' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'no local-delta accumulation: the dragged row jumps a whole row height per swap and the auto-scroll moves the content under the finger, so node-local deltas contain phantom motion (it drifted the finger Y by one row per swap -> swap flicker + stray up-scroll)'
-# 手势只用 PointerEventPass（枚举）+ awaitPointerEventScope + PointerInputChange 的成员属性
-# （pressed / previousPressed / position / previousPosition / isConsumed）——不依赖任何
-# androidx.compose.ui.input.pointer 的扩展函数，少一类「漏 import / 版本改签名」的编译风险。
-assert_contains 'import androidx.compose.ui.input.pointer.awaitPointerEventScope' \
+# positionInWindow / boundsInWindow 是 androidx.compose.ui.layout 包里的扩展函数（不是接口成员）：
+# 少了 import，K2 报 Unresolved reference —— 与曾经漏 import dragSortItem 的 CI 失败同一类。
+assert_contains 'import androidx.compose.ui.layout.positionInWindow' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'awaitPointerEventScope is imported for the container-level gesture loop'
-assert_not_contains 'import androidx.compose.foundation.gestures.detectDragGestures' \
+  'positionInWindow is imported (it is an extension, not a LayoutCoordinates member)'
+assert_contains 'import androidx.compose.ui.layout.LayoutCoordinates' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'detectDragGestures is gone (slop/cancel semantics on a moving node were the failure mode)'
+  'LayoutCoordinates is imported for the live handle coordinates map'
+# --- 把手手势要在 DOWN 时先于 LazyColumn 抢占指针流；只有真实抬手才提交排序 ---
+assert_contains 'import androidx.compose.foundation.gestures.awaitEachGesture' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'drag handle uses an exclusive pointer loop rather than a competing drag detector'
+assert_contains 'val down = awaitFirstDown(' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'drag handle captures the pointer-down before parent scrolling can win touch slop'
+assert_contains 'pass = PointerEventPass.Main' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'pointer capture runs in the child-first Main pass'
+assert_contains 'down.consume()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the drag handle consumes DOWN to keep ordinary list scrolling from taking over'
+assert_contains 'viewConfiguration.touchSlop' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'a tap does not start auto-scroll; reorder starts only after vertical touch slop'
+assert_contains 'if (dragStarted && !finished) cancelDrag()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'pointer cancellation rolls back instead of committing as a successful drop'
+assert_contains 'fun cancelDrag()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'canceled drags reset visual order without writing to the host'
+assert_not_contains 'detectDragGestures' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the competing touch-slop detector is removed from the drag handle'
+assert_not_contains 'onDragCancel = { endDrag() }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'gesture cancellation cannot be mistaken for a normal drop'
 assert_contains 'placementSpec = FlipSpec' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'non-dragged rows get the reference FLIP easing, dragged row stays instant'
