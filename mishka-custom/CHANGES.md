@@ -241,11 +241,30 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
 
 防回归：verify 明确断言表单抽屉 `enableNestedScroll = false`。
 
+## 12. 回滚前几轮手势试错，重做活动行跟手
+
+用户补充实际表现：向上拖时，列表/条目往下移动，排序把手从手指下脱开，随后拖动中断。此前 v1–v3 把重点放在
+指针坐标、禁用列表触摸滚动和关闭抽屉 nested scroll；这些没有让活动行本身持续跟手。
+
+**代码层面的直接问题**：`orderState` 每次命中都会把活动行移动到新的 LazyColumn 逻辑槽位，而把手绘制在该行里；
+列表换位或滚动时把手随槽位移动，手指却留在屏幕原处。窗口坐标能算准手指，不会自动把控件视觉位置固定在手指下。
+
+本轮撤销前几轮滚动开关：移除 `handleGestureActive` / `userScrollEnabled` 临时开关，并恢复 `WindowBottomSheet`
+默认嵌套滚动参数。新的排序方式是：
+
+- 外层行容器只负责记录 LazyColumn 当前逻辑槽位；
+- 活动行内部视觉内容按 `fingerY - grabOffsetY - slotTop` 独立平移，手指抓住把手的同一点保持在指尖下；
+- `orderState` 仍在下方实时换位，其它行继续做 FLIP；槽位或滚动位置改变时，由快照几何重新计算活动行偏移；
+- 只有真实松手才写回宿主，取消仍回滚。
+
+这一方案专门处理「行/列表向下移动、把手留不住指尖」；源码静态验证不替代实机拖动验证。
+
 ## 验证
 
-- §8 的 **146 条 ok / 0 FAIL** 和独立副本比对是此前版本的记录；§9、§10 两次手势修正均未解决实机反馈。
-- v3 补丁在上游基线 commit `5e6743592b9c465eb015db7b05c588c50cd2b874` 上完整运行
-  `verify_app_patch.sh --repo` → **PASS：165 条 ok / 0 FAIL**；补丁双向可逆，67 个文件与基线 blob 一致，新增抽屉隔离断言通过。
+- v4 在上游基线 commit `5e6743592b9c465eb015db7b05c588c50cd2b874` 完整运行
+  `verify_app_patch.sh --repo` → **PASS：171 条 ok / 0 FAIL**；补丁双向可逆，67 个文件与基线 blob 一致。
+- 新增断言覆盖：已移除 v2/v3 的滚动开关、活动行的 slot offset 跟手、手指抓取点偏移固定、槽位测量与视觉平移分层，
+  以及自动滚动基于上一帧完整布局命中。
 - `tools/check_cross_package_imports.py` 跨包 import 全树检查继续挂在 verify（历史自测 0 误报；删掉 §7 的 import
   可精确复现此前 CI 报错点）。
 - 未运行 Gradle 编译或设备复测；静态检查不等于运行时已解决。

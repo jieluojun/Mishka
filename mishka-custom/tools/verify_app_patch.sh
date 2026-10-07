@@ -269,18 +269,36 @@ assert_not_contains 'detectDragGestures' \
 assert_not_contains 'onDragCancel = { endDrag() }' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'gesture cancellation cannot be mistaken for a normal drop'
-assert_contains 'internal var handleGestureActive by mutableStateOf(false)' \
+assert_not_contains 'handleGestureActive' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the full handle pointer lifetime is exposed to sortable LazyColumn hosts'
-assert_contains 'userScrollEnabled = !dragSort.handleGestureActive' \
+  'obsolete scroll-toggle state from the failed v2 workaround is removed'
+assert_not_contains 'userScrollEnabled = !dragSort.handleGestureActive' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'route-rule LazyColumn disables touch scrolling for the complete handle gesture'
-assert_contains 'userScrollEnabled = !dragSort.handleGestureActive' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
-  'override LazyColumn disables touch scrolling for the complete handle gesture'
-assert_contains 'enableNestedScroll = false' \
+  'route-rule list no longer relies on the failed user-scroll toggle'
+assert_not_contains 'enableNestedScroll = false' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'sortable form bottom sheet does not take over unconsumed list drag deltas'
+  'the failed v3 sheet-level nested-scroll toggle is reverted'
+assert_contains 'private var fingerY by mutableFloatStateOf(0f)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'pointer position is observable so the active visual row follows every pointer update'
+assert_contains 'internal fun dragOffsetPx(index: Int): Int' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'active row translation is calculated against its current LazyColumn slot'
+assert_contains '.offset { IntOffset(0, state.dragOffsetPx(index)) }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'active visual row remains under the pointer while its logical slot reorders'
+assert_contains 'return (fingerY - grabOffsetY - slotTop).roundToInt()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the grabbed point remains at the same finger offset as the slot changes'
+assert_contains 'Box(modifier = modifier.then(state.rowModifier(index)))' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'slot geometry is measured outside the translated visual row'
+assert_contains '// 先按上一帧完整布局命中，再发送滚动 delta；不要在 dispatchRawDelta 之后立刻读旧坐标。' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'auto-scroll hit-testing uses a completed layout before dispatching movement'
+assert_contains 'private val tops = mutableStateMapOf<Int, Float>()' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'slot geometry changes invalidate the active row placement even without new pointer input'
 assert_contains 'forgetOnDispose = true' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
   'route-rule LazyColumn rows clear geometry when recycled'

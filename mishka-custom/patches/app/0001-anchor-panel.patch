@@ -4411,10 +4411,10 @@ index 0000000..d4c6508
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..3ed76e8
+index 0000000..1a05e5a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1500 @@
+@@ -0,0 +1,1497 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4524,9 +4524,6 @@ index 0000000..3ed76e8
 +        show = visible,
 +        title = route?.let { routeTitle(it, doc) } ?: "配置表单",
 +        onDismissRequest = onClose,
-+        // Don't let unconsumed LazyColumn drag deltas bubble up and move/dismiss this sheet.
-+        // The form list keeps its own touch/programmatic scrolling; the explicit close action remains.
-+        enableNestedScroll = false,
 +        startAction = if (route == null) null else {
 +            { IconButton(onClick = { nav.pop() }) { Icon(MiuixIcons.Back, "返回", tint = MiuixTheme.colorScheme.onBackground) } }
 +        },
@@ -6474,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..bdde1c5
+index 0000000..5cd6f34
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,572 @@
+@@ -0,0 +1,545 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6487,6 +6484,7 @@ index 0000000..bdde1c5
 +import androidx.compose.foundation.gestures.awaitEachGesture
 +import androidx.compose.foundation.gestures.awaitFirstDown
 +import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.offset
 +import androidx.compose.foundation.layout.size
 +import androidx.compose.foundation.lazy.LazyItemScope
 +import androidx.compose.foundation.shape.RoundedCornerShape
@@ -6495,7 +6493,9 @@ index 0000000..bdde1c5
 +import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.Stable
 +import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableFloatStateOf
 +import androidx.compose.runtime.mutableStateListOf
++import androidx.compose.runtime.mutableStateMapOf
 +import androidx.compose.runtime.mutableStateOf
 +import androidx.compose.runtime.remember
 +import androidx.compose.runtime.rememberUpdatedState
@@ -6527,44 +6527,19 @@ index 0000000..bdde1c5
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.zIndex
 +import kotlin.math.abs
++import kotlin.math.roundToInt
 +import top.yukonga.miuix.kmp.basic.Icon
 +import top.yukonga.miuix.kmp.basic.IconButton
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +
 +/*
-+ * 按住把手拖动排序（对齐 mihomo_box WebUI `js/core.js` 的 `enableDragSort`）：
-+ *  - 行首一个两列三点的把手（[DragHandle]），**按住即拖**——不做长按等待；DOWN 时由把手在
-+ *    child-first Main pass 独占指针流，拖动仍等垂直 touch slop 才开始，阻止 LazyColumn / 外层
-+ *    sheet 抢成普通上滑；没有把手以外的排序入口；
-+ *  - **列表内实时换位**：命中判定 =「手指窗口 Y 落在哪一行的身位里、在该行中线的上半还是
-+ *    下半」，命中后直接把被拖行在视觉顺序 [DragSortState.order] 里搬到该档——这正是参考实现
-+ *    `elementFromPoint` + `insertBefore` 的 Compose 版：顺序在「列表」里实时改，被拖行
-+ *    **即换即到位**（参考实现原话：给它补滑移动画 = 不跟手），其余行由宿主给 FLIP 位移动画；
-+ *  - 行身段（窗口坐标）只用于命中判定，来自真实布局测量：每帧重算，不缓存槽位差、不模拟让位
-+ *    位移——上一版按「实测槽位差」让位，行长不等（多行 AND 规则等）时被拖行会压到邻行身上，
-+ *    且滚动中槽位表变旧，正是错位的根源；
-+ *  - **父级滚动不抢把手手势**：把手消费 DOWN 和后续移动，普通列表滚动不会取消排序；需要自动翻滚时
-+ *    只由 [autoScroll] 通过 `dispatchRawDelta` 驱动。手势意外取消只回滚现场，不把 cancel 伪装成 drop；
-+ *  - **指尖位置只认窗口坐标**：每次事件按「把手节点实时的窗口顶 + 事件在手把内的局部 Y」当场还原成
-+ *    指尖的窗口 Y（[fingerWindowY]）——与参考实现全程用 `e.clientY` 同口径。Compose 的 `position`
-+ *    是节点局部坐标，被拖行「即换即到位」是整行高瞬跳、自动翻滚又在指下滚内容，局部坐标会「手指
-+ *    没动却变了」；把这种假位移累加，每换一次位手指 Y 就偏一整行：命中判定落回被拖行身后那一行、
-+ *    刚换上去又被换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进边缘带触发误翻滚（列表自己上滑）。
-+ *    参考实现 pointerdown 时特意从活动指针重新播种 pendX/pendY，注释原话：否则边缘翻滚用的是
-+ *    残留 / 0 的 Y，「点一下把手页面就滚」——同一类错的两种表现，这里一并掐掉；
-+ *  - 被拖行永远停在手指命中的那一档里（手指在屏幕内），容器不可能把它回收掉——所以不再需要
-+ *    「拖到视口外就先写回一段」的中途提交：宿主的数据只在松手时动一次（[DragSortState.endDrag]），
-+ *    拖动过程中零文档写入、零重组风暴；
-+ *  - 非被拖行只在「真的挪了位置」时补一段 FLIP 滑移（lazy 列表用 [dragSortItem] 接
-+ *    `Modifier.animateItem`，.26s cubic-bezier(.2,.8,.25,1)，与参考实现同一段缓动）；
-+ *  - 手指进入容器上下边缘时自动翻滚：E = clamp(容器高×15%, 44dp, 88dp)，v = 1 + (depth/E)×13
-+ *    dp/帧（同参考实现 ≈1~14px/帧）；滚一帧立刻补一轮命中判定；
-+ *  - 拖动中的行加参考实现 `.rule-item.dragging` 的视觉：整行降透明 + 强调色淡底 +
-+ *    1.5dp 虚线描边 + 淡阴影。
-+ *
-+ * [DragSortState.order] 是「原始下标的排列」：宿主按它渲染列表（`items(order)` / `order.forEach`），
-+ * 不拖动时恒为恒等序。松手时把被拖行的最终档位 [DragSortState.endDrag] 交给宿主的 `onMove(from, to)`
-+ * ——序列的 `removeAt(from)` + `add(to)` 口径，与 YamlPatch.moveItem 一致。
++ * 按住把手拖动排序：
++ * - 指针由把手独占，越过 touch slop 后开始拖；取消只回滚，不伪装成松手提交。
++ * - orderState 实时调整 LazyColumn 的逻辑槽位；活动行的外层槽位仍参与排版，内层视觉内容用
++ *   dragOffsetPx 单独平移到指尖位置。这样列表可以在活动行下方换位/滚动，抓手不会随逻辑槽位跳走。
++ * - 命中只使用当前可见行的窗口几何。活动行落在自己的逻辑槽位时不重复换位，避免邻行来回抖动。
++ * - 指尖以窗口 Y 计算；边缘自动滚动只由 state 自己通过 dispatchRawDelta 发起。
++ * - 只有非活动行做 FLIP，松手时宿主一次性写回最终顺序。
 + */
 +
 +/** `.rule-item.dragging { opacity: .55 }`。 */
@@ -6600,18 +6575,6 @@ index 0000000..bdde1c5
 +    internal var dragging by mutableStateOf(-1)
 +        private set
 +
-+    /** 把手从 DOWN 到 UP / cancel 的完整指针生命周期，用来临时禁用 LazyColumn 的触摸滚动。 */
-+    internal var handleGestureActive by mutableStateOf(false)
-+        private set
-+
-+    internal fun beginHandleGesture() {
-+        handleGestureActive = true
-+    }
-+
-+    internal fun finishHandleGesture() {
-+        handleGestureActive = false
-+    }
-+
 +    /** 拖动中是否真的换过位（换过才在松手时写回宿主）。 */
 +    private var reordered = false
 +
@@ -6628,13 +6591,17 @@ index 0000000..bdde1c5
 +        flipSuppressed = false
 +    }
 +
-+    private var fingerY = 0f
++    /** 指尖的窗口 Y；只有活动行的视觉偏移会观察它。 */
++    private var fingerY by mutableFloatStateOf(0f)
++    /** 手指落在行内的偏移量：确保拖动把手上原先按住的点一直留在指尖下。 */
++    private var grabOffsetY = 0f
 +    private var draggingHeight = 0f
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
 +    private var scrollBy: ((Float) -> Float)? = null
-+    private val tops = HashMap<Int, Float>()
-+    private val heights = HashMap<Int, Float>()
++    // 活动行的 offset 会观察 tops[index]；槽位布局变化时即使没有新指针事件，也要重新贴到手指下。
++    private val tops = mutableStateMapOf<Int, Float>()
++    private val heights = mutableStateMapOf<Int, Float>()
 +    private val handleTops = HashMap<Int, Float>()
 +    private val handleCoords = HashMap<Int, LayoutCoordinates>()
 +
@@ -6650,6 +6617,7 @@ index 0000000..bdde1c5
 +        if (dragging >= 0) {
 +            dragging = -1
 +            fingerY = 0f
++            grabOffsetY = 0f
 +            draggingHeight = 0f
 +        }
 +        resetOrder()
@@ -6684,9 +6652,8 @@ index 0000000..bdde1c5
 +    }
 +
 +    /**
-+     * 行：量自己的身段（窗口坐标，命中判定用），被拖行抬到最上层。
-+     * 位置回调放在最外层：量到的永远是行的**布局**位置（lazy 列表的换位动画是画在层上的，
-+     * 不影响这里的布局坐标——命中判定因此不会被动画中的半程位置带偏）。
++     * 外层槽位：记录 LazyColumn 的未平移布局位置，给命中判断和活动行的视觉补偿共用。
++     * 视觉平移放在此 wrapper 的内层，因此活动行仍能在指尖下显示而不污染槽位坐标。
 +     */
 +    fun rowModifier(index: Int): Modifier =
 +        Modifier
@@ -6696,6 +6663,16 @@ index 0000000..bdde1c5
 +                heights[index] = b.height
 +            }
 +            .zIndex(if (index == dragging) 1f else 0f)
++
++    /**
++     * Keep the active row's visual content attached to the finger while its LazyColumn slot is
++     * reordered underneath it. `tops[index]` is measured on the outer, un-offset slot wrapper.
++     */
++    internal fun dragOffsetPx(index: Int): Int {
++        if (index != dragging) return 0
++        val slotTop = tops[index] ?: return 0
++        return (fingerY - grabOffsetY - slotTop).roundToInt()
++    }
 +
 +    /** 把手：按住即拖（越过触摸阈值后进入拖动，与 WebUI 把手上 touch-action:none 同效果）。 */
 +    fun handleModifier(index: Int): Modifier =
@@ -6715,7 +6692,6 @@ index 0000000..bdde1c5
 +                        pass = PointerEventPass.Main,
 +                    )
 +                    down.consume()
-+                    beginHandleGesture()
 +
 +                    var dragStarted = false
 +                    var finished = false
@@ -6754,7 +6730,6 @@ index 0000000..bdde1c5
 +                    } finally {
 +                        // 失焦 / 节点卸载 / 系统取消不等于用户松手：回滚视觉顺序，不写文档、不弹 toast。
 +                        if (dragStarted && !finished) cancelDrag()
-+                        finishHandleGesture()
 +                    }
 +                }
 +            }
@@ -6762,25 +6737,17 @@ index 0000000..bdde1c5
 +    fun startDrag(index: Int, localY: Float) {
 +        if (index < 0 || index !in orderState) return
 +        draggingHeight = heights[index] ?: 0f
-+        dragging = index
 +        val top = tops[index]
++        dragging = index
 +        fingerY = fingerWindowY(index, localY)
 +            ?: if (top != null) top + draggingHeight / 2f
 +            else containerTop + draggingHeight / 2f
++        grabOffsetY = if (top != null) fingerY - top else draggingHeight / 2f
 +    }
 +
 +    /**
-+     * 指尖的窗口 Y = 把手节点**现在**的窗口顶 + 事件在手把内的局部 Y。
-+     *
-+     * 参考实现全程只用 `e.clientY`（窗口坐标）：行在视口里怎么挪都不影响指尖位置。
-+     * Compose 的 `PointerInputChange.position` 是**节点局部坐标**——被拖行「即换即到位」（换位没有动画，
-+     * 行会整行高整行高地瞬跳）、边缘自动翻滚让内容在指下滚动，这些都会让局部坐标「手指没动却变了」。
-+     * 把这种位移当手指位移累加，每换一次位就偏一行高：命中判定于是落到被拖行身后那一行、把刚换上去的
-+     * 位置又换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进上/下边缘触发误翻滚（= 拖着拖着列表自己上滑）。
-+     * 所以这里不累加任何位移，每次事件当场把局部 Y 换算成窗口 Y。
-+     *
-+     * 优先读把手节点**实时**的 `positionInWindow()`（事件与坐标同属一帧的几何），拿不到（节点已解绑 / 还没量过）
-+     * 再退回最后一次 `onGloballyPositioned` 记下的窗口顶；两者都没有才返回 null（这一事件不更新手指位置）。
++     * 把手节点的当前窗口顶 + 指针事件的局部 Y。把手随内层视觉行一起平移，二者相加仍是
++     * 屏幕中的真实指尖位置；每个事件都直接重算，不累加因列表换位/滚动产生的局部差值。
 +     */
 +    private fun fingerWindowY(index: Int, localY: Float): Float? {
 +        val coords = handleCoords[index]
@@ -6791,7 +6758,7 @@ index 0000000..bdde1c5
 +
 +    /**
 +     * 手指移动：把事件换算成指尖的窗口 Y 后跑一轮命中判定；被拖行的位置由它命中的档位决定
-+     * （不跟手漂浮）。
++     * 活动行的内容通过 [dragOffsetPx] 独立贴着手指，列表槽位可以在其下方实时换位。
 +     */
 +    fun dragTo(index: Int, localY: Float) {
 +        if (dragging < 0 || dragging != index) return
@@ -6806,6 +6773,7 @@ index 0000000..bdde1c5
 +        dragging = -1
 +        fingerY = 0f
 +        draggingHeight = 0f
++        grabOffsetY = 0f
 +        val moved = reordered && to >= 0 && to != from
 +        flipSuppressed = true   // 提交帧：键位随数据整体重排，这一帧不做位移动画（下一帧恢复）
 +        resetOrder()            // 视觉顺序已由宿主接住（或本次没换过位）：恢复恒等序，行不会跳
@@ -6818,14 +6786,14 @@ index 0000000..bdde1c5
 +        flipSuppressed = true
 +        dragging = -1
 +        fingerY = 0f
++        grabOffsetY = 0f
 +        draggingHeight = 0f
 +        resetOrder()
 +    }
 +
 +    /**
-+     * 命中判定 + 换位（对应参考实现的 `step()`）：手指窗口 Y 落在哪一行的身段里，
-+     * 就在该行中线的上半 → 换到它前面，下半 → 换到它后面；落在被拖行自己身上 = 不动
-+     * （否则换位后手指仍在原行身里，会被判成「又越过一行」来回抖）。
++     * 命中判定 + 换位：手指窗口 Y 落在哪个可见槽位，就按该行中线决定活动项在其前/后。
++     * 活动视觉行虽然跟手浮在槽位之上，命中仍按外层逻辑槽位计算；手指落在活动项当前槽位时不再换位。
 +     * 指到行间缝里（行距）或容器留白时，按「手指 Y 离哪一行中线最近」兜底——与参考实现的
 +     * 「留白投影命中」同口径。
 +     */
@@ -6869,12 +6837,13 @@ index 0000000..bdde1c5
 +    }
 +
 +    /**
-+     * 边缘自动翻滚：手指进入容器上下边缘后按深度滚一帧（E = clamp(容器高×15%, 44dp, 88dp)，
-+     * v = 1 + (depth/E)×13 dp/帧，同参考实现），滚了就立刻补一轮命中判定——行在指下挪了，
-+     * 换位判定跟着更新，不会错位。
++     * 边缘自动翻滚：手指进入容器上下边缘后按深度滚动；活动视觉行保持在指尖下，
++     * 槽位几何更新后再继续命中判定。
 +     */
 +    internal fun autoScroll(edgeMin: Float, edgeMax: Float, velMin: Float, velRange: Float) {
 +        if (dragging < 0) return
++        // 先按上一帧完整布局命中，再发送滚动 delta；不要在 dispatchRawDelta 之后立刻读旧坐标。
++        step()
 +        val scroller = scrollBy ?: return
 +        val span = containerBottom - containerTop
 +        if (span <= 0f) return
@@ -6887,8 +6856,7 @@ index 0000000..bdde1c5
 +        if (down >= up && currentSlot == orderState.lastIndex) return
 +        val depth = maxOf(up, down).coerceIn(0f, edge)
 +        val v = velMin + (depth / edge) * velRange
-+        if (scroller(if (up > down) -v else v) == 0f) return   // 已到尽头：不空转
-+        step()
++        scroller(if (up > down) -v else v)   // 已到尽头时 LazyListState 自己返回 0；下帧再用新布局命中
 +    }
 +}
 +
@@ -6899,7 +6867,7 @@ index 0000000..bdde1c5
 +): DragSortState {
 +    val state = remember { DragSortState() }
 +    val move = rememberUpdatedState(onMove)
-+    // 普通字段（非快照状态）：拖动中每帧改快照状态只会让长列表反复重组
++    // 宿主回调放在快照状态之外；指针几何只由活动行的摆放读取。
 +    state.onMove = { from, to -> move.value(from, to) }
 +    state.syncCount(count)
 +    // 拖动期间的边缘自动翻滚：只在拖动存在时跑帧循环，松手立刻停（不做常驻定时器）
@@ -6927,8 +6895,8 @@ index 0000000..bdde1c5
 +}
 +
 +/**
-+ * lazy 列表项修饰符：被拖行**不给**位移动画（即换即到位——参考实现：给它补滑移动画 = 不跟手），
-+ * 其余行补参考实现同款 FLIP 滑移（只有真的挪了位置的行才会动）。
++ * Lazy 列表项修饰符：活动行的外层槽位即时换位（内层视觉行另行跟手平移），
++ * 其余行补 FLIP 滑移（只有真的挪了位置的行才会动）。
 + * 只关淡入淡出：这里是排序，不该顺带把滚入视口的行淡进来。
 + *
 + * @Composable：`Modifier.animateItem` 是列表项作用域里的组合期 API，包一层省得每个宿主各自判断。
@@ -6952,15 +6920,17 @@ index 0000000..bdde1c5
 +    }
 +    val active = state.dragging == index
 +    val accent = MiuixTheme.colorScheme.primary
-+    Box(
-+        modifier = modifier
-+            .then(state.rowModifier(index))
-+            .then(if (active) Modifier.dragChrome(accent) else Modifier),
-+    ) {
-+        // 内容降到 .55：淡底与虚线框在外层画，保持清晰（参考实现整行 opacity .55，边框也一起淡，
-+        // 这里把描边留在满不透明度——用户要的是「看得见虚线框」）
-+        Box(modifier = Modifier.then(if (active) Modifier.alpha(DragItemAlpha) else Modifier)) {
-+            content()
++    Box(modifier = modifier.then(state.rowModifier(index))) {
++        // 外层 LazyColumn 槽位只负责测量；仅平移内层视觉行，让 orderState 在手指下方换位而把手仍跟手。
++        Box(
++            modifier = Modifier
++                .offset { IntOffset(0, state.dragOffsetPx(index)) }
++                .then(if (active) Modifier.dragChrome(accent) else Modifier),
++        ) {
++            // 内容淡化，描边仍保持清晰可见。
++            Box(modifier = Modifier.then(if (active) Modifier.alpha(DragItemAlpha) else Modifier)) {
++                content()
++            }
 +        }
 +    }
 +}
@@ -7050,7 +7020,6 @@ index 0000000..bdde1c5
 +        )
 +    }
 +}
-
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt
 new file mode 100644
 index 0000000..a285419
@@ -7115,10 +7084,10 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..7a67692
+index 0000000..9e831e2
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2304 @@
+@@ -0,0 +1,2302 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -7238,8 +7207,6 @@ index 0000000..7a67692
 +
 +    LazyColumn(
 +        state = listState,
-+        // 把手从按下到抬起期间关掉常规触摸滚动，边缘自动滚动仍由 dispatchRawDelta 驱动。
-+        userScrollEnabled = !dragSort.handleGestureActive,
 +        modifier = Modifier
 +            .fillMaxWidth()
 +            .then(dragSort.containerModifier { listState.dispatchRawDelta(it) }),
@@ -9423,7 +9390,6 @@ index 0000000..7a67692
 +        )
 +    }
 +}
-
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt
 new file mode 100644
 index 0000000..033bcf3
@@ -20466,7 +20432,7 @@ index 018c54d..4623ff2 100644
  private fun tunStackLabel(stack: String): String =
      TUN_STACK_OPTIONS.firstOrNull { it.first == stack.lowercase() }?.second ?: stack.ifEmpty { "--" }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
-index 119695c..a4c3c5b 100644
+index 119695c..94a2acb 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 @@ -7,13 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
@@ -20518,19 +20484,18 @@ index 119695c..a4c3c5b 100644
      val selectedIds = displayed.filter { it in selected }
      val hasChanges = displayed != initialOrder || selectedIds != initialSelected
  
-@@ -129,8 +136,11 @@ fun SubscriptionOverridesScreen(
+@@ -129,8 +136,10 @@ fun SubscriptionOverridesScreen(
      ) { innerPadding ->
          WideContentBox { sidePadding ->
              LazyColumn(
 +                state = listState,
-+                userScrollEnabled = !dragSort.handleGestureActive,
                  modifier = Modifier
                      .fillMaxSize()
 +                    .then(dragSort.containerModifier { listState.dispatchRawDelta(it) })
                      .horizontalCutoutPadding()
                      .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                      .scrollEndHaptic()
-@@ -164,21 +174,29 @@ fun SubscriptionOverridesScreen(
+@@ -164,21 +173,29 @@ fun SubscriptionOverridesScreen(
                      }
                  }
  
@@ -20575,7 +20540,7 @@ index 119695c..a4c3c5b 100644
                  }
  
                  item(key = "bottom_spacer") {
-@@ -193,15 +211,12 @@ fun SubscriptionOverridesScreen(
+@@ -193,15 +210,12 @@ fun SubscriptionOverridesScreen(
  private fun OverrideSelectionItem(
      profile: OverrideProfile,
      checked: Boolean,
@@ -20594,7 +20559,7 @@ index 119695c..a4c3c5b 100644
              .fillMaxWidth()
              .padding(horizontal = 12.dp)
              .padding(bottom = 12.dp),
-@@ -216,49 +231,9 @@ private fun OverrideSelectionItem(
+@@ -216,49 +230,9 @@ private fun OverrideSelectionItem(
                      modifier = Modifier.padding(end = 12.dp),
                  )
              },
@@ -20646,7 +20611,6 @@ index 119695c..a4c3c5b 100644
 -
 -private fun List<String>.swap(from: Int, to: Int): List<String> =
 -    toMutableList().also { it[from] = this[to]; it[to] = this[from] }
-
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
 index 93088aa..3eeddd1 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
