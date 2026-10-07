@@ -240,6 +240,14 @@ assert_not_contains 'dragAmount' \
 assert_contains 'val down = awaitFirstDown(requireUnconsumed = false)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the handle grabs the stream on DOWN without slop waiting'
+# §7 同类 CI 报错的防回归：v6 重写时漏了 pointerInput 的 import（跨包工具只管 custom.* 符号，
+# androidx 符号漏 import 它看不见），CI 报 Unresolved reference: pointerInput。
+assert_contains 'import androidx.compose.ui.input.pointer.pointerInput' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'pointerInput is imported (v6 handle loop uses it; missing import broke CI once)'
+assert_contains 'import androidx.compose.ui.input.pointer.awaitPointerEvent' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the awaitPointerEvent loop import is present'
 assert_contains 'startDrag(index, down.position.y)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'press = immediate drag start (handle semantics unchanged)'

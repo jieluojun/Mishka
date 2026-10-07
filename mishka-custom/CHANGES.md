@@ -47,6 +47,11 @@
 > 容器用户滚动绑到 `dragging < 0`（LazyColumn `userScrollEnabled` / verticalScroll `enabled`），
 > 拖动一开始外层 scrollable 整体退出；自动翻滚走 `dispatchRawDelta` 程序化滚动，不吃
 > `userScrollEnabled`（§11）。
+>
+> **追加（CI 编译报错修复，二次）**：v6 重写让 `:app:compileReleaseKotlin` 报
+> `Unresolved reference: pointerInput` —— 把手换回 `pointerInput` 时忘了把 import 补回来（§9 换去
+> `pointerInteropFilter` 时删过它），跨包 import 工具只管 `custom.*` 符号、androidx 的它看不见。
+> 补 import，并按 §7 先例给 verify 加 2 条断言（`pointerInput` / `awaitPointerEvent` import 必须在位）（§12）。
 
 基线未变：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`。参考实现是
 mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/core.js` /
@@ -314,6 +319,20 @@ dragSort.dragging < 0` 两处、`verticalScroll(…, enabled = … < 0)`（弹�
 `detectDragGestures(` 与 `pointerInteropFilter` 在 DragSort.kt 整段禁现；`dragAmount` 禁用、
 窗口坐标解算（`fingerWindowY` / 实时 `positionInWindow()`）等历轮断言维持。
 
+## 12. 修复（编译）：v6 重写漏补 `pointerInput` import
+
+症状：CI `:app:compileReleaseKotlin` 报 `Unresolved reference: pointerInput`
+（`custom/forms/DragSort.kt` 把手的 `pointerInput(index) { … }` 调用点）。
+
+根因：§9 把把手换成 `pointerInteropFilter` 时删了 `pointerInput` 的 import；v6（§11）换回
+`pointerInput` 只写了调用、没补 import。`tools/check_cross_package_imports.py` 只扫
+`top.yukonga.mishka.custom.*` 的顶层符号，androidx 的包级函数不在它管辖内，于是漏网——与 §7 的
+`dragSortItem` 是同一类「调用点对、import 漏」，只是包不同。
+
+修法：补 `import androidx.compose.ui.input.pointer.pointerInput`。防回归：verify 新增 2 条 import
+断言（`pointerInput`、`awaitPointerEvent` 必须在位），与 §7/§8 给 `positionInWindow` /
+`LayoutCoordinates` 钉的断言同一套路。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
@@ -330,6 +349,8 @@ dragSort.dragging < 0` 两处、`verticalScroll(…, enabled = … < 0)`（弹�
   DOWN 即 `startDrag`、`if (up) break` 唯一出口、两处 `userScrollEnabled = dragSort.dragging < 0`、
   两处 `verticalScroll(…, enabled = … < 0)` 代表、`detectDragGestures(` 与 `pointerInteropFilter(`
   在 DragSort.kt 整段禁现；补丁双向可逆、67 个 blob（含 4 个本轮改动文件的新 hash）逐文件一致。
+- §12（补 `pointerInput` import）后复跑 → **156 条 ok / 0 FAIL**：新增 2 条 import 断言在位，
+  其余（含 v6 的 9 条）全绿。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 

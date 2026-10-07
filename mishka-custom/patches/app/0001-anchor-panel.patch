@@ -6471,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..217fce0
+index 0000000..9c87b4f
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,519 @@
+@@ -0,0 +1,520 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6512,6 +6512,7 @@ index 0000000..217fce0
 +import androidx.compose.ui.input.pointer.awaitPointerEvent
 +import androidx.compose.ui.input.pointer.awaitPointerEventScope
 +import androidx.compose.ui.input.pointer.forEachGesture
++import androidx.compose.ui.input.pointer.pointerInput
 +import androidx.compose.ui.layout.LayoutCoordinates
 +import androidx.compose.ui.layout.boundsInWindow
 +import androidx.compose.ui.layout.onGloballyPositioned
