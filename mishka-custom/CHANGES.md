@@ -24,6 +24,14 @@
 > 路由规则页截图），另外代理集合 / 规则集合列表的 ✎ 语义要改成「编辑所有配置」。前者是把
 > 拖动排序整段换成参考实现的「列表内实时换位」（§5），后者见 §6 —— **§4 描述的「按实测
 > 槽位差让位」与「中途写回保活」两条已被 §5 整段替换，不再是当前实现**。
+>
+> **追加（2026-10-07 实机反馈三轮，附录屏）**：「往上拖动排序时整体上滑、拖进自动翻滚区域
+> 打断排序」仍有（§8 只修了指尖位移累加）。录屏里手指没离开把手，虚线框却消失、提前提交
+> 「已移动 MATCH.」。根因更深一层：`detectDragGestures` 与外层 scrollable **同一条指针流
+> 仲裁**——自动翻滚 + 实时换位移动指下内容时拖动手势被外层取消 / 抢走，`onDragEnd/onDragCancel`
+> 提前触发（`endDrag` 提交），残余事件又被外层滚动容器接走变成「整体上滑」。修法：把手改经
+> `pointerInteropFilter` **独占**触摸流（DOWN 返回 true 后这根手指对 Compose 手势仲裁不可见），
+> 结束条件只剩真抬指 ACTION_UP 与系统级 ACTION_CANCEL —— **手指按住不松就不打断排序**（§9）。
 
 基线未变：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`。参考实现是
 mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/core.js` /
@@ -199,77 +207,51 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
 把手页面就滚」——两种表现、同一个错，这次一并掐掉。
 
 防回归：`DragSort.kt` 里**不允许再出现 `dragAmount`**（verify 用 `assert_not_contains` 钉住），
-并断言 `fingerWindowY` 存在、每次事件读实时 `positionInWindow()`、`onDrag` 接线为
-`dragTo(index, change.position.y)`；另补 2 条 import 断言 —— `positionInWindow` 与
+并断言 `fingerWindowY` 存在、每次事件读实时 `positionInWindow()`、把手触摸回调接线为
+`dragTo(index, event.getY(i))`；另补 2 条 import 断言 —— `positionInWindow` 与
 `LayoutCoordinates` 是 `androidx.compose.ui.layout` 的**包级扩展函数 / 类型**（不是接口成员），
 漏 import 会重演 §7 那类 CI `Unresolved reference`。
 
-## 9. 四修（第一次尝试）：把手先独占指针流
+## 9. 四修（拖动排序）：把手独占触摸流，按住不松就不打断排序
 
-初步判断是把手与 `LazyColumn` 同时等待 touch slop；因此把 `detectDragGestures` 换为
-`awaitEachGesture`，在 Main pass 消费 DOWN / 移动，并把取消从「正常 drop」改成回滚。
+症状（2026-10-07 10:48 录屏，路由规则页）：按住末行「MATCH → REJECT」的把手往上拖，手指接近
+顶部自动翻滚区后列表整体滑动（自动翻滚本身是设计行为），但**手指没离屏**拖动却被提前打断：
+虚线框消失、「已移动 MATCH.」提交，排序得重新来过；录屏后半段手指一直按着，列表已不再响应拖动。
 
-**后续复测仍报告上拖会打断排序**，说明仅靠消费事件并不足以隔离列表滚动；本节只记第一次尝试，
-不能视为问题已解决。补充硬隔离见 §10。
+根因：§8 修的是「指尖位移累加」，但手势载体仍是 `detectDragGestures` —— 它与外层 `scrollable`
+（以及层级里其它指针消费者）**仲裁同一条指针流**。自动翻滚 + 「列表内实时换位」让内容在指下移动
+时，拖动手势会在某一帧被外层取消 / 抢走：`onDragEnd / onDragCancel` → `endDrag()` 提前提交 =
+「排序被打断」；之后未被消费的移动事件被外层滚动容器接走 = 「整体上滑」。两个现象同一个因。
 
-## 10. 五修（复测后）：拖动时禁用列表触摸滚动，并清除离屏命中坐标
+修法：`handleModifier` 从 `pointerInput + detectDragGestures` 换成 `pointerInteropFilter`
+（已核对 androidx 源码：回调收到的 MotionEvent 已被换算到把手节点局部坐标，与旧版
+`change.position` 同口径，`fingerWindowY` 的窗口 Y 还原原样复用）：
 
-路由规则页实际是 `LazyColumn`，它的 `userScrollEnabled` 此前一直为默认 `true`。把手消费事件不能作为
-唯一防线：拖动仍与列表的滚动 / nested-scroll 管线处于同一容器。此次复测后的修正是在整个把手指针生命期
-（按下到抬起 / cancel）显式关闭排序宿主的用户触摸滚动；拖动中的边缘翻滚仍由 `dispatchRawDelta` 作为
-程序化滚动执行，因此只保留排序器主动发出的滚动，不再让同一手指同时触发列表上滑。
+- DOWN 返回 true 后 Compose 把这根手指的变化全部消费，外层 scrollable / 整行点击等任何手势
+  **看不到它**——「仲裁输给外层被取消」的路径不存在；也顺带掐掉「把手按下漏给外层引起滚动」；
+- 结束条件只有 `ACTION_UP`（真抬指）与 `ACTION_CANCEL`（框架级流回收，此后这条流确实再无事件）；
+  `ACTION_POINTER_UP`（非主手指抬起）忽略；拖动中再有新的 DOWN 流也被吞掉，不漏给外层；
+- **只要手指按住不松、事件还在来，排序就继续**，不以任何 Compose 侧取消为结束条件。
+  命中判定 / 实时换位 / FLIP / 边缘自动翻滚 / 松手一次性写回全部不变。
 
-同时修正一个 LazyColumn 坐标缓存风险：已回收条目的 `tops` / `heights` 之前会残留，自动翻滚时可能被当作
-仍可见的落点。Lazy 行离开组合时现在清除缓存，命中只考虑与容器视口相交的行；拖动项已到首 / 尾时停止
-继续向该方向自动翻滚。覆盖路由规则序列列表和订阅覆写序列列表。
-
-防回归断言新增：拖动全程 `userScrollEnabled = !dragSort.handleGestureActive`、离屏坐标不参与命中、Lazy 行回收
-会清除几何缓存，以及活动项到首尾后停止自动滚动。
-
-## 11. 六修：表单底部抽屉不再接管列表的未消费拖动
-
-用户确认 v2 已重新构建安装，但上拖时移动 / 关闭的是底部抽屉，不是单纯列表内容。此前几轮只处理把手指针与
-`LazyColumn` 自身滚动，遗漏了父级 `WindowBottomSheet` 的 nested-scroll 路径。
-
-该项目锁定 Miuix 0.9.4，`WindowBottomSheet` 默认 `enableNestedScroll = true`；子列表到滚动边界后未消费的
-滚动量会继续交给抽屉，抽屉可据此移动 / 关闭。因此即使把排序把手与列表触摸滚动隔离，父级抽屉仍可能接管
-剩余 delta。
-
-修法：只在承载这些可排序表单页的 `MishkaConfigFormPanel` 上设置 `enableNestedScroll = false`。内部列表自己的
-触摸滚动及排序器的程序化边缘滚动保留；抽屉顶部把手、显式关闭按钮与返回关闭仍保留，只取消「由内容列表的
-未消费滚动拖动抽屉」这条冲突路径。
-
-防回归：verify 明确断言表单抽屉 `enableNestedScroll = false`。
-
-## 12. 回滚前几轮手势试错，重做活动行跟手
-
-用户补充实际表现：向上拖时，列表/条目往下移动，排序把手从手指下脱开，随后拖动中断。此前 v1–v3 把重点放在
-指针坐标、禁用列表触摸滚动和关闭抽屉 nested scroll；这些没有让活动行本身持续跟手。
-
-**代码层面的直接问题**：`orderState` 每次命中都会把活动行移动到新的 LazyColumn 逻辑槽位，而把手绘制在该行里；
-列表换位或滚动时把手随槽位移动，手指却留在屏幕原处。窗口坐标能算准手指，不会自动把控件视觉位置固定在手指下。
-
-本轮撤销前几轮滚动开关：移除 `handleGestureActive` / `userScrollEnabled` 临时开关，并恢复 `WindowBottomSheet`
-默认嵌套滚动参数。新的排序方式是：
-
-- 外层行容器只负责记录 LazyColumn 当前逻辑槽位；
-- 活动行内部视觉内容按 `fingerY - grabOffsetY - slotTop` 独立平移，手指抓住把手的同一点保持在指尖下；
-- `orderState` 仍在下方实时换位，其它行继续做 FLIP；槽位或滚动位置改变时，由快照几何重新计算活动行偏移；
-- 只有真实松手才写回宿主，取消仍回滚。
-
-这一方案专门处理「行/列表向下移动、把手留不住指尖」；源码静态验证不替代实机拖动验证。
+防回归：verify 新增 3 条 —— `pointerInteropFilter { event -> handleTouch(index, event) }` 在位、
+结束分支只剩 `MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->`、`detectDragGestures(` 不再
+允许出现（旧仲裁路径整段移除）；`dragAmount` 禁用断言维持。
 
 ## 验证
 
-- v4 在上游基线 commit `5e6743592b9c465eb015db7b05c588c50cd2b874` 完整运行
-  `verify_app_patch.sh --repo` → **PASS：171 条 ok / 0 FAIL**；补丁双向可逆，67 个文件与基线 blob 一致。
-- 新增断言覆盖：已移除 v2/v3 的滚动开关、活动行的 slot offset 跟手、手指抓取点偏移固定、槽位测量与视觉平移分层，
-  以及自动滚动基于上一帧完整布局命中。
-- `tools/check_cross_package_imports.py` 跨包 import 全树检查继续挂在 verify（历史自测 0 误报；删掉 §7 的 import
-  可精确复现此前 CI 报错点）。
-- 未运行 Gradle 编译或设备复测；静态检查不等于运行时已解决。
+- `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
+  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；本环境实测 **148 条 ok / 0 FAIL**。
+  本轮（§9）结构断言新增 3 条、替换 1 条：把手经 `pointerInteropFilter` 独占触摸流、结束分支
+  只剩 `ACTION_UP / ACTION_CANCEL`、`detectDragGestures(` 整段移除；旧的 `onDrag` 接线断言
+  替换为把手触摸回调接线 `dragTo(index, event.getY(i))`。此前各轮断言（指尖窗口坐标解算
+  `fingerWindowY`、每次事件读实时 `positionInWindow()`、局部 Y → 窗口 Y 换算、`dragAmount`
+  禁用、两个 import 在位、v3 实时换位口径、4 处宿主按 `order` 渲染、合集 ✎ 语义等）全部维持通过。
+- 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
+- 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 
-- 上一版因沙箱内存限制未跑通 `:app:compileDebugKotlin`；本轮也未在设备上实测。
+- 沙箱内存 2GB，`:app:compileDebugKotlin` 跑不动，**本轮没有跑通 Gradle 编译验证**；
+  落地后请先跑一次编译（改动面在 Compose 表单层与 ViewModel，重点看漏改的引用）。
 - 三处交互与 2026-10-06 已交付的改动（file provider 上传 / 编辑、内置出站豁免、
   `TetherInterfaceEditDialog`、候选池过滤等）已逐文件核对合并，13 个改动文件全部落在
   10-06 基线上，无遗漏、无冲突残留。

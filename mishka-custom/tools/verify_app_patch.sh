@@ -218,21 +218,34 @@ assert_contains 'orderState.removeAt(cur)' \
 assert_contains 'if (cur < at) at -= 1' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'insert index is corrected for removing the dragged row first'
-assert_contains 'curTop + curH > containerTop && curTop < containerBottom' \
+assert_contains 'if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'dragged-row no-op is limited to the visible container bounds (no stale/offscreen hit)'
+  'finger over the dragged row itself is a no-op (no swap oscillation)'
 assert_contains 'private fun fingerWindowY(index: Int, localY: Float): Float?' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the finger Y is resolved in window coordinates (reference e.clientY, never accumulated)'
 assert_contains 'return coords.positionInWindow().y + localY' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the handle node position is read live for every pointer event'
-assert_contains 'dragTo(index, change.position.y)' \
+assert_contains 'dragTo(index, event.getY(i))' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'onDrag converts the local offset to a window Y instead of adding deltas'
+  'the handle touch callback converts the local offset to a window Y instead of adding deltas'
 assert_not_contains 'dragAmount' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'no local-delta accumulation: the dragged row jumps a whole row height per swap and the auto-scroll moves the content under the finger, so node-local deltas contain phantom motion (it drifted the finger Y by one row per swap -> swap flicker + stray up-scroll)'
+# 四修（2026-10-07 录屏）：detectDragGestures 与外层 scrollable 抢同一条指针流，自动翻滚 +
+# 实时换位移动指下内容时拖动手势被外层取消/抢走 → 排序中途打断 + 残留事件带着列表整体上滑。
+# 换成 pointerInteropFilter 独占触摸流：DOWN 返回 true 后外层任何手势都看不到这根手指，
+# 结束条件只剩真抬指 / 系统级 CANCEL —— 手指按住不松就不打断。
+assert_contains 'pointerInteropFilter { event -> handleTouch(index, event) }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the drag handle exclusively owns the raw touch stream (no Compose arbitration can cancel the drag)'
+assert_contains 'MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the drag ends only on a real finger lift or a framework stream cancel'
+assert_not_contains 'detectDragGestures(' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the shared-arbitration drag detector is gone (it let the outer scrollable cancel/steal the drag)'
 # positionInWindow / boundsInWindow 是 androidx.compose.ui.layout 包里的扩展函数（不是接口成员）：
 # 少了 import，K2 报 Unresolved reference —— 与曾经漏 import dragSortItem 的 CI 失败同一类。
 assert_contains 'import androidx.compose.ui.layout.positionInWindow' \
@@ -241,82 +254,6 @@ assert_contains 'import androidx.compose.ui.layout.positionInWindow' \
 assert_contains 'import androidx.compose.ui.layout.LayoutCoordinates' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'LayoutCoordinates is imported for the live handle coordinates map'
-# --- 把手手势要在 DOWN 时先于 LazyColumn 抢占指针流；只有真实抬手才提交排序 ---
-assert_contains 'import androidx.compose.foundation.gestures.awaitEachGesture' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'drag handle uses an exclusive pointer loop rather than a competing drag detector'
-assert_contains 'val down = awaitFirstDown(' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'drag handle captures the pointer-down before parent scrolling can win touch slop'
-assert_contains 'pass = PointerEventPass.Main' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'pointer capture runs in the child-first Main pass'
-assert_contains 'down.consume()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the drag handle consumes DOWN to keep ordinary list scrolling from taking over'
-assert_contains 'viewConfiguration.touchSlop' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'a tap does not start auto-scroll; reorder starts only after vertical touch slop'
-assert_contains 'if (dragStarted && !finished) cancelDrag()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'pointer cancellation rolls back instead of committing as a successful drop'
-assert_contains 'fun cancelDrag()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'canceled drags reset visual order without writing to the host'
-assert_not_contains 'detectDragGestures' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the competing touch-slop detector is removed from the drag handle'
-assert_not_contains 'onDragCancel = { endDrag() }' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'gesture cancellation cannot be mistaken for a normal drop'
-assert_not_contains 'handleGestureActive' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'obsolete scroll-toggle state from the failed v2 workaround is removed'
-assert_not_contains 'userScrollEnabled = !dragSort.handleGestureActive' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'route-rule list no longer relies on the failed user-scroll toggle'
-assert_not_contains 'enableNestedScroll = false' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'the failed v3 sheet-level nested-scroll toggle is reverted'
-assert_contains 'private var fingerY by mutableFloatStateOf(0f)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'pointer position is observable so the active visual row follows every pointer update'
-assert_contains 'internal fun dragOffsetPx(index: Int): Int' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'active row translation is calculated against its current LazyColumn slot'
-assert_contains '.offset { IntOffset(0, state.dragOffsetPx(index)) }' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'active visual row remains under the pointer while its logical slot reorders'
-assert_contains 'return (fingerY - grabOffsetY - slotTop).roundToInt()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the grabbed point remains at the same finger offset as the slot changes'
-assert_contains 'Box(modifier = modifier.then(state.rowModifier(index)))' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'slot geometry is measured outside the translated visual row'
-assert_contains '// 先按上一帧完整布局命中，再发送滚动 delta；不要在 dispatchRawDelta 之后立刻读旧坐标。' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'auto-scroll hit-testing uses a completed layout before dispatching movement'
-assert_contains 'private val tops = mutableStateMapOf<Int, Float>()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'slot geometry changes invalidate the active row placement even without new pointer input'
-assert_contains 'forgetOnDispose = true' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'route-rule LazyColumn rows clear geometry when recycled'
-assert_contains 'forgetOnDispose = true' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
-  'override LazyColumn rows clear geometry when recycled'
-assert_contains 'internal fun forgetRow(index: Int)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'disposed lazy rows clear cached window coordinates'
-assert_contains 'onDispose { if (forgetOnDispose) state.forgetRow(index) }' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'only lazy drag rows clear geometry on disposal (eager Column hosts are unaffected)'
-assert_contains 'if (top + h <= containerTop || top >= containerBottom) continue' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'drop hit-testing ignores offscreen cached row coordinates'
-assert_contains 'if (up > down && currentSlot == 0) return' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'edge auto-scroll stops after the dragged item reaches the first slot'
 assert_contains 'placementSpec = FlipSpec' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'non-dragged rows get the reference FLIP easing, dragged row stays instant'
