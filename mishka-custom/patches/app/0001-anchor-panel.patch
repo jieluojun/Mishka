@@ -4411,10 +4411,10 @@ index 0000000..d4c6508
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..1a05e5a
+index 0000000..3ed76e8
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1497 @@
+@@ -0,0 +1,1500 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4524,6 +4524,9 @@ index 0000000..1a05e5a
 +        show = visible,
 +        title = route?.let { routeTitle(it, doc) } ?: "配置表单",
 +        onDismissRequest = onClose,
++        // Don't let unconsumed LazyColumn drag deltas bubble up and move/dismiss this sheet.
++        // The form list keeps its own touch/programmatic scrolling; the explicit close action remains.
++        enableNestedScroll = false,
 +        startAction = if (route == null) null else {
 +            { IconButton(onClick = { nav.pop() }) { Icon(MiuixIcons.Back, "返回", tint = MiuixTheme.colorScheme.onBackground) } }
 +        },

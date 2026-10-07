@@ -226,15 +226,29 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
 防回归断言新增：拖动全程 `userScrollEnabled = !dragSort.handleGestureActive`、离屏坐标不参与命中、Lazy 行回收
 会清除几何缓存，以及活动项到首尾后停止自动滚动。
 
+## 11. 六修：表单底部抽屉不再接管列表的未消费拖动
+
+用户确认 v2 已重新构建安装，但上拖时移动 / 关闭的是底部抽屉，不是单纯列表内容。此前几轮只处理把手指针与
+`LazyColumn` 自身滚动，遗漏了父级 `WindowBottomSheet` 的 nested-scroll 路径。
+
+该项目锁定 Miuix 0.9.4，`WindowBottomSheet` 默认 `enableNestedScroll = true`；子列表到滚动边界后未消费的
+滚动量会继续交给抽屉，抽屉可据此移动 / 关闭。因此即使把排序把手与列表触摸滚动隔离，父级抽屉仍可能接管
+剩余 delta。
+
+修法：只在承载这些可排序表单页的 `MishkaConfigFormPanel` 上设置 `enableNestedScroll = false`。内部列表自己的
+触摸滚动及排序器的程序化边缘滚动保留；抽屉顶部把手、显式关闭按钮与返回关闭仍保留，只取消「由内容列表的
+未消费滚动拖动抽屉」这条冲突路径。
+
+防回归：verify 明确断言表单抽屉 `enableNestedScroll = false`。
+
 ## 验证
 
-- §8 的 **146 条 ok / 0 FAIL** 和独立副本比对是此前版本的记录；§9 的第一次手势捕获也未能解决实机反馈。
-- 本轮更新了补丁、`BASELINE.txt` 中的 patch SHA / 源码 blob；在上游基线 commit `5e6743592b9c465eb015db7b05c588c50cd2b874` 上运行
-  `verify_app_patch.sh --repo` → **PASS**：补丁可应用、反向可还原，67 个文件与基线 blob 一致；新增指针捕获 / 滚动硬隔离 / 离屏坐标断言通过。
-- 本轮没有运行 Gradle 编译或设备复测；请安装新补丁后实机验证。若仍复现，请发该版本的最新录屏——此前录屏无法判断禁用
-  LazyColumn 用户滚动后是否还会出现同一种中断。
+- §8 的 **146 条 ok / 0 FAIL** 和独立副本比对是此前版本的记录；§9、§10 两次手势修正均未解决实机反馈。
+- v3 补丁在上游基线 commit `5e6743592b9c465eb015db7b05c588c50cd2b874` 上完整运行
+  `verify_app_patch.sh --repo` → **PASS：165 条 ok / 0 FAIL**；补丁双向可逆，67 个文件与基线 blob 一致，新增抽屉隔离断言通过。
 - `tools/check_cross_package_imports.py` 跨包 import 全树检查继续挂在 verify（历史自测 0 误报；删掉 §7 的 import
   可精确复现此前 CI 报错点）。
+- 未运行 Gradle 编译或设备复测；静态检查不等于运行时已解决。
 
 - 上一版因沙箱内存限制未跑通 `:app:compileDebugKotlin`；本轮也未在设备上实测。
 - 三处交互与 2026-10-06 已交付的改动（file provider 上传 / 编辑、内置出站豁免、

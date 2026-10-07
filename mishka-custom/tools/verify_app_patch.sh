@@ -278,6 +278,9 @@ assert_contains 'userScrollEnabled = !dragSort.handleGestureActive' \
 assert_contains 'userScrollEnabled = !dragSort.handleGestureActive' \
   app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
   'override LazyColumn disables touch scrolling for the complete handle gesture'
+assert_contains 'enableNestedScroll = false' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'sortable form bottom sheet does not take over unconsumed list drag deltas'
 assert_contains 'forgetOnDispose = true' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
   'route-rule LazyColumn rows clear geometry when recycled'
