@@ -156,6 +156,38 @@ assert_contains '0.0.0.0' \
   app/src/main/res/values-zh-rCN/strings.xml \
   'Chinese external-control hint warns about wildcard unauthenticated exposure'
 
+# --- 与 mihomo_box 对齐的三处交互：拖动排序 / 图标按钮 / 并发测速 ---
+assert_contains 'internal fun rememberDragSortState(count: Int, onMove: (from: Int, to: Int) -> Unit): DragSortState' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'hold-and-drag sorting helper is present'
+assert_contains 'DragSortRow(state = dragSort, index = i) {' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'sequence list rows use the drag-sort handle'
+assert_contains 'DragSortRow(' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
+  'override list uses the drag-sort handle'
+assert_contains 'MiniIconButton(' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt \
+  'structured editors delete rows through mini icon buttons'
+assert_contains 'icon = MiuixIcons.Location,' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt \
+  'anchor card actions use mini icon buttons'
+assert_not_contains 'ItemMenuDialog' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt \
+  'the up/down action menu is fully removed'
+assert_not_contains 'override_move_up' \
+  app/src/main/res/values/strings.xml \
+  'unused move-up strings are removed (default locale)'
+assert_contains 'suspend fun getGroupDelay(' \
+  app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
+  'group-level delay endpoint is wired'
+assert_contains 'val semaphore = Semaphore(BATCH_CONCURRENCY)' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
+  'concurrent batch test uses the 8-lane pool'
+assert_contains 'private val batchTesting = mutableSetOf<String>()' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt \
+  'batch test re-entrancy lock is wired'
+
 # --- web 界面已完全移除（防回归）---
 assert_not_contains 'PanelScreen' \
   app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \

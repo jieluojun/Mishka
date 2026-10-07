@@ -2429,10 +2429,10 @@ index 0000000..44c2097
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 new file mode 100644
-index 0000000..2226ff0
+index 0000000..128e33a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
-@@ -0,0 +1,761 @@
+@@ -0,0 +1,748 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -2465,6 +2465,7 @@ index 0000000..2226ff0
 +import androidx.compose.ui.unit.dp
 +import androidx.compose.ui.unit.sp
 +import top.yukonga.mishka.R
++import top.yukonga.mishka.custom.forms.MiniIconButton
 +import top.yukonga.mishka.platform.showToast
 +import top.yukonga.mishka.ui.theme.StatusColors
 +import top.yukonga.mishka.ui.util.sheetContentSafePadding
@@ -2478,6 +2479,10 @@ index 0000000..2226ff0
 +import top.yukonga.miuix.kmp.basic.TextButton
 +import top.yukonga.miuix.kmp.icon.MiuixIcons
 +import top.yukonga.miuix.kmp.icon.extended.Close
++import top.yukonga.miuix.kmp.icon.extended.Delete
++import top.yukonga.miuix.kmp.icon.extended.Edit
++import top.yukonga.miuix.kmp.icon.extended.Location
++import top.yukonga.miuix.kmp.icon.extended.Rename
 +import top.yukonga.miuix.kmp.theme.LocalDismissState
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +import top.yukonga.miuix.kmp.window.WindowBottomSheet
@@ -2852,7 +2857,7 @@ index 0000000..2226ff0
 +            )
 +        }
 +        TextButton(
-+            text = "新建",
++            text = "＋ 新建锚点",
 +            onClick = onCreate,
 +            minWidth = 0.dp,
 +            minHeight = 36.dp,
@@ -2918,7 +2923,8 @@ index 0000000..2226ff0
 +                summary = def.path + (defBlock?.let { " · " + kindLabel(it) } ?: ""),
 +                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 6.dp),
 +                endActions = {
-+                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditDef(def.line) }
++                    // 与 mihomo_box 面板一致：编辑入口用小图标按钮（✎），不再占一列文字
++                    MiniIconButton(MiuixIcons.Edit, stringResource(R.string.common_edit)) { onEditDef(def.line) }
 +                },
 +                onClick = { onLocate(def.line) },
 +            )
@@ -2941,29 +2947,36 @@ index 0000000..2226ff0
 +                summary = ref.path + " · " + ref.text.trim(),
 +                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
 +                endActions = {
-+                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditRef(ref) }
-+                    Spacer(Modifier.width(RefActionGap))
-+                    CompactTextButton(text = "删行") { onDeleteRef(ref) }
++                    MiniIconButton(MiuixIcons.Edit, stringResource(R.string.common_edit)) { onEditRef(ref) }
++                    Spacer(Modifier.width(8.dp))
++                    MiniIconButton(MiuixIcons.Delete, "删除这一行") { onDeleteRef(ref) }
 +                },
 +                onClick = { onLocate(ref.line) },
 +            )
 +        }
++        // 卡片底部动作行：三个图标按钮（定位 / 改名 / 删除），与 mihomo_box 的行内图标按钮观感一致
 +        Row(
 +            modifier = Modifier
 +                .fillMaxWidth()
 +                .padding(top = 6.dp),
 +            horizontalArrangement = Arrangement.spacedBy(8.dp),
 +        ) {
-+            CompactTextButton(
-+                text = "定位",
-+                modifier = Modifier.weight(1f),
++            MiniIconButton(
++                icon = MiuixIcons.Location,
++                contentDescription = "定位",
 +                enabled = def != null,
-+            ) { def?.let { onLocate(it.line) } }
-+            CompactTextButton(text = "改名", modifier = Modifier.weight(1f)) { onRename() }
-+            CompactTextButton(
-+                text = stringResource(R.string.common_delete),
 +                modifier = Modifier.weight(1f),
++            ) { def?.let { onLocate(it.line) } }
++            MiniIconButton(
++                icon = MiuixIcons.Rename,
++                contentDescription = "改名",
++                modifier = Modifier.weight(1f),
++            ) { onRename() }
++            MiniIconButton(
++                icon = MiuixIcons.Delete,
++                contentDescription = stringResource(R.string.common_delete),
 +                enabled = def != null && anchor.refs.isEmpty(),
++                modifier = Modifier.weight(1f),
 +            ) { onDrop() }
 +        }
 +        if (anchor.refs.isNotEmpty()) {
@@ -3016,9 +3029,9 @@ index 0000000..2226ff0
 +                summary = ref.path + " · " + ref.text.trim(),
 +                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
 +                endActions = {
-+                    CompactTextButton(text = stringResource(R.string.common_edit)) { onEditRef(ref) }
-+                    Spacer(Modifier.width(RefActionGap))
-+                    CompactTextButton(text = "删行") { onDeleteRef(ref) }
++                    MiniIconButton(MiuixIcons.Edit, stringResource(R.string.common_edit)) { onEditRef(ref) }
++                    Spacer(Modifier.width(8.dp))
++                    MiniIconButton(MiuixIcons.Delete, "删除这一行") { onDeleteRef(ref) }
 +                },
 +                onClick = { onLocate(ref.line) },
 +            )
@@ -3027,32 +3040,6 @@ index 0000000..2226ff0
 +}
 +
 +// ==================== 小组件 ====================
-+
-+/**
-+ * 引用行两个行内操作之间的间距。miuix 的 BasicComponent 把 endActions 直接塞进一个
-+ * **没有 arrangement 的 Row**，两个实心按钮各带 12dp 内边距，贴在一起时看着像一整块
-+ * 胶囊、也容易误触。取 8dp 与卡片底部「定位 / 改名 / 删除」那一行的 spacedBy 对齐。
-+ */
-+private val RefActionGap = 8.dp
-+
-+@Composable
-+private fun CompactTextButton(
-+    text: String,
-+    modifier: Modifier = Modifier,
-+    enabled: Boolean = true,
-+    onClick: () -> Unit,
-+) {
-+    TextButton(
-+        text = text,
-+        modifier = modifier,
-+        enabled = enabled,
-+        onClick = onClick,
-+        minWidth = 0.dp,
-+        minHeight = 32.dp,
-+        insideMargin = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-+        textStyle = MiuixTheme.textStyles.button.copy(fontSize = 13.sp),
-+    )
-+}
 +
 +/** 定义块形态一行标签：映射 / 序列 / 标量 / 复杂，行内 flow 单独标出。 */
 +private fun kindLabel(block: DefBlock): String = when (block.kind) {
@@ -4094,10 +4081,10 @@ index 0000000..9d96e65
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
 new file mode 100644
-index 0000000..42d1495
+index 0000000..d4c6508
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,324 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4121,6 +4108,9 @@ index 0000000..42d1495
 +import top.yukonga.miuix.kmp.basic.CardDefaults
 +import top.yukonga.miuix.kmp.basic.Text
 +import top.yukonga.miuix.kmp.basic.TextButton
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Delete
++import top.yukonga.miuix.kmp.icon.extended.Edit
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +import top.yukonga.miuix.kmp.window.WindowDialog
 +
@@ -4191,11 +4181,11 @@ index 0000000..42d1495
 +                BasicComponent(
 +                    title = "二级锚点（字段级）",
 +                    summary = if (activeFields.isEmpty()) {
-+                        "未设置字段级锚点 · 点「编辑」可给某个字段挂 <<: 继承或 * 引用"
++                        "未设置字段级锚点 · 点右侧 ✎ 可给某个字段挂 <<: 继承或 * 引用"
 +                    } else {
 +                        "${activeFields.size} 个字段挂了字段级锚点"
 +                    },
-+                    endActions = { TextButton(text = "编辑", onClick = { pickField = true }) },
++                    endActions = { MiniIconButton(MiuixIcons.Edit, "编辑") { pickField = true } },
 +                    onClick = { pickField = true },
 +                )
 +                activeFields.forEach { f ->
@@ -4342,7 +4332,7 @@ index 0000000..42d1495
 +                    title = f.key,
 +                    summary = fieldAnchorValueText(f) + " · 第 ${f.line1} 行",
 +                    endActions = {
-+                        if (!f.multi) TextButton(text = "×", minWidth = 0.dp, minHeight = 0.dp, onClick = {
++                        if (!f.multi) MiniIconButton(MiuixIcons.Delete, "摘除字段锚点") {
 +                            val out = when {
 +                                f.aliasRef != null -> AnchorInheritance.setFieldAlias(
 +                                    doc, base, f.key, null, FormValues.effectiveText(doc, base + f.key),
@@ -4353,7 +4343,7 @@ index 0000000..42d1495
 +                            }
 +                            if (out == null) showToast("摘除未改动：请在编辑器里直接改", long = true)
 +                            else { onDismiss(); host.applyRawText(out, "字段锚点 ${f.key}", f.line1) }
-+                        })
++                        }
 +                    },
 +                )
 +            }
@@ -4421,10 +4411,10 @@ index 0000000..42d1495
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..cbdc540
+index 0000000..9699d41
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1483 @@
+@@ -0,0 +1,1495 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4439,6 +4429,7 @@ index 0000000..cbdc540
 +import androidx.compose.foundation.layout.width
 +import androidx.compose.foundation.lazy.LazyColumn
 +import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.lazy.rememberLazyListState
 +import androidx.compose.foundation.rememberScrollState
 +import androidx.compose.foundation.verticalScroll
 +import androidx.compose.runtime.Composable
@@ -4473,6 +4464,8 @@ index 0000000..cbdc540
 +import top.yukonga.miuix.kmp.icon.MiuixIcons
 +import top.yukonga.miuix.kmp.icon.extended.Back
 +import top.yukonga.miuix.kmp.icon.extended.Close
++import top.yukonga.miuix.kmp.icon.extended.Delete
++import top.yukonga.miuix.kmp.icon.extended.Edit
 +import top.yukonga.miuix.kmp.theme.LocalDismissState
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +import top.yukonga.miuix.kmp.window.WindowBottomSheet
@@ -4865,7 +4858,11 @@ index 0000000..cbdc540
 +                    title = entry.title,
 +                    summary = sub,
 +                    endActions = {
-+                        Text(text = "编辑", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
++                        Icon(
++                            imageVector = MiuixIcons.Edit,
++                            contentDescription = "编辑",
++                            tint = MiuixTheme.colorScheme.primary,
++                        )
 +                    },
 +                )
 +            }
@@ -4976,7 +4973,10 @@ index 0000000..cbdc540
 +    val count = if (node?.kind == YamlNode.Kind.SEQ) node.items.size else 0
 +    var chooseType by remember(doc) { mutableStateOf(false) }
 +    var deleting by remember(doc) { mutableStateOf<Int?>(null) }
-+    var menu by remember(doc) { mutableStateOf<Int?>(null) }
++    // 按住把手拖动排序（对齐 mihomo_box WebUI 的规则 / 监听器列表）
++    val dragSort = rememberDragSortState(count) { from, to ->
++        host.moveItem(path, from, to, "监听器")
++    }
 +
 +    Column(modifier = Modifier.fillMaxWidth()) {
 +        SectionHeader("监听器（$count）")
@@ -4989,20 +4989,30 @@ index 0000000..cbdc540
 +            }
 +        }
 +        if (count == 0) DialogNote("没有额外监听器。入站端口和 TUN 配置仍在本页上方编辑。")
-+        if (node?.kind == YamlNode.Kind.SEQ) {
-+            node.items.indices.forEach { index ->
-+                val name = listenerName(doc, index).ifBlank { "监听器 #${index + 1}" }
-+                val type = listenerType(doc, index).ifBlank { "未知协议" }
-+                RowCard(
-+                    title = name,
-+                    summary = "$type · ${listenerSummary(doc, index)}",
-+                    onClick = { nav.push(FormRoute.Listener(index)) },
-+                    endActions = {
-+                        // 整行点按 = 编辑；挪 / 删收进「⋯」菜单（与其它列表页同款），
-+                        // 旧版行内「↑ / 编辑 / 删」三按钮在窄屏上挤得摘要换行、「删」被截断
-+                        TextButton(text = "⋯", minWidth = 0.dp, minHeight = 0.dp, onClick = { menu = index })
-+                    },
-+                )
++        Column(
++            modifier = Modifier.fillMaxWidth().then(dragSort.containerModifier()),
++            verticalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            if (node?.kind == YamlNode.Kind.SEQ) {
++                node.items.indices.forEach { index ->
++                    val name = listenerName(doc, index).ifBlank { "监听器 #${index + 1}" }
++                    val type = listenerType(doc, index).ifBlank { "未知协议" }
++                    DragSortRow(state = dragSort, index = index) {
++                        RowCard(
++                            title = name,
++                            summary = "$type · ${listenerSummary(doc, index)}",
++                            onClick = { nav.push(FormRoute.Listener(index)) },
++                            dragHandle = { DragHandle(dragSort, index) },
++                            endActions = {
++                                // 与 mihomo_box 面板一致：行尾 ✎ 编辑 / × 删除两个图标按钮，
++                                // 不再把「上移 / 下移 / 删除」藏进「⋯」菜单（排序改拖把手）
++                                MiniIconButton(MiuixIcons.Edit, "编辑") { nav.push(FormRoute.Listener(index)) }
++                                Spacer(Modifier.width(8.dp))
++                                MiniIconButton(MiuixIcons.Delete, "删除") { deleting = index }
++                            },
++                        )
++                    }
++                }
 +            }
 +        }
 +        RowCard(
@@ -5013,21 +5023,6 @@ index 0000000..cbdc540
 +        )
 +    }
 +
-+    menu?.let { index ->
-+        if (index < count) {
-+            ItemMenuDialog(
-+                title = listenerName(doc, index).ifBlank { "监听器 #${index + 1}" },
-+                summary = "`${pathText(path + index)}`",
-+                canUp = index > 0,
-+                canDown = index < count - 1,
-+                onUp = { host.moveItem(path, index, index - 1, "监听器") },
-+                onDown = { host.moveItem(path, index, index + 1, "监听器") },
-+                onDelete = { deleting = index },
-+                onDismiss = { menu = null },
-+                deleteDirect = true,
-+            )
-+        } else menu = null
-+    }
 +    if (chooseType) {
 +        OptionPickerDialog(
 +            title = "选择监听器类型",
@@ -5089,10 +5084,10 @@ index 0000000..cbdc540
 +                title = "协议类型：${type.ifBlank { "未知" }}",
 +                summary = if (type == "ebpf") "仅定制内核支持；保存配置后由内核校验生效。" else "通用监听参数可视化编辑；未列出的高级键会原样保留。",
 +                endActions = {
-+                    TextButton(text = "删除", onClick = {
++                    MiniIconButton(MiuixIcons.Delete, "删除") {
 +                        host.removeItem(listOf("listeners"), index, "监听器")
 +                        nav.pop()
-+                    })
++                    }
 +                },
 +            )
 +        }
@@ -5145,7 +5140,7 @@ index 0000000..cbdc540
 +                            else -> "未设置"
 +                        },
 +                        onClick = { usersEdit = true },
-+                        endActions = { TextButton(text = "编辑", onClick = { usersEdit = true }) },
++                        endActions = { MiniIconButton(MiuixIcons.Edit, "编辑") { usersEdit = true } },
 +                    )
 +                }
 +            },
@@ -5452,12 +5447,13 @@ index 0000000..cbdc540
 +    }
 +}
 +
-+/** 一行普通内容卡（列表页里的项）。 */
++/** 一行普通内容卡（列表页里的项）。`dragHandle` 给了就把拖动把手挂在行首（列表排序用）。 */
 +@Composable
 +internal fun RowCard(
 +    title: String,
 +    summary: String?,
 +    onClick: (() -> Unit)?,
++    dragHandle: (@Composable () -> Unit)? = null,
 +    endActions: @Composable () -> Unit = {},
 +) {
 +    Card(
@@ -5467,6 +5463,7 @@ index 0000000..cbdc540
 +        BasicComponent(
 +            title = title,
 +            summary = summary,
++            startAction = dragHandle,
 +            endActions = { endActions() },
 +            onClick = onClick,
 +        )
@@ -5638,7 +5635,12 @@ index 0000000..cbdc540
 +                        )
 +                    }
 +                    p3 -> Text(text = "P3", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-+                    else -> TextButton(text = if (tri) "选择" else "编辑", onClick = { openEditor() })
++                    // 与 mihomo_box 面板一致：编辑入口用小图标按钮（✎），不再占一列文字
++                    else -> if (tri) {
++                        TextButton(text = "选择", onClick = { openEditor() })
++                    } else {
++                        MiniIconButton(MiuixIcons.Edit, "编辑") { openEditor() }
++                    }
 +                }
 +            },
 +            onClick = {
@@ -6465,6 +6467,293 @@ index 0000000..537f72b
 +        return check(doc, ops, n, plainRuleCount(PlainYaml.toPlain(doc), includeSubRules = false) { fixRuleSet(it, old, new) })
 +    }
 +}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
+new file mode 100644
+index 0000000..7c1790a
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
+@@ -0,0 +1,281 @@
++package top.yukonga.mishka.custom.forms
++
++import androidx.compose.foundation.Canvas
++import androidx.compose.foundation.gestures.detectDragGestures
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.offset
++import androidx.compose.foundation.layout.size
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.Stable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberUpdatedState
++import androidx.compose.runtime.setValue
++import androidx.compose.runtime.withFrameNanos
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.graphics.vector.ImageVector
++import androidx.compose.ui.input.pointer.pointerInput
++import androidx.compose.ui.layout.boundsInWindow
++import androidx.compose.ui.layout.onGloballyPositioned
++import androidx.compose.ui.platform.LocalDensity
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.unit.IntOffset
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.zIndex
++import top.yukonga.miuix.kmp.basic.Icon
++import top.yukonga.miuix.kmp.basic.IconButton
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++
++/*
++ * 按住把手拖动排序（对齐 mihomo_box WebUI `js/core.js` 的 `enableDragSort` 与 `.drag-handle`）：
++ *  - 行首/行尾一个两列三点的把手（[DragHandle]），**按住即拖**——不做长按等待，与把手上的
++ *    `touch-action: none` 同效；没有把手以外的排序入口（「⋯」菜单里的上移/下移已全部下线）；
++ *  - 拖动期间**不改数据**：被拖行跟手，其它行按落点让出一行的空位，露出将要落下的空隙
++ *    （落点在松手时才一次性写回，等价于 WebUI 芯片拖动的「松手换位一次」）；
++ *  - 手指进入容器上下边缘时自动翻滚，长列表也能拖到首尾。
++ *
++ * 度量（行高、行窗口坐标、手指窗口 Y）只服务于手势判定，不进组合快照：拖动中每帧改快照状态
++ * 只会让长列表反复重组。
++ */
++
++@Stable
++internal class DragSortState {
++    /** 列表项数，宿主每次组合时同步。 */
++    internal var count: Int = 0
++
++    /** 正在拖动的行下标；-1 = 没在拖。 */
++    internal var dragging by mutableStateOf(-1)
++        private set
++
++    /** 目标落点（最终下标，与 [dragging] 同一坐标系）。 */
++    internal var target by mutableStateOf(-1)
++        private set
++
++    /** 被拖行相对原位的位移（px）。 */
++    internal var dragOffset by mutableStateOf(0f)
++        private set
++
++    private var draggingHeight = 0f
++    private var fingerY = 0f
++    private var containerTop = 0f
++    private var containerBottom = 0f
++    private var scrollBy: ((Float) -> Unit)? = null
++    private val tops = HashMap<Int, Float>()
++    private val heights = HashMap<Int, Float>()
++
++    internal var onMove: (from: Int, to: Int) -> Unit = { _, _ -> }
++
++    /**
++     * 行容器（Column / LazyColumn 都可以）：量容器窗口位置，并接上滚动能力。
++     * 滚动能力用于拖动时的边缘自动翻滚。
++     */
++    fun containerModifier(scrollBy: ((Float) -> Unit)? = null): Modifier {
++        this.scrollBy = scrollBy
++        return Modifier.onGloballyPositioned { coords ->
++            val b = coords.boundsInWindow()
++            containerTop = b.top
++            containerBottom = b.bottom
++        }
++    }
++
++    /** 行：量自己的槽位，并按拖动状态让位 / 跟手。顺序由宿主列表决定。 */
++    fun rowModifier(index: Int): Modifier =
++        Modifier
++            // 位置回调放在 offset 外层：量到的永远是行的「槽位」，不会被拖动位移污染
++            .onGloballyPositioned { coords ->
++                val b = coords.boundsInWindow()
++                tops[index] = b.top
++                heights[index] = b.height
++            }
++            .offset { IntOffset(0, offsetFor(index)) }
++            .zIndex(if (index == dragging) 1f else 0f)
++
++    /** 被拖行跟手；其它行按落点让出一行的空位。 */
++    fun offsetFor(index: Int): Int {
++        val from = dragging
++        if (from < 0) return 0
++        if (index == from) return dragOffset.toInt()
++        val to = target
++        if (to < 0 || to == from) return 0
++        val h = draggingHeight.toInt()
++        return when {
++            from < to && index in (from + 1)..to -> -h
++            to < from && index in to until from -> h
++            else -> 0
++        }
++    }
++
++    /** 把手：按住即拖（越过触摸阈值后进入拖动，与 WebUI 把手上 touch-action:none 同效果）。 */
++    fun handleModifier(index: Int): Modifier =
++        Modifier.pointerInput(index) {
++            detectDragGestures(
++                onDragStart = { local -> startDrag(index, local.y, size.height.toFloat()) },
++                onDragCancel = { cancelDrag() },
++                onDragEnd = { endDrag() },
++                onDrag = { change, dragAmount ->
++                    change.consume()
++                    drag(dragAmount.y)
++                },
++            )
++        }
++
++    private fun rowCenter(index: Int): Float? {
++        val top = tops[index] ?: return null
++        val h = heights[index] ?: return null
++        return top + h / 2f
++    }
++
++    fun startDrag(index: Int, localY: Float, handleHeight: Float) {
++        if (index < 0) return
++        draggingHeight = heights[index] ?: 0f
++        dragging = index
++        target = index
++        dragOffset = 0f
++        // 手指按在把手上任意位置：先换算成行中心，之后一律用「手指窗口 Y」判定落点
++        val center = rowCenter(index) ?: (containerTop + draggingHeight / 2f)
++        fingerY = center + (localY - handleHeight / 2f)
++    }
++
++    fun drag(dy: Float) {
++        if (dragging < 0) return
++        dragOffset += dy
++        fingerY += dy
++        target = targetFor(fingerY)
++    }
++
++    fun endDrag() {
++        val from = dragging
++        val to = target
++        reset()
++        if (from >= 0 && to >= 0 && to != from) onMove(from, to)
++    }
++
++    fun cancelDrag() = reset()
++
++    private fun reset() {
++        dragging = -1
++        target = -1
++        dragOffset = 0f
++        draggingHeight = 0f
++    }
++
++    /** 落点判定与 WebUI 同口径：手指越过哪一行的中线，就把它插到那一行之前 / 之后。 */
++    private fun targetFor(y: Float): Int {
++        val from = dragging
++        if (from < 0) return -1
++        var t = from
++        for (i in 0 until count) {
++            if (i == from) continue
++            val top = tops[i] ?: continue
++            val h = heights[i] ?: continue
++            val center = top + h / 2f
++            if (i < from && y < center) t = minOf(t, i)
++            if (i > from && y > center) t = maxOf(t, i)
++        }
++        return t
++    }
++
++    /** 边缘自动翻滚：手指进入容器上下 [edge] 内按深度滚动，滚一帧就重算一次落点。 */
++    internal fun autoScroll(edge: Float, step: Float) {
++        if (dragging < 0) return
++        val scroller = scrollBy ?: return
++        val depthUp = (containerTop + edge) - fingerY
++        val depthDown = fingerY - (containerBottom - edge)
++        val depth = maxOf(depthUp, depthDown)
++        if (depth <= 0f) return
++        val ratio = (depth / edge).coerceAtMost(1f)
++        val delta = step * ratio * (if (depthUp > depthDown) -1f else 1f)
++        scroller(delta)
++        target = targetFor(fingerY)
++    }
++}
++
++@Composable
++internal fun rememberDragSortState(count: Int, onMove: (from: Int, to: Int) -> Unit): DragSortState {
++    val state = remember { DragSortState() }
++    val move = rememberUpdatedState(onMove)
++    // 两个都是普通字段（非快照状态）：拖动中每帧改快照状态只会让长列表反复重组
++    state.count = count
++    state.onMove = { from, to -> move.value(from, to) }
++    // 拖动期间的边缘自动翻滚：只在拖动存在时跑帧循环，松手立刻停（不做常驻定时器）
++    val density = LocalDensity.current
++    val edge = with(density) { 96.dp.toPx() }
++    val step = with(density) { 7.dp.toPx() }
++    val dragging = state.dragging
++    LaunchedEffect(dragging) {
++        if (dragging < 0) return@LaunchedEffect
++        while (true) {
++            withFrameNanos { }
++            state.autoScroll(edge, step)
++        }
++    }
++    return state
++}
++
++/** 行容器里的每一项都包一层：序号即列表顺序。 */
++@Composable
++internal fun DragSortRow(
++    state: DragSortState,
++    index: Int,
++    modifier: Modifier = Modifier,
++    content: @Composable () -> Unit,
++) {
++    Box(modifier = modifier.then(state.rowModifier(index))) { content() }
++}
++
++/** 拖动排序的把手：与 WebUI `.drag-handle` 同形（两列三点），按住即拖。 */
++@Composable
++internal fun DragHandle(state: DragSortState, index: Int, modifier: Modifier = Modifier) {
++    val tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
++    Box(
++        modifier = modifier
++            .size(40.dp)
++            .then(state.handleModifier(index))
++            .semantics { contentDescription = "按住拖动排序" },
++        contentAlignment = Alignment.Center,
++    ) {
++        Canvas(modifier = Modifier.size(16.dp)) {
++            val r = size.minDimension * 0.13f
++            val xs = listOf(size.width * 0.3f, size.width * 0.7f)
++            val ys = listOf(size.height * 0.2f, size.height * 0.5f, size.height * 0.8f)
++            for (x in xs) {
++                for (y in ys) drawCircle(color = tint, radius = r, center = Offset(x, y))
++            }
++        }
++    }
++}
++
++/**
++ * 行内的小图标按钮（编辑 / 删除）：对齐 mihomo_box WebUI 的 `.mini-btn`——小方块、淡底、
++ * 图标居中，取代此前满屏的「编辑 / 删」文字按钮。
++ */
++@Composable
++internal fun MiniIconButton(
++    icon: ImageVector,
++    contentDescription: String,
++    onClick: () -> Unit,
++    enabled: Boolean = true,
++    modifier: Modifier = Modifier,
++) {
++    IconButton(
++        onClick = onClick,
++        enabled = enabled,
++        modifier = modifier,
++        minWidth = 36.dp,
++        minHeight = 36.dp,
++        cornerRadius = 10.dp,
++        backgroundColor = MiuixTheme.colorScheme.surfaceContainerHigh,
++    ) {
++        Icon(
++            imageVector = icon,
++            contentDescription = contentDescription,
++            modifier = Modifier.size(18.dp),
++            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
++        )
++    }
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt
 new file mode 100644
 index 0000000..a285419
@@ -6529,10 +6818,10 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..233e317
+index 0000000..7a2c3a0
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2306 @@
+@@ -0,0 +1,2281 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -6546,6 +6835,7 @@ index 0000000..233e317
 +import androidx.compose.foundation.layout.width
 +import androidx.compose.foundation.lazy.LazyColumn
 +import androidx.compose.foundation.lazy.itemsIndexed
++import androidx.compose.foundation.lazy.rememberLazyListState
 +import androidx.compose.foundation.rememberScrollState
 +import androidx.compose.foundation.verticalScroll
 +import androidx.compose.runtime.Composable
@@ -6565,6 +6855,9 @@ index 0000000..233e317
 +import top.yukonga.miuix.kmp.basic.Text
 +import top.yukonga.miuix.kmp.basic.TextButton
 +import top.yukonga.miuix.kmp.basic.TextField
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Delete
++import top.yukonga.miuix.kmp.icon.extended.Edit
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +import top.yukonga.miuix.kmp.window.WindowDialog
 +
@@ -6611,8 +6904,13 @@ index 0000000..233e317
 +// ---------------------------------------------------------------- 通用：序列列表页 / 映射列表页
 +
 +/**
-+ * 序列（proxies / proxy-groups / tunnels / rules）的列表页：表头 + 每项一卡 + 「⋯」菜单（上移 / 下移 / 删除 + 扩展项）。
-+ * `onDelete` 给了就走调用方的删除流程（引用保护），否则菜单里两步确认直接删。
++ * 序列（proxies / proxy-groups / tunnels / rules）的列表页：表头 + 每项一卡。
++ *
++ * 排序与操作全部对齐 mihomo_box WebUI（pages-flow.js / pages-config.js）：
++ *  - **按住行首把手拖动排序**（`.drag-handle` 同款两列三点），松手写回新顺序；「⋯」菜单里的
++ *    上移 / 下移随之下线——有了把手，「在上方插入」也并入「新增 + 拖到位置」这一条路径；
++ *  - 行尾是 ✎ 编辑 / × 删除两个图标按钮；`onDelete` 给了就走调用方的删除流程（引用保护），
++ *    否则先弹一次确认再删（此前靠菜单里的两步确认）。
 + */
 +@Composable
 +private fun SeqListPage(
@@ -6624,23 +6922,30 @@ index 0000000..233e317
 +    rowTitle: (Int, YamlNode) -> String,
 +    rowSummary: (Int, YamlNode) -> String?,
 +    onOpen: (Int, YamlNode) -> Unit,
-+    extraMenu: (Int, YamlNode) -> List<Pair<String, () -> Unit>> = { _, _ -> emptyList() },
 +    onDelete: ((Int, YamlNode) -> Unit)? = null,
 +) {
 +    val doc = host.doc
 +    val seq = doc.get(seqPath)
 +    val items: List<YamlNode> = if (seq != null && seq.kind == YamlNode.Kind.SEQ) seq.items else emptyList()
 +    val broken = seq != null && seq.kind != YamlNode.Kind.SEQ && !doc.isNullText(seq)
-+    var menu by remember { mutableStateOf(-1) }
++    var plainDelete by remember { mutableStateOf(-1) }
++    val listState = rememberLazyListState()
++    val dragSort = rememberDragSortState(items.size) { from, to ->
++        val label = items.getOrNull(from)?.let { rowTitle(from, it) } ?: unit
++        host.moveItem(seqPath, from, to, label)
++    }
 +
 +    LazyColumn(
-+        modifier = Modifier.fillMaxWidth(),
++        state = listState,
++        modifier = Modifier
++            .fillMaxWidth()
++            .then(dragSort.containerModifier { listState.dispatchRawDelta(it) }),
 +        contentPadding = PaddingValues(bottom = 24.dp),
 +        verticalArrangement = Arrangement.spacedBy(8.dp),
 +    ) {
 +        item(key = "hdr") {
 +            ListHeader(
-+                summary = "`${pathText(seqPath)}` · ${items.size} $unit" +
++                summary = "`${pathText(seqPath)}` · ${items.size} $unit · 按住行首把手拖动排序" +
 +                    (if (broken) " · 这个键不是列表（别名 / 映射 / 纯值），只能在编辑器里改" else ""),
 +                actions = headerActions,
 +            )
@@ -6656,37 +6961,41 @@ index 0000000..233e317
 +            }
 +        }
 +        itemsIndexed(items) { i, node ->
-+            RowCard(
-+                title = rowTitle(i, node),
-+                summary = rowSummary(i, node),
-+                onClick = { onOpen(i, node) },
-+                endActions = {
-+                    TextButton(text = "⋯", minWidth = 0.dp, minHeight = 0.dp, onClick = { menu = i })
-+                },
-+            )
++            DragSortRow(state = dragSort, index = i) {
++                RowCard(
++                    title = rowTitle(i, node),
++                    summary = rowSummary(i, node),
++                    onClick = { onOpen(i, node) },
++                    dragHandle = { DragHandle(dragSort, i) },
++                    endActions = {
++                        MiniIconButton(MiuixIcons.Edit, "编辑") { onOpen(i, node) }
++                        Spacer(Modifier.width(8.dp))
++                        MiniIconButton(MiuixIcons.Delete, "删除") {
++                            if (onDelete != null) onDelete(i, node) else plainDelete = i
++                        }
++                    },
++                )
++            }
 +        }
 +    }
 +
-+    if (menu >= 0 && menu < items.size) {
-+        val i = menu
-+        val node = items[i]
-+        val label = rowTitle(i, node)
-+        ItemMenuDialog(
-+            title = label,
-+            summary = "`${pathText(seqPath + i)}`",
-+            canUp = i > 0,
-+            canDown = i < items.size - 1,
-+            onUp = { host.moveItem(seqPath, i, i - 1, label) },
-+            onDown = { host.moveItem(seqPath, i, i + 1, label) },
-+            onDelete = if (onDelete != null) ({ onDelete(i, node) }) else ({ host.removeItem(seqPath, i, label) }),
-+            onDismiss = { menu = -1 },
-+            extra = extraMenu(i, node),
-+            deleteDirect = onDelete != null,
++    if (plainDelete >= 0 && plainDelete < items.size) {
++        val i = plainDelete
++        val label = rowTitle(i, items[i])
++        ConfirmDialog(
++            title = "删除${unit.removePrefix("个").removePrefix("条")}",
++            text = "删除「$label」（`${pathText(seqPath + i)}`）？这个操作只能靠编辑器撤销。",
++            confirmLabel = "删除",
++            onDismiss = { plainDelete = -1 },
++            onConfirm = { plainDelete = -1; host.removeItem(seqPath, i, label) },
 +        )
 +    }
 +}
 +
-+/** 映射（proxy-providers / rule-providers / sub-rules）的列表页：按名字一卡，「⋯」菜单里改名 / 删除。 */
++/**
++ * 映射（proxy-providers / rule-providers / sub-rules）的列表页：按名字一卡。
++ * 行尾与序列列表同一套：✎ 改名 / × 删除两个图标按钮（映射无顺序，不给拖动把手）。
++ */
 +@Composable
 +private fun MapListPage(
 +    host: FormHost,
@@ -6704,7 +7013,7 @@ index 0000000..233e317
 +    val map = doc.get(mapPath)
 +    val entries: List<YamlEntry> = if (map != null && map.kind == YamlNode.Kind.MAP) map.entries.filter { !it.isMerge } else emptyList()
 +    val broken = map != null && map.kind != YamlNode.Kind.MAP && !doc.isNullText(map)
-+    var menu by remember { mutableStateOf<String?>(null) }
++    var confirmDelete by remember { mutableStateOf<String?>(null) }
 +    var renaming by remember { mutableStateOf<String?>(null) }
 +
 +    LazyColumn(
@@ -6735,24 +7044,23 @@ index 0000000..233e317
 +                summary = rowSummary(e.key, e.node),
 +                onClick = { onOpen(e.key) },
 +                endActions = {
-+                    TextButton(text = "⋯", minWidth = 0.dp, minHeight = 0.dp, onClick = { menu = e.key })
++                    MiniIconButton(MiuixIcons.Edit, "改名") { renaming = e.key }
++                    Spacer(Modifier.width(8.dp))
++                    MiniIconButton(MiuixIcons.Delete, "删除") {
++                        if (onDelete != null) onDelete(e.key) else confirmDelete = e.key
++                    }
 +                },
 +            )
 +        }
 +    }
 +
-+    menu?.let { key ->
-+        ItemMenuDialog(
-+            title = key,
-+            summary = "`${pathText(mapPath + key)}`",
-+            canUp = false,
-+            canDown = false,
-+            onUp = {},
-+            onDown = {},
-+            onDelete = if (onDelete != null) ({ onDelete(key) }) else ({ host.clear(mapPath + key, key) }),
-+            onDismiss = { menu = null },
-+            extra = listOf("改名" to { renaming = key }),
-+            deleteDirect = onDelete != null,
++    confirmDelete?.let { key ->
++        ConfirmDialog(
++            title = "删除" + unit.removePrefix("个").removePrefix("条").removePrefix("组"),
++            text = "删除「$key」（`${pathText(mapPath + key)}`）？这个操作只能靠编辑器撤销。",
++            confirmLabel = "删除",
++            onDismiss = { confirmDelete = null },
++            onConfirm = { confirmDelete = null; host.clear(mapPath + key, key) },
 +        )
 +    }
 +    renaming?.let { key ->
@@ -6770,24 +7078,25 @@ index 0000000..233e317
 +    }
 +}
 +
-+/** 详情页顶部的一卡：名字 + 路径 + 「⋯」（上移 / 下移 / 删除，删完返回列表）。 */
++/**
++ * 详情页顶部的一卡：名字 + 路径 + 行尾图标按钮。
++ *
++ * 与 mihomo_box 面板一致：这里只放 ✎（改名 / 编辑）与 ×（删除）两个图标；**上移 / 下移已下线**——
++ * 排序统一在列表页按住把手拖动，详情页再放一份只会出现「两处都能挪、两处结果不同」。
++ */
 +@Composable
 +private fun DetailHeader(
 +    title: String,
 +    summary: String,
-+    menu: (@Composable (onDismiss: () -> Unit) -> Unit)?,
 +    onClick: (() -> Unit)? = null,
++    endActions: (@Composable () -> Unit)? = null,
 +) {
-+    var menuOpen by remember { mutableStateOf(false) }
 +    RowCard(
 +        title = title,
 +        summary = summary,
 +        onClick = onClick,
-+        endActions = {
-+            if (menu != null) TextButton(text = "⋯", minWidth = 0.dp, minHeight = 0.dp, onClick = { menuOpen = true })
-+        },
++        endActions = { endActions?.invoke() },
 +    )
-+    if (menuOpen && menu != null) menu { menuOpen = false }
 +}
 +
 +@Composable
@@ -7216,18 +7525,12 @@ index 0000000..233e317
 +                        (if (protectedList) "（会同步代理组里的引用）" else "") +
 +                        (if (node.flow) " · 单行 {…} 写法，新增的键会接在同一行" else ""),
 +                    onClick = { renaming = true },
-+                    menu = { dismiss ->
-+                        ItemMenuDialog(
-+                            title = title,
-+                            summary = "`${pathText(base)}`",
-+                            canUp = index > 0,
-+                            canDown = index < total - 1,
-+                            onUp = { if (host.moveItem(seqPath, index, index - 1, title)) nav.replaceTop(FormRoute.Proxy(seqPath, index - 1)) },
-+                            onDown = { if (host.moveItem(seqPath, index, index + 1, title)) nav.replaceTop(FormRoute.Proxy(seqPath, index + 1)) },
-+                            onDelete = { if (protectedList && name.isNotEmpty()) deleting = startDelete(doc, "proxies", name) else plainDelete = true },
-+                            onDismiss = dismiss,
-+                            deleteDirect = true,
-+                        )
++                    endActions = {
++                        MiniIconButton(MiuixIcons.Edit, "改名") { renaming = true }
++                        Spacer(Modifier.width(8.dp))
++                        MiniIconButton(MiuixIcons.Delete, "删除") {
++                            if (protectedList && name.isNotEmpty()) deleting = startDelete(doc, "proxies", name) else plainDelete = true
++                        }
 +                    },
 +                )
 +                RowCard(
@@ -7254,7 +7557,7 @@ index 0000000..233e317
 +                    title = if (extras.isEmpty()) "没有表单之外的字段" else extras.joinToString(", ") { it.key },
 +                    summary = "表单未覆盖的官方字段在此补充（YAML 键值），确定后整块并入这一项",
 +                    onClick = { editOther = true },
-+                    endActions = { TextButton(text = "编辑", onClick = { editOther = true }) },
++                    endActions = { MiniIconButton(MiuixIcons.Edit, "编辑") { editOther = true } },
 +                )
 +            }
 +        },
@@ -7583,19 +7886,10 @@ index 0000000..233e317
 +                title = name,
 +                summary = "`${pathText(base)}` · ${typeLabel(PROVIDER_TYPES, type)} · 点此改名（会同步代理组 use）",
 +                onClick = { renaming = true },
-+                menu = { dismiss ->
-+                    ItemMenuDialog(
-+                        title = name,
-+                        summary = "`${pathText(base)}`",
-+                        canUp = false,
-+                        canDown = false,
-+                        onUp = {},
-+                        onDown = {},
-+                        onDelete = { deleting = startDelete(doc, "proxy-providers", name) },
-+                        onDismiss = dismiss,
-+                        extra = listOf("改名" to { renaming = true }),
-+                        deleteDirect = true,
-+                    )
++                endActions = {
++                    MiniIconButton(MiuixIcons.Edit, "改名") { renaming = true }
++                    Spacer(Modifier.width(8.dp))
++                    MiniIconButton(MiuixIcons.Delete, "删除") { deleting = startDelete(doc, "proxy-providers", name) }
 +                },
 +            )
 +        },
@@ -7630,7 +7924,7 @@ index 0000000..233e317
 +                            "yq v4 风格子集，逐条顺序执行，作用于单个节点；支持路径赋值 = / |= / del() / select" +
 +                            (if (inherited && items.isNotEmpty()) "；当前值来自锚点继承，编辑将写穿到锚点定义（所有继承它的条目一起生效）" else ""),
 +                        onClick = { exprEditor = true },
-+                        endActions = { TextButton(text = "编辑", onClick = { exprEditor = true }) },
++                        endActions = { MiniIconButton(MiuixIcons.Edit, "编辑") { exprEditor = true } },
 +                    )
 +                }
 +                "provider-file-ops" -> if (type == "file") {
@@ -7789,13 +8083,13 @@ index 0000000..233e317
 +                            fontFamily = FontFamily.Monospace,
 +                            modifier = Modifier.weight(1f),
 +                        )
-+                        // ✎ / × 用与弹层其它按钮（＋ 添加表达式 / 完成）同款形状尺寸，不再压成 min 0 的小圆块
-+                        TextButton(text = "✎", onClick = { editing = i })
++                        // 行尾 ✎ 编辑 / × 删除：与 mihomo_box 面板的 `.mini-btn` 同款小图标按钮
++                        MiniIconButton(MiuixIcons.Edit, "编辑") { editing = i }
 +                        Spacer(Modifier.width(8.dp))
-+                        TextButton(text = "×", onClick = {
++                        MiniIconButton(MiuixIcons.Delete, "删除") {
 +                            val f = local.filterIndexed { j, _ -> j != i }
 +                            if (onCommit(f)) local = f
-+                        })
++                        }
 +                    }
 +                }
 +            }
@@ -8042,18 +8336,12 @@ index 0000000..233e317
 +                    title = title,
 +                    summary = "`${pathText(base)}` · 点此改名（会同步其它代理组成员与规则目标）",
 +                    onClick = { renaming = true },
-+                    menu = { dismiss ->
-+                        ItemMenuDialog(
-+                            title = title,
-+                            summary = "`${pathText(base)}`",
-+                            canUp = index > 0,
-+                            canDown = index < total - 1,
-+                            onUp = { if (host.moveItem(GROUPS_PATH, index, index - 1, title)) nav.replaceTop(FormRoute.Group(index - 1)) },
-+                            onDown = { if (host.moveItem(GROUPS_PATH, index, index + 1, title)) nav.replaceTop(FormRoute.Group(index + 1)) },
-+                            onDelete = { if (name.isNotEmpty()) deleting = startDelete(doc, "proxy-groups", name) else plainDelete = true },
-+                            onDismiss = dismiss,
-+                            deleteDirect = true,
-+                        )
++                    endActions = {
++                        MiniIconButton(MiuixIcons.Edit, "改名") { renaming = true }
++                        Spacer(Modifier.width(8.dp))
++                        MiniIconButton(MiuixIcons.Delete, "删除") {
++                            if (name.isNotEmpty()) deleting = startDelete(doc, "proxy-groups", name) else plainDelete = true
++                        }
 +                    },
 +                )
 +                RowCard(
@@ -8147,7 +8435,6 @@ index 0000000..233e317
 +            if (ruleOf(node) == null) showToast("这一项不是规则字符串，请在编辑器里直接改", long = true)
 +            else edit = RuleEditTarget(index = i, insertAt = null)
 +        },
-+        extraMenu = { i, _ -> listOf("在上方插入" to { edit = RuleEditTarget(index = null, insertAt = i) }) },
 +    )
 +
 +    edit?.let { target ->
@@ -8495,19 +8782,10 @@ index 0000000..233e317
 +                title = name,
 +                summary = "`${pathText(base)}` · ${typeLabel(RULE_PROVIDER_TYPES, type)} · 点此改名（会同步 RULE-SET 规则）",
 +                onClick = { renaming = true },
-+                menu = { dismiss ->
-+                    ItemMenuDialog(
-+                        title = name,
-+                        summary = "`${pathText(base)}`",
-+                        canUp = false,
-+                        canDown = false,
-+                        onUp = {},
-+                        onDown = {},
-+                        onDelete = { deleting = startDelete(doc, "rule-providers", name) },
-+                        onDismiss = dismiss,
-+                        extra = listOf("改名" to { renaming = true }),
-+                        deleteDirect = true,
-+                    )
++                endActions = {
++                    MiniIconButton(MiuixIcons.Edit, "改名") { renaming = true }
++                    Spacer(Modifier.width(8.dp))
++                    MiniIconButton(MiuixIcons.Delete, "删除") { deleting = startDelete(doc, "rule-providers", name) }
 +                },
 +            )
 +        },
@@ -8519,7 +8797,7 @@ index 0000000..233e317
 +                        title = "内联规则 payload",
 +                        summary = "$n 条 · 一行一条（按 behavior 写域名 / CIDR / 经典规则），不带目标策略",
 +                        onClick = { payloadEditor = true },
-+                        endActions = { TextButton(text = "编辑", onClick = { payloadEditor = true }) },
++                        endActions = { MiniIconButton(MiuixIcons.Edit, "编辑") { payloadEditor = true } },
 +                    )
 +                }
 +                "rule-provider-file-ops" -> if (type == "file") {
@@ -8741,21 +9019,7 @@ index 0000000..233e317
 +        MissingItem("这条隧道已经不在了")
 +        return
 +    }
-+    val total = seqSize(doc, TUNNELS_PATH)
 +    var deleting by remember { mutableStateOf(false) }
-+    val menu: @Composable (() -> Unit) -> Unit = { dismiss ->
-+        ItemMenuDialog(
-+            title = "隧道 #${index + 1}",
-+            summary = "`${pathText(base)}`",
-+            canUp = index > 0,
-+            canDown = index < total - 1,
-+            onUp = { if (host.moveItem(TUNNELS_PATH, index, index - 1, "隧道")) nav.replaceTop(FormRoute.Tunnel(index - 1)) },
-+            onDown = { if (host.moveItem(TUNNELS_PATH, index, index + 1, "隧道")) nav.replaceTop(FormRoute.Tunnel(index + 1)) },
-+            onDelete = { deleting = true },
-+            onDismiss = dismiss,
-+            deleteDirect = true,
-+        )
-+    }
 +    if (deleting) {
 +        ConfirmDialog(
 +            title = "删除隧道",
@@ -8782,7 +9046,7 @@ index 0000000..233e317
 +                DetailHeader(
 +                    title = FormValues.readRaw(doc, base + "address")?.ifBlank { null } ?: "隧道 #${index + 1}",
 +                    summary = "`${pathText(base)}` · 映射写法（network 按内核要求写成列表）",
-+                    menu = menu,
++                    endActions = { MiniIconButton(MiuixIcons.Delete, "删除") { deleting = true } },
 +                )
 +            },
 +        )
@@ -8801,7 +9065,7 @@ index 0000000..233e317
 +            DetailHeader(
 +                title = parts?.address ?: "隧道 #${index + 1}",
 +                summary = "`${pathText(base)}` · 单行写法：`协议,监听地址,目标地址[,代理]`",
-+                menu = menu,
++                endActions = { MiniIconButton(MiuixIcons.Edit, "编辑") { editing = true } },
 +            )
 +        }
 +        item {
@@ -8809,7 +9073,7 @@ index 0000000..233e317
 +                title = "原文",
 +                summary = raw.ifEmpty { "（空）" } + (if (parts == null) " · 内核认不出这个格式（要 3 或 4 段）" else ""),
 +                onClick = { editing = true },
-+                endActions = { TextButton(text = "编辑", onClick = { editing = true }) },
++                endActions = { MiniIconButton(MiuixIcons.Edit, "编辑") { editing = true } },
 +            )
 +        }
 +        if (parts != null) {
@@ -8967,10 +9231,10 @@ index 0000000..033bcf3
 +    (name.trim().ifEmpty { fallback }).replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 new file mode 100644
-index 0000000..9360301
+index 0000000..6af6aed
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
-@@ -0,0 +1,679 @@
+@@ -0,0 +1,635 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -9000,11 +9264,12 @@ index 0000000..9360301
 +import top.yukonga.mishka.R
 +import top.yukonga.miuix.kmp.basic.ButtonDefaults
 +import top.yukonga.miuix.kmp.basic.BasicComponent
-+import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 +import top.yukonga.miuix.kmp.basic.Checkbox
 +import top.yukonga.miuix.kmp.basic.Text
 +import top.yukonga.miuix.kmp.basic.TextButton
 +import top.yukonga.miuix.kmp.basic.TextField
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Delete
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +import top.yukonga.miuix.kmp.window.WindowDialog
 +
@@ -9211,7 +9476,8 @@ index 0000000..9360301
 +}
 +
 +/**
-+ * 字符串列表编辑：已有项可挪 / 删；`candidates` 非空时列出可勾选的候选，勾一下加进列表、再勾一下移出；
++ * 字符串列表编辑：按住把手拖动排序（对齐 mihomo_box WebUI 的列表项把手）+ 行尾 × 删除；
++ * `candidates` 非空时列出可勾选的候选，勾一下加进列表、再勾一下移出；
 + * `pickOnly`（参考实现的 datalist 列表）时不给手填框。
 + */
 +@Composable
@@ -9226,6 +9492,12 @@ index 0000000..9360301
 +    val items = remember { mutableStateListOf<String>().also { it.addAll(current) } }
 +    var draft by remember { mutableStateOf("") }
 +    var showCandidates by remember { mutableStateOf(candidates.isNotEmpty() && (current.isEmpty() || pickOnly)) }
++    val scrollState = rememberScrollState()
++    // 拖动排序：草稿列表就地换位（写回仍走对话框的「确定」）
++    val dragSort = rememberDragSortState(items.size) { from, to ->
++        val moved = items.removeAt(from)
++        items.add(to, moved)
++    }
 +    WindowDialog(
 +        show = true,
 +        title = field.label,
@@ -9238,38 +9510,35 @@ index 0000000..9360301
 +                modifier = Modifier
 +                    .fillMaxWidth()
 +                    .heightIn(max = 220.dp)
-+                    .verticalScroll(rememberScrollState()),
++                    .then(dragSort.containerModifier { scrollState.dispatchRawDelta(it) })
++                    .verticalScroll(scrollState),
 +            ) {
 +                if (items.isEmpty()) DialogNote("（空）")
 +                items.forEachIndexed { index, item ->
-+                    Row(
-+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-+                        verticalAlignment = Alignment.CenterVertically,
-+                    ) {
-+                        Text(
-+                            text = (index + 1).toString().padStart(2),
-+                            fontSize = 12.sp,
-+                            fontFamily = FontFamily.Monospace,
-+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-+                            modifier = Modifier.width(28.dp),
-+                        )
-+                        Text(
-+                            text = item,
-+                            fontSize = 13.sp,
-+                            fontFamily = FontFamily.Monospace,
-+                            maxLines = 1,
-+                            overflow = TextOverflow.Ellipsis,
-+                            modifier = Modifier.weight(1f),
-+                        )
-+                        Spacer(Modifier.width(8.dp))
-+                        TextButton(text = "上移", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-+                            if (index > 0) {
-+                                val v = items.removeAt(index)
-+                                items.add(index - 1, v)
-+                            }
-+                        })
-+                        Spacer(Modifier.width(8.dp))
-+                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { items.removeAt(index) })
++                    DragSortRow(state = dragSort, index = index) {
++                        Row(
++                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
++                            verticalAlignment = Alignment.CenterVertically,
++                        ) {
++                            DragHandle(dragSort, index)
++                            Text(
++                                text = (index + 1).toString().padStart(2),
++                                fontSize = 12.sp,
++                                fontFamily = FontFamily.Monospace,
++                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
++                                modifier = Modifier.width(28.dp),
++                            )
++                            Text(
++                                text = item,
++                                fontSize = 13.sp,
++                                fontFamily = FontFamily.Monospace,
++                                maxLines = 1,
++                                overflow = TextOverflow.Ellipsis,
++                                modifier = Modifier.weight(1f),
++                            )
++                            Spacer(Modifier.width(4.dp))
++                            MiniIconButton(MiuixIcons.Delete, "删除") { items.removeAt(index) }
++                        }
 +                    }
 +                }
 +            }
@@ -9388,11 +9657,11 @@ index 0000000..9360301
 +                            label = if (field.arrayValues) "值（逗号分隔多个）" else "值",
 +                            singleLine = true,
 +                        )
-+                        Spacer(Modifier.width(8.dp))
-+                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = {
++                        Spacer(Modifier.width(4.dp))
++                        MiniIconButton(MiuixIcons.Delete, "删除") {
 +                            keys.removeAt(index)
 +                            values.removeAt(index)
-+                        })
++                        }
 +                    }
 +                }
 +            }
@@ -9459,8 +9728,8 @@ index 0000000..9360301
 +                                singleLine = true,
 +                            )
 +                        }
-+                        Spacer(Modifier.width(8.dp))
-+                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { rows.removeAt(index) })
++                        Spacer(Modifier.width(4.dp))
++                        MiniIconButton(MiuixIcons.Delete, "删除") { rows.removeAt(index) }
 +                    }
 +                }
 +            }
@@ -9535,55 +9804,6 @@ index 0000000..9360301
 +                        summary = o.value.takeIf { it != o.label },
 +                        endActions = { if (o.value == current) Text("当前", fontSize = 12.sp, color = MiuixTheme.colorScheme.primary) },
 +                        onClick = { onPick(o.value) },
-+                    )
-+                }
-+            }
-+            DialogButtons(onDismiss = onDismiss, confirmLabel = null)
-+        }
-+    }
-+}
-+
-+/** 列表项的操作菜单：上移 / 下移 / 删除（两步确认）+ 额外项。`onDelete` 为 null 时不显示删除（删除走别的流程）。 */
-+@Composable
-+internal fun ItemMenuDialog(
-+    title: String,
-+    summary: String?,
-+    canUp: Boolean,
-+    canDown: Boolean,
-+    onUp: () -> Unit,
-+    onDown: () -> Unit,
-+    onDelete: (() -> Unit)?,
-+    onDismiss: () -> Unit,
-+    extra: List<Pair<String, () -> Unit>> = emptyList(),
-+    deleteDirect: Boolean = false,
-+) {
-+    var confirm by remember { mutableStateOf(false) }
-+    WindowDialog(
-+        show = true,
-+        title = title,
-+        summary = summary,
-+        onDismissRequest = onDismiss,
-+    ) {
-+        Column(modifier = Modifier.fillMaxWidth()) {
-+            for ((label, action) in extra) {
-+                BasicComponent(title = label, onClick = { onDismiss(); action() })
-+            }
-+            if (canUp) BasicComponent(title = "上移", onClick = { onDismiss(); onUp() })
-+            if (canDown) BasicComponent(title = "下移", onClick = { onDismiss(); onDown() })
-+            if (onDelete != null) {
-+                if (deleteDirect) {
-+                    BasicComponent(
-+                        title = "删除",
-+                        titleColor = BasicComponentDefaults.titleColor(color = MiuixTheme.colorScheme.primary),
-+                        summary = "点击后进入确认（有引用保护的项会先查引用）",
-+                        onClick = { onDismiss(); onDelete() },
-+                    )
-+                } else {
-+                    BasicComponent(
-+                        title = if (confirm) "确认删除" else "删除",
-+                        titleColor = BasicComponentDefaults.titleColor(color = MiuixTheme.colorScheme.primary),
-+                        summary = if (confirm) "再点一次就删，这个操作只能靠编辑器撤销" else null,
-+                        onClick = { if (confirm) { onDismiss(); onDelete() } else confirm = true },
 +                    )
 +                }
 +            }
@@ -13822,10 +14042,10 @@ index 0000000..1704d85
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
 new file mode 100644
-index 0000000..b24e4c4
+index 0000000..fbc0ee9
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
-@@ -0,0 +1,1037 @@
+@@ -0,0 +1,1069 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import android.content.pm.ApplicationInfo
@@ -13866,6 +14086,9 @@ index 0000000..b24e4c4
 +import top.yukonga.miuix.kmp.basic.Text
 +import top.yukonga.miuix.kmp.basic.TextButton
 +import top.yukonga.miuix.kmp.basic.TextField
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Delete
++import top.yukonga.miuix.kmp.icon.extended.Edit
 +import top.yukonga.miuix.kmp.theme.MiuixTheme
 +import top.yukonga.miuix.kmp.window.WindowDialog
 +
@@ -13881,6 +14104,11 @@ index 0000000..b24e4c4
 +) {
 +    val servers = remember { mutableStateListOf<String>().also { it.addAll(current) } }
 +    var editing by remember { mutableStateOf<Int?>(null) }
++    val scrollState = rememberScrollState()
++    val dragSort = rememberDragSortState(servers.size) { from, to ->
++        val moved = servers.removeAt(from)
++        servers.add(to, moved)
++    }
 +    if (editing != null) {
 +        val index = editing!!
 +        DnsServerBuilderDialog(
@@ -13911,26 +14139,30 @@ index 0000000..b24e4c4
 +        Column(modifier = Modifier.fillMaxWidth()) {
 +            if (servers.isEmpty()) DialogNote("暂无服务器，点击下方添加。打开已有配置只读解析，不会自动重写原文。")
 +            Column(
-+                modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()),
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .heightIn(max = 300.dp)
++                    .then(dragSort.containerModifier { scrollState.dispatchRawDelta(it) })
++                    .verticalScroll(scrollState),
 +                verticalArrangement = Arrangement.spacedBy(4.dp),
 +            ) {
 +                servers.forEachIndexed { index, value ->
-+                    BasicComponent(
-+                        title = value,
-+                        summary = dnsServerSummary(value),
-+                        endActions = {
-+                            TextButton(text = "上移", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-+                                if (index > 0) {
-+                                    val item = servers.removeAt(index)
-+                                    servers.add(index - 1, item)
-+                                }
-+                            })
-+                            Spacer(Modifier.width(8.dp))
-+                            TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
-+                            Spacer(Modifier.width(8.dp))
-+                            TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { servers.removeAt(index) })
-+                        },
-+                    )
++                    DragSortRow(state = dragSort, index = index) {
++                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
++                            DragHandle(dragSort, index)
++                            BasicComponent(
++                                title = value,
++                                summary = dnsServerSummary(value),
++                                modifier = Modifier.weight(1f),
++                                endActions = {
++                                    // 与 mihomo_box 面板一致：行尾 ✎ 编辑 / × 删除，排序改拖把手
++                                    MiniIconButton(MiuixIcons.Edit, "编辑") { editing = index }
++                                    Spacer(Modifier.width(8.dp))
++                                    MiniIconButton(MiuixIcons.Delete, "删除") { servers.removeAt(index) }
++                                },
++                            )
++                        }
++                    }
 +                }
 +            }
 +            note?.let { DialogNote(it) }
@@ -14381,6 +14613,11 @@ index 0000000..b24e4c4
 +    }
 +    val rules = remember { mutableStateListOf<String>().also { it.addAll(current) } }
 +    var editing by remember { mutableStateOf<Int?>(null) }
++    val scrollState = rememberScrollState()
++    val dragSort = rememberDragSortState(rules.size) { from, to ->
++        val moved = rules.removeAt(from)
++        rules.add(to, moved)
++    }
 +    if (editing != null) {
 +        val index = editing!!
 +        FakeIpRuleItemDialog(
@@ -14397,25 +14634,28 @@ index 0000000..b24e4c4
 +        Column(modifier = Modifier.fillMaxWidth()) {
 +            DialogNote("从上到下匹配；末条可用 MATCH,fake-ip / MATCH,real-ip 兜底。未编辑的规则保持原文。")
 +            Column(
-+                modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()),
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .heightIn(max = 300.dp)
++                    .then(dragSort.containerModifier { scrollState.dispatchRawDelta(it) })
++                    .verticalScroll(scrollState),
 +            ) {
 +                rules.forEachIndexed { index, raw ->
-+                    BasicComponent(
-+                        title = raw,
-+                        summary = fakeIpRuleSummary(raw),
-+                        endActions = {
-+                            TextButton(text = "上移", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-+                                if (index > 0) {
-+                                    val item = rules.removeAt(index)
-+                                    rules.add(index - 1, item)
-+                                }
-+                            })
-+                            Spacer(Modifier.width(8.dp))
-+                            TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
-+                            Spacer(Modifier.width(8.dp))
-+                            TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { rules.removeAt(index) })
-+                        },
-+                    )
++                    DragSortRow(state = dragSort, index = index) {
++                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
++                            DragHandle(dragSort, index)
++                            BasicComponent(
++                                title = raw,
++                                summary = fakeIpRuleSummary(raw),
++                                modifier = Modifier.weight(1f),
++                                endActions = {
++                                    MiniIconButton(MiuixIcons.Edit, "编辑") { editing = index }
++                                    Spacer(Modifier.width(8.dp))
++                                    MiniIconButton(MiuixIcons.Delete, "删除") { rules.removeAt(index) }
++                                },
++                            )
++                        }
++                    }
 +                }
 +            }
 +            Row(
@@ -14696,8 +14936,8 @@ index 0000000..b24e4c4
 +                            label = if (field.arrayValues) "候选值" else "值",
 +                            singleLine = true,
 +                        )
-+                        Spacer(Modifier.width(8.dp))
-+                        TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { keys.removeAt(index); values.removeAt(index) })
++                        Spacer(Modifier.width(4.dp))
++                        MiniIconButton(MiuixIcons.Delete, "删除") { keys.removeAt(index); values.removeAt(index) }
 +                    }
 +                }
 +            }
@@ -14776,9 +15016,9 @@ index 0000000..b24e4c4
 +                        title = row.key,
 +                        summary = row.values.joinToString(", ").ifBlank { "（空）" },
 +                        endActions = {
-+                            TextButton(text = "编辑", minWidth = 0.dp, minHeight = 0.dp, onClick = { editing = index })
++                            MiniIconButton(MiuixIcons.Edit, "编辑") { editing = index }
 +                            Spacer(Modifier.width(8.dp))
-+                            TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { rows.removeAt(index) })
++                            MiniIconButton(MiuixIcons.Delete, "删除") { rows.removeAt(index) }
 +                        },
 +                    )
 +                }
@@ -14804,6 +15044,11 @@ index 0000000..b24e4c4
 +    var key by remember(initial) { mutableStateOf(initial?.key.orEmpty()) }
 +    var values by remember(initial) { mutableStateOf(initial?.values.orEmpty()) }
 +    var dnsBuilder by remember(initial) { mutableStateOf(false) }
++    val dnsValueScroll = rememberScrollState()
++    val dnsValueSort = rememberDragSortState(values.size) { from, to ->
++        val moved = values[from]
++        values = values.toMutableList().also { it.removeAt(from); it.add(to, moved) }
++    }
 +    if (dnsBuilder) {
 +        DnsServerListDialog(
 +            title = "${field.label} · DNS 服务器",
@@ -14814,26 +15059,33 @@ index 0000000..b24e4c4
 +        )
 +        return
 +    }
-+        WindowDialog(show = true, title = if (initial == null) "添加映射条目" else "编辑映射条目", onDismissRequest = onDismiss) {
++    WindowDialog(show = true, title = if (initial == null) "添加映射条目" else "编辑映射条目", onDismissRequest = onDismiss) {
 +        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 +            TextField(key, { key = it }, modifier = Modifier.fillMaxWidth(), label = field.keyPlaceholder ?: "键", singleLine = true)
 +            if (field.dns) {
 +                DialogNote("值为 DNS 服务器列表；可使用可视化构建器添加、编辑和排序。")
-+                Column(modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp).verticalScroll(rememberScrollState())) {
++                Column(
++                    modifier = Modifier
++                        .fillMaxWidth()
++                        .heightIn(max = 140.dp)
++                        .then(dnsValueSort.containerModifier { dnsValueScroll.dispatchRawDelta(it) })
++                        .verticalScroll(dnsValueScroll),
++                ) {
 +                    values.forEachIndexed { index, value ->
-+                        BasicComponent(
-+                            title = value,
-+                            endActions = {
-+                                TextButton(text = "上移", minWidth = 0.dp, minHeight = 0.dp, onClick = {
-+                                    if (index > 0) {
-+                                        val item = values[index]
-+                                        values = values.toMutableList().also { it.removeAt(index); it.add(index - 1, item) }
-+                                    }
-+                                })
-+                                Spacer(Modifier.width(8.dp))
-+                                TextButton(text = "删", minWidth = 0.dp, minHeight = 0.dp, onClick = { values = values.toMutableList().also { it.removeAt(index) } })
-+                            },
-+                        )
++                        DragSortRow(state = dnsValueSort, index = index) {
++                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
++                                DragHandle(dnsValueSort, index)
++                                BasicComponent(
++                                    title = value,
++                                    modifier = Modifier.weight(1f),
++                                    endActions = {
++                                        MiniIconButton(MiuixIcons.Delete, "删除") {
++                                            values = values.toMutableList().also { it.removeAt(index) }
++                                        }
++                                    },
++                                )
++                            }
++                        }
 +                    }
 +                }
 +                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -14865,10 +15117,10 @@ index 0000000..b24e4c4
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
 new file mode 100644
-index 0000000..2cc26a6
+index 0000000..0d66444
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,251 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import android.net.Uri
@@ -14902,6 +15154,8 @@ index 0000000..2cc26a6
 +import top.yukonga.miuix.kmp.basic.CardDefaults
 +import top.yukonga.miuix.kmp.basic.TextButton
 +import top.yukonga.miuix.kmp.basic.TextField
++import top.yukonga.miuix.kmp.icon.MiuixIcons
++import top.yukonga.miuix.kmp.icon.extended.Edit
 +import top.yukonga.miuix.kmp.window.WindowDialog
 +
 +/**
@@ -15015,8 +15269,8 @@ index 0000000..2cc26a6
 +                // 两个按钮收进一行并压紧最小宽度：默认 TextButton 的最小宽度会在窄屏上把摘要挤换行
 +                Row(verticalAlignment = Alignment.CenterVertically) {
 +                    TextButton(text = "上传", minWidth = 0.dp, onClick = { uploadLauncher.launch(arrayOf("*/*")) })
-+                    Spacer(Modifier.width(2.dp))
-+                    TextButton(text = "编辑", minWidth = 0.dp, onClick = { tryOpenEdit() })
++                    Spacer(Modifier.width(6.dp))
++                    MiniIconButton(MiuixIcons.Edit, "编辑") { tryOpenEdit() }
 +                }
 +            },
 +            onClick = { tryOpenEdit() },
@@ -17404,10 +17658,20 @@ index 0000000..0434c16
 +    private fun leadingIndent(value: String): Int = value.takeWhile { it == ' ' }.length
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-index 33aa9cc..0fdd5de 100644
+index 33aa9cc..eec239e 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-@@ -29,6 +29,7 @@ import top.yukonga.mishka.domain.model.ProvidersResponse
+@@ -19,6 +19,9 @@ import io.ktor.http.contentType
+ import io.ktor.http.isSuccess
+ import io.ktor.serialization.kotlinx.json.json
+ import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonElement
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.intOrNull
+ import top.yukonga.mishka.domain.model.ConnectionsResponse
+ import top.yukonga.mishka.domain.model.DelayResult
+ import top.yukonga.mishka.domain.model.DnsQueryResponse
+@@ -29,6 +32,7 @@ import top.yukonga.mishka.domain.model.ProvidersResponse
  import top.yukonga.mishka.domain.model.ProxiesResponse
  import top.yukonga.mishka.domain.model.RuleProvidersResponse
  import top.yukonga.mishka.domain.model.RulesResponse
@@ -17415,7 +17679,7 @@ index 33aa9cc..0fdd5de 100644
  
  class MihomoApiClient(
      private val baseUrl: String = "http://127.0.0.1:9090",
-@@ -90,13 +91,16 @@ class MihomoApiClient(
+@@ -90,13 +94,16 @@ class MihomoApiClient(
          ensureSuccess(response, "proxy group '$group'")
      }
  
@@ -17439,7 +17703,7 @@ index 33aa9cc..0fdd5de 100644
  
      /**
       * 测试 proxy-provider 内单节点延迟。provider 节点不在 /proxies 命名空间，
-@@ -105,15 +109,46 @@ class MihomoApiClient(
+@@ -105,15 +112,88 @@ class MihomoApiClient(
      suspend fun getProviderProxyDelay(
          provider: String,
          name: String,
@@ -17448,11 +17712,6 @@ index 33aa9cc..0fdd5de 100644
          timeout: Int = 5000,
      ): DelayResult =
 -        client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
--            url {
--                parameters.append("url", testUrl)
--                parameters.append("timeout", timeout.toString())
--            }
--        }.body()
 +        delayBodyOrThrow(
 +            client.get("$baseUrl/providers/proxies/${pathSeg(provider)}/${pathSeg(name)}/healthcheck") {
 +                url {
@@ -17462,6 +17721,43 @@ index 33aa9cc..0fdd5de 100644
 +            },
 +            name,
 +        )
++
++    /**
++     * 整组测速（`GET /group/{name}/delay`）：**一次请求**让内核在内部并发测完整个组，
++     * 返回 `{节点名: 延迟}`——与 mihomo_box 面板 `testGroupAll` 的第一优先路径一致。
++     *
++     * 内核语义（hub/route/groups.go + outboundgroup/groupbase.go）：
++     *  - 只有**测通**的成员会进返回的 map（`URLTest` 里 `err != nil` 的直接不进）；
++     *  - 一个成员都没通 → 504 `get delay: all proxies timeout`；
++     *  - 不是代理组 → 404；参数不合法 → 400；`timeout` 是整组的墙钟预算（不是单节点）；
++     *  - 对非 Selector 的可选组（URLTest / Fallback）会先 `ForceSet("")` 清掉固定选择，
++     *    所以**固定了节点的组不要调这个端点**（调用方自己拦，见 ProxyViewModel.testGroupDelay）。
++     *
++     * 拿不到可信结果（404 / 400 / 504 / 网络错）时返回空表，交给调用方的并发补测。
++     */
++    suspend fun getGroupDelay(
++        group: String,
++        testUrl: String = DEFAULT_DELAY_TEST_URL,
++        timeout: Int = GROUP_DELAY_TIMEOUT_MILLIS,
++    ): Map<String, Int> {
++        val response: HttpResponse = client.get("$baseUrl/group/${pathSeg(group)}/delay") {
+             url {
+                 parameters.append("url", testUrl)
+                 parameters.append("timeout", timeout.toString())
+             }
+-        }.body()
++        }
++        if (!response.status.isSuccess()) return emptyMap()
++        val raw: Map<String, JsonElement> = runCatching { response.body<Map<String, JsonElement>>() }
++            .getOrNull()
++            ?: return emptyMap()
++        val delays = LinkedHashMap<String, Int>(raw.size)
++        for ((name, value) in raw) {
++            val delay = (value as? JsonPrimitive)?.intOrNull ?: continue
++            if (delay > 0) delays[name] = delay
++        }
++        return delays
++    }
 +
 +    /**
 +     * 延迟测试端点的响应处理：测速失败时 mihomo 返回 503 + `{"message":…}`，而 [DelayResult]
@@ -17489,11 +17785,17 @@ index 33aa9cc..0fdd5de 100644
 +    companion object {
 +        /** 测速地址与 mihomo_box 参考实现对齐（https：免流/直连节点上 http 明文探测更易被重置）。 */
 +        const val DEFAULT_DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
++
++        /**
++         * 组测速的 `timeout` 参数：mihomo 把它当整组的墙钟预算用。与 mihomo_box 的
++         * `BATCH_TIMEOUT`（2s）对齐——组接口只是快路径，没测到的成员由并发补测接管。
++         */
++        const val GROUP_DELAY_TIMEOUT_MILLIS = 2000
 +    }
  
      suspend fun getRules(): RulesResponse =
          client.get("$baseUrl/rules").body()
-@@ -219,4 +254,8 @@ class MihomoApiClient(
+@@ -219,4 +299,8 @@ class MihomoApiClient(
      }
  }
  
@@ -17608,6 +17910,24 @@ index 76eb0a2..14ebcdc 100644
      @JvmStatic
      private external fun nativeValidateTransform(
          workDir: String,
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt b/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
+index c961fd8..9132be8 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
+@@ -56,6 +56,13 @@ class MihomoRepositoryImpl(
+     ): Result<DelayResult> =
+         runCatching { apiClient.getProviderProxyDelay(provider, name, testUrl, timeout) }
+ 
++    override suspend fun getGroupDelay(
++        group: String,
++        testUrl: String,
++        timeout: Int,
++    ): Result<Map<String, Int>> =
++        runCatching { apiClient.getGroupDelay(group, testUrl, timeout) }
++
+     override suspend fun getRules(): Result<RulesResponse> = runCatching { apiClient.getRules() }
+     override fun connectionsFlow(): Flow<ConnectionsResponse> = webSocket.connectionsFlow()
+     override suspend fun getConnections(): Result<ConnectionsResponse> = runCatching { apiClient.getConnections() }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt b/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
 index af3418a..d3332ed 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
@@ -17681,10 +18001,10 @@ index 9a996f2..e9179c2 100644
  fun ConfigurationOverride.resolveSecretOrNull(): String? =
      secret?.trim()?.takeIf { it.isNotEmpty() }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
-index 1eaec7e..4219bd9 100644
+index 1eaec7e..82cc70b 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
-@@ -36,14 +36,14 @@ interface MihomoRepository {
+@@ -36,17 +36,27 @@ interface MihomoRepository {
      suspend fun unfixProxy(group: String): Result<Unit>
      suspend fun getProxyDelay(
          name: String,
@@ -17701,6 +18021,19 @@ index 1eaec7e..4219bd9 100644
          timeout: Int = 5000,
      ): Result<DelayResult>
  
++    /**
++     * 整组测速：一次请求让内核内部并发测完整组，返回 `{节点名: 延迟}`（只含测通的成员）。
++     * 内核不支持 / 一个都没通时返回空表（不抛错），调用方走逐节点并发补测。
++     */
++    suspend fun getGroupDelay(
++        group: String,
++        testUrl: String = "https://www.gstatic.com/generate_204",
++        timeout: Int = 2000,
++    ): Result<Map<String, Int>>
++
+     suspend fun getRules(): Result<RulesResponse>
+     suspend fun getConnections(): Result<ConnectionsResponse>
+     suspend fun closeAllConnections(): Result<Unit>
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 index bfb7c72..255efc2 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
@@ -19799,6 +20132,169 @@ index 018c54d..4623ff2 100644
  
  private fun tunStackLabel(stack: String): String =
      TUN_STACK_OPTIONS.firstOrNull { it.first == stack.lowercase() }?.second ?: stack.ifEmpty { "--" }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
+index 119695c..61135e5 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
+@@ -7,13 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.navigationBarsPadding
+ import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.layout.width
+ import androidx.compose.foundation.lazy.LazyColumn
+ import androidx.compose.foundation.lazy.itemsIndexed
+-import androidx.compose.material.icons.Icons
+-import androidx.compose.material.icons.rounded.KeyboardArrowDown
+-import androidx.compose.material.icons.rounded.KeyboardArrowUp
++import androidx.compose.foundation.lazy.rememberLazyListState
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
+@@ -23,13 +19,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.graphics.vector.ImageVector
+ import androidx.compose.ui.input.nestedscroll.nestedScroll
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.state.ToggleableState
+ import androidx.compose.ui.unit.dp
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.custom.forms.DragHandle
++import top.yukonga.mishka.custom.forms.DragSortRow
++import top.yukonga.mishka.custom.forms.DragSortState
++import top.yukonga.mishka.custom.forms.rememberDragSortState
+ import top.yukonga.mishka.domain.model.OverrideProfile
+ import top.yukonga.mishka.domain.model.orderedOverrideIds
+ import top.yukonga.mishka.ui.component.AdaptiveTopAppBar
+@@ -87,6 +86,13 @@ fun SubscriptionOverridesScreen(
+     var order by rememberSaveable(subscriptionId) { mutableStateOf(initialOrder) }
+     var selected by rememberSaveable(subscriptionId) { mutableStateOf(initialSelected) }
+     val displayed = order.filter { it in profilesById } + initialOrder.filter { it !in order }
++    // 列表就是「覆写生效顺序」本身：按住行尾把手拖动即改顺序，不再用一对上/下箭头一点点挪。
++    // 拖动只改 order 的顺序，落点判定与校验仍走原有保存路径。
++    val listState = rememberLazyListState()
++    val dragSort = rememberDragSortState(displayed.size) { from, to ->
++        val moved = displayed.toMutableList().also { it.add(to, it.removeAt(from)) }
++        order = moved + order.filter { it !in moved }
++    }
+     val selectedIds = displayed.filter { it in selected }
+     val hasChanges = displayed != initialOrder || selectedIds != initialSelected
+ 
+@@ -129,8 +135,10 @@ fun SubscriptionOverridesScreen(
+     ) { innerPadding ->
+         WideContentBox { sidePadding ->
+             LazyColumn(
++                state = listState,
+                 modifier = Modifier
+                     .fillMaxSize()
++                    .then(dragSort.containerModifier { listState.dispatchRawDelta(it) })
+                     .horizontalCutoutPadding()
+                     .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
+                     .scrollEndHaptic()
+@@ -167,18 +175,17 @@ fun SubscriptionOverridesScreen(
+                 itemsIndexed(displayed, key = { _, id -> id }) { index, id ->
+                     val profile = profilesById[id] ?: return@itemsIndexed
+                     val checked = id in selected
+-                    OverrideSelectionItem(
+-                        profile = profile,
+-                        checked = checked,
+-                        canMoveUp = index > 0,
+-                        canMoveDown = index < displayed.lastIndex,
+-                        onToggle = {
+-                            selected = if (checked) selected - id else selected + id
+-                        },
+-                        onMoveUp = { order = displayed.swap(index, index - 1) },
+-                        onMoveDown = { order = displayed.swap(index, index + 1) },
+-                        modifier = Modifier.animateItem(),
+-                    )
++                    DragSortRow(state = dragSort, index = index) {
++                        OverrideSelectionItem(
++                            profile = profile,
++                            checked = checked,
++                            dragSort = dragSort,
++                            index = index,
++                            onToggle = {
++                                selected = if (checked) selected - id else selected + id
++                            },
++                        )
++                    }
+                 }
+ 
+                 item(key = "bottom_spacer") {
+@@ -193,15 +200,12 @@ fun SubscriptionOverridesScreen(
+ private fun OverrideSelectionItem(
+     profile: OverrideProfile,
+     checked: Boolean,
+-    canMoveUp: Boolean,
+-    canMoveDown: Boolean,
++    dragSort: DragSortState,
++    index: Int,
+     onToggle: () -> Unit,
+-    onMoveUp: () -> Unit,
+-    onMoveDown: () -> Unit,
+-    modifier: Modifier = Modifier,
+ ) {
+     Card(
+-        modifier = modifier
++        modifier = Modifier
+             .fillMaxWidth()
+             .padding(horizontal = 12.dp)
+             .padding(bottom = 12.dp),
+@@ -216,49 +220,9 @@ private fun OverrideSelectionItem(
+                     modifier = Modifier.padding(end = 12.dp),
+                 )
+             },
+-            endActions = {
+-                MoveButton(
+-                    icon = Icons.Rounded.KeyboardArrowUp,
+-                    contentDescription = stringResource(R.string.override_move_up),
+-                    enabled = canMoveUp,
+-                    onClick = onMoveUp,
+-                )
+-                Spacer(Modifier.width(8.dp))
+-                MoveButton(
+-                    icon = Icons.Rounded.KeyboardArrowDown,
+-                    contentDescription = stringResource(R.string.override_move_down),
+-                    enabled = canMoveDown,
+-                    onClick = onMoveDown,
+-                )
+-            },
++            // 排序方式与 mihomo_box 面板一致：行尾按住把手拖动，不再用一对上/下箭头
++            endActions = { DragHandle(dragSort, index) },
+             onClick = onToggle,
+         )
+     }
+ }
+-
+-@Composable
+-private fun MoveButton(
+-    icon: ImageVector,
+-    contentDescription: String,
+-    enabled: Boolean,
+-    onClick: () -> Unit,
+-) {
+-    IconButton(
+-        onClick = onClick,
+-        enabled = enabled,
+-        minHeight = 35.dp,
+-        minWidth = 35.dp,
+-        backgroundColor = MiuixTheme.colorScheme.secondaryContainer,
+-    ) {
+-        Icon(
+-            imageVector = icon,
+-            contentDescription = contentDescription,
+-            modifier = Modifier.size(20.dp),
+-            tint = if (enabled) MiuixTheme.colorScheme.onSurfaceVariantSummary
+-            else MiuixTheme.colorScheme.disabledOnSecondaryVariant,
+-        )
+-    }
+-}
+-
+-private fun List<String>.swap(from: Int, to: Int): List<String> =
+-    toMutableList().also { it[from] = this[to]; it[to] = this[from] }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
 index 93088aa..3eeddd1 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
@@ -20903,7 +21399,7 @@ index 4b576a6..e0a0abe 100644
          if (_uiState.value.refresh != null) return
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
-index f684c37..1090a26 100644
+index f684c37..4896268 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 @@ -4,6 +4,11 @@ import android.util.Log
@@ -20918,7 +21414,7 @@ index f684c37..1090a26 100644
  import kotlinx.collections.immutable.ImmutableList
  import kotlinx.collections.immutable.ImmutableMap
  import kotlinx.collections.immutable.ImmutableSet
-@@ -14,15 +19,20 @@ import kotlinx.collections.immutable.toPersistentList
+@@ -14,22 +19,52 @@ import kotlinx.collections.immutable.toPersistentList
  import kotlinx.collections.immutable.toPersistentMap
  import kotlinx.collections.immutable.toPersistentSet
  import kotlinx.coroutines.Job
@@ -20926,6 +21422,9 @@ index f684c37..1090a26 100644
  import kotlinx.coroutines.async
  import kotlinx.coroutines.awaitAll
  import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.withTimeoutOrNull
++import kotlinx.coroutines.yield
 +import kotlinx.coroutines.flow.MutableSharedFlow
  import kotlinx.coroutines.flow.MutableStateFlow
 +import kotlinx.coroutines.flow.SharedFlow
@@ -20938,8 +21437,9 @@ index f684c37..1090a26 100644
 +import top.yukonga.mishka.data.api.DelayTestFailedException
  import top.yukonga.mishka.data.database.SelectionDao
  import top.yukonga.mishka.data.database.SelectionEntity
++import top.yukonga.mishka.domain.model.DelayResult
  import top.yukonga.mishka.domain.repository.MihomoRepository
-@@ -30,6 +40,27 @@ import top.yukonga.mishka.platform.PlatformStorage
+ import top.yukonga.mishka.platform.PlatformStorage
  import top.yukonga.mishka.platform.StorageKeys
  import top.yukonga.mishka.util.describe
  
@@ -20967,7 +21467,7 @@ index f684c37..1090a26 100644
  @Immutable
  data class ProxyGroupUi(
      val name: String = "",
-@@ -64,6 +95,32 @@ data class ProxyUiState(
+@@ -64,6 +99,32 @@ data class ProxyUiState(
      val mode: String = "",
  )
  
@@ -21000,7 +21500,7 @@ index f684c37..1090a26 100644
  class ProxyViewModel(
      private val selectionDao: SelectionDao? = null,
      private val getActiveUuid: () -> String? = { null },
-@@ -73,6 +130,10 @@ class ProxyViewModel(
+@@ -73,6 +134,10 @@ class ProxyViewModel(
      private val _uiState = MutableStateFlow(ProxyUiState())
      val uiState: StateFlow<ProxyUiState> = _uiState.asStateFlow()
  
@@ -21011,7 +21511,7 @@ index f684c37..1090a26 100644
      // 节点排序状态：sortKeyIndex * 2 + (if reverse 1 else 0)
      // 0/1=默认 升/降，2/3=名称 升/降，4/5=延迟 升/降
      private val _sortOption = MutableStateFlow(loadInitialSortOption())
-@@ -86,6 +147,14 @@ class ProxyViewModel(
+@@ -86,6 +151,14 @@ class ProxyViewModel(
      private val _showGlobalGroup = MutableStateFlow(loadInitialShowGlobalGroup())
      val showGlobalGroup: StateFlow<Boolean> = _showGlobalGroup.asStateFlow()
  
@@ -21026,7 +21526,21 @@ index f684c37..1090a26 100644
      private var repository: MihomoRepository? = null
  
      // mihomo 重启切 client 时取消旧的 loadProxies 协程，防止其 HTTP 响应已读完但 UI 写回
-@@ -123,6 +192,30 @@ class ProxyViewModel(
+@@ -99,6 +172,13 @@ class ProxyViewModel(
+     // provider 节点的延迟测试必须路由到 /providers/proxies/{provider}/{node}/healthcheck
+     private var nodeProviderMap: Map<String, String> = emptyMap()
+ 
++    /**
++     * 批量测速的防重锁。UI 的 `testingGroups` 要等 [PENDING_HINT_MILLIS] 才亮，
++     * 锁必须独立于它——否则 400ms 内连点两下会跑两批（对应面板的 `batchTestingGroups`）。
++     * 只在主线程（viewModelScope 默认调度器）读写。
++     */
++    private val batchTesting = mutableSetOf<String>()
++
+     fun updateSortOption(option: Int) {
+         _sortOption.value = option
+         storage?.putString(StorageKeys.PROXY_NODE_SORT_OPTION, option.toString())
+@@ -123,6 +203,30 @@ class ProxyViewModel(
      private fun loadInitialShowGlobalGroup(): Boolean =
          storage?.getString(StorageKeys.PROXY_SHOW_GLOBAL_GROUP, "true") != "false"
  
@@ -21057,7 +21571,7 @@ index f684c37..1090a26 100644
      fun setRepository(repo: MihomoRepository?) {
          if (repository === repo) return
          loadJob?.cancel()
-@@ -248,6 +341,7 @@ class ProxyViewModel(
+@@ -248,6 +352,7 @@ class ProxyViewModel(
          val target = groupOf(group) ?: return
          // 不可选组 PUT 必定 400，提前挡下省一个 RTT
          if (!target.isSelectable) return
@@ -21065,7 +21579,7 @@ index f684c37..1090a26 100644
          viewModelScope.launch {
              repo.selectProxy(group, proxy).onSuccess {
                  if (repository !== repo) return@onSuccess
-@@ -264,6 +358,11 @@ class ProxyViewModel(
+@@ -264,6 +369,11 @@ class ProxyViewModel(
                          .toPersistentList()
                  )
                  saveSelection(group, proxy)
@@ -21077,46 +21591,176 @@ index f684c37..1090a26 100644
              }
          }
      }
-@@ -302,7 +401,7 @@ class ProxyViewModel(
+@@ -286,48 +396,101 @@ class ProxyViewModel(
+     }
+ 
+     /**
+-     * 逐节点而非 `/group/{name}/delay`：后者会先对非 Selector 组 `ForceSet("")`
+-     * 解除固定（hub/route/groups.go）。两者都写全局 history.delay，结果等价
++     * 整组测速（对齐 mihomo_box 面板 `testGroupAll` 的并发模型）：
++     *
++     *  ① 快路径：一次 `GET /group/{name}/delay`（`timeout=2s`，总预算 [GROUP_DELAY_BUDGET_MILLIS]）——
++     *     并发完全发生在**内核内部**，前端只有一个请求在飞，先回来的成员直接落账；
++     *  ② 补测：组接口没回话的成员（嵌套组、没测通的、内核拒绝组接口时）走 [BATCH_CONCURRENCY]
++     *     路并发池，每路一次独立请求、单节点超时 [BATCH_TIMEOUT_MILLIS]，测完一路让出一次调度；
++     *  ③ provider 节点仍走 provider 专属 healthcheck（`/proxies/{name}/delay` 对其返回 404）；
++     *  ④ 收尾只汇总失败数：成功时延迟数字本身就是反馈，逐节点弹提示会刷屏。
++     *
++     * 固定了节点的组（URLTest / Fallback 的 `fixed`）跳过 ①：内核的 getGroupDelay 会先
++     * `ForceSet("")` 把用户固定好的节点拔掉（hub/route/groups.go），点一次组测速就悄悄改了
++     * 选中；这类组直接走 ②，结果同样写进全局 history.delay。
+      */
+     fun testGroupDelay(group: String) {
+         val repo = repository ?: return
+-        if (group in _uiState.value.testingGroups) return
+-        val nodes = groupOf(group)?.all ?: return
+-        if (nodes.isEmpty()) return
+-        _uiState.value = _uiState.value.copy(
+-            testingGroups = (_uiState.value.testingGroups + group).toPersistentSet(),
+-        )
++        if (!batchTesting.add(group)) return
++        val target = groupOf(group)
++        val nodes = target?.all
++        if (target == null || nodes.isNullOrEmpty()) {
++            batchTesting.remove(group)
++            return
++        }
++        // 二次确认防重：UI 的 testingGroups 是延迟亮的，不能当锁用
++        if (group in _uiState.value.testingGroups) {
++            batchTesting.remove(group)
++            return
++        }
+ 
+         viewModelScope.launch {
++            // 400ms 内回来的结果不亮「测速中」：内核组接口经常不到 1s 就返回，闪一下反而像卡住
++            val hint = launch {
++                delay(PENDING_HINT_MILLIS)
++                setGroupTesting(group, true)
++            }
              try {
-                 // 限并发：上百节点齐发会互抢带宽，测出的延迟失真
-                 val semaphore = Semaphore(GROUP_DELAY_CONCURRENCY)
+-                // 限并发：上百节点齐发会互抢带宽，测出的延迟失真
+-                val semaphore = Semaphore(GROUP_DELAY_CONCURRENCY)
 -                coroutineScope {
-+                val results = coroutineScope {
-                     nodes.map { nodeName ->
-                         async {
-                             semaphore.withPermit {
-@@ -318,6 +417,11 @@ class ProxyViewModel(
-                     }.awaitAll()
+-                    nodes.map { nodeName ->
+-                        async {
+-                            semaphore.withPermit {
+-                                // 单节点失败是正常结果，不能让它终止整组
+-                                val provider = nodeProviderMap[nodeName]
+-                                if (provider != null) {
+-                                    repo.getProviderProxyDelay(provider, nodeName)
+-                                } else {
+-                                    repo.getProxyDelay(nodeName)
++                val alive = HashSet<String>(nodes.size)
++
++                // ① 组测速接口：一次请求，内核内部并发；只回测通的成员
++                if (!target.isFixed) {
++                    val groupDelays = withTimeoutOrNull(GROUP_DELAY_BUDGET_MILLIS) {
++                        repo.getGroupDelay(group, timeout = BATCH_TIMEOUT_MILLIS).getOrNull()
++                    }.orEmpty()
++                    for ((name, delay) in groupDelays) {
++                        if (delay > 0 && name in nodes) alive += name
++                    }
++                }
++
++                // ② 并发补测：8 路，一路一个节点；单节点失败是正常结果，不终止整批
++                var failed = 0
++                val pending = nodes.filter { it !in alive }
++                if (pending.isNotEmpty()) {
++                    val semaphore = Semaphore(BATCH_CONCURRENCY)
++                    val results = coroutineScope {
++                        pending.map { nodeName ->
++                            async {
++                                semaphore.withPermit {
++                                    val provider = nodeProviderMap[nodeName]
++                                    val result = if (provider != null) {
++                                        repo.getProviderProxyDelay(provider, nodeName, timeout = BATCH_TIMEOUT_MILLIS)
++                                    } else {
++                                        repo.getProxyDelay(nodeName, timeout = BATCH_TIMEOUT_MILLIS)
++                                    }
++                                    // 测完一路让出一次调度：不把调度窗口全占满（对应面板的 nextPaint）
++                                    yield()
++                                    result
+                                 }
+                             }
+-                        }
+-                    }.awaitAll()
++                        }.awaitAll()
++                    }
++                    failed = results.count { it.isFailure }
                  }
++
                  if (repository !== repo) return@launch
-+                // 汇总失败数：整组测速逐节点弹提示会刷屏，只在有失败时给一条汇总
-+                val failed = results.count { it.isFailure }
 +                if (failed > 0) {
-+                    _delayTestEvents.tryEmit(DelayTestEvent.GroupSummary(group, results.size, failed))
++                    _delayTestEvents.tryEmit(DelayTestEvent.GroupSummary(group, nodes.size, failed))
 +                }
                  loadProxies()
              } finally {
                  // 正常结束、repo 切换、被取消都要摘标记，漏掉哪条路径该组就永久转圈
-@@ -340,11 +444,13 @@ class ProxyViewModel(
+-                _uiState.value = _uiState.value.copy(
+-                    testingGroups = (_uiState.value.testingGroups - group).toPersistentSet(),
+-                )
++                hint.cancel()
++                batchTesting.remove(group)
++                setGroupTesting(group, false)
+             }
+         }
+     }
+ 
++    /** 组测速状态：只有 [PENDING_HINT_MILLIS] 之后还在跑的批次才会被标成「测速中」。 */
++    private fun setGroupTesting(group: String, testing: Boolean) {
++        val current = _uiState.value.testingGroups
++        val next = if (testing) current + group else current - group
++        if (next !== current) {
++            _uiState.value = _uiState.value.copy(testingGroups = next.toPersistentSet())
++        }
++    }
++
+     fun testNodeDelay(nodeName: String) {
+         val repo = repository ?: return
+         if (nodeName in _uiState.value.testingNodes) return
+@@ -340,11 +503,27 @@ class ProxyViewModel(
                  // 延迟结果写入节点全局 history.delay，loadProxies 再从 history 读回并分发到
                  // 所有引用该节点的组，保证跨组延迟一致；provider 节点走 provider healthcheck 端点
                  val provider = nodeProviderMap[nodeName]
 -                if (provider != null) {
-+                val result = if (provider != null) {
++                var result = if (provider != null) {
                      repo.getProviderProxyDelay(provider, nodeName)
                  } else {
                      repo.getProxyDelay(nodeName)
                  }
++                // 内核「没作答」（路径/名字不对、请求超时）时用一次组测速兜底：provider 节点走
++                // /proxies/{name}/delay 会被判 404，而组接口能正常返回它——对应面板的
++                // fetchDelayViaGroup（「能批量测、单个却永远失败」缺的就是这层兜底）。
++                // 内核明确判「测过但不通」（503/504）时不兜底：那是真结果，再测一遍只是白等。
++                if (result.isFailure && !isDeadVerdict(result)) {
++                    val group = groupOfNodeWithoutPin(nodeName)
++                    if (group != null) {
++                        val viaGroup = withTimeoutOrNull(GROUP_DELAY_BUDGET_MILLIS) {
++                            repo.getGroupDelay(group, timeout = BATCH_TIMEOUT_MILLIS).getOrNull()
++                        }
++                        val delay = viaGroup?.get(nodeName)
++                        if (delay != null && delay > 0) result = Result.success(DelayResult(delay))
++                    }
++                }
 +                // 失败必须有反馈：此前 Result 直接被丢，测速失败时 UI 只是转圈停下、毫无提示
 +                result.onFailure { e -> notifyDelayFailure(nodeName, e) }
                  if (repository !== repo) return@launch
                  loadProxies()
              } finally {
-@@ -355,6 +461,27 @@ class ProxyViewModel(
+@@ -355,6 +534,37 @@ class ProxyViewModel(
          }
      }
  
++    /** 内核明确判「测过但不通」的失败（503 / 504）：这种不必再走组接口兜底。 */
++    private fun isDeadVerdict(result: Result<*>): Boolean {
++        val e = result.exceptionOrNull() as? DelayTestFailedException ?: return false
++        return e.status == 503 || e.status == 504
++    }
++
++    /** 找一个包含该节点、且**没固定节点**的组：组接口会对固定组 `ForceSet("")`，不能拿它兜底。 */
++    private fun groupOfNodeWithoutPin(nodeName: String): String? =
++        _uiState.value.groups.firstOrNull { !it.isFixed && nodeName in it.all }?.name
++
 +    /** 把测速异常分类后发给 UI；主动取消（离开页面等）不提示。 */
 +    private fun notifyDelayFailure(nodeName: String, e: Throwable) {
 +        if (e is CancellationException && e !is TimeoutCancellationException) return
@@ -21141,6 +21785,31 @@ index f684c37..1090a26 100644
      private suspend fun saveSelection(group: String, proxy: String) {
          val uuid = getActiveUuid() ?: return
          val dao = selectionDao ?: return
+@@ -403,7 +613,23 @@ class ProxyViewModel(
+     }
+ 
+     companion object {
+-        private const val GROUP_DELAY_CONCURRENCY = 5
++        /**
++         * 批量补测的并发路数：与 mihomo_box 面板的 `BATCH_CONCURRENCY` 对齐。
++         * 全量并发（几十路一起发）会把内核压满、滑动展开也跟着卡；太低又退化成挨个测速。
++         */
++        private const val BATCH_CONCURRENCY = 8
++
++        /** 批量测速里单节点的超时（对应面板的 `BATCH_TIMEOUT`）：慢节点不能长期占住内核与代理桥。 */
++        private const val BATCH_TIMEOUT_MILLIS = 2000
++
++        /** 组测速接口的总预算（对应面板的 `GROUP_DELAY_BUDGET`）：内核卡住时不能一直挂着。 */
++        private const val GROUP_DELAY_BUDGET_MILLIS = 7000L
++
++        /**
++         * 「测速中」提示的延迟（对应面板的 `PENDING_HINT_MS`）：组接口常常不到 1s 就返回，
++         * 立刻亮转圈会闪一下；慢到这个阈值才给反馈。
++         */
++        private const val PENDING_HINT_MILLIS = 400L
+ 
+         const val GLOBAL_GROUP = "GLOBAL"
+         const val MODE_GLOBAL = "global"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 index ef9b641..91a7411 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
@@ -21674,7 +22343,7 @@ index faef989..2c11db7 100644
  //
  //export mishkaValidateTransform
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..9784760 100644
+index 78fcd87..8e3fc15 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
 @@ -105,6 +105,9 @@
@@ -21765,7 +22434,16 @@ index 78fcd87..9784760 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">Файловый менеджер</string>
-@@ -615,4 +633,6 @@
+@@ -596,8 +614,6 @@
+     <string name="override_url_placeholder">Введите URL</string>
+     <string name="override_local_file">Локальный файл</string>
+     <string name="override_format">Формат</string>
+-    <string name="override_move_up">Выше</string>
+-    <string name="override_move_down">Ниже</string>
+     <string name="override_format_yaml">YAML</string>
+     <string name="override_format_javascript">JavaScript</string>
+     <string name="override_delete_title">Удалить переопределение</string>
+@@ -615,4 +631,6 @@
          <item quantity="other">Выбрано %1$d переопределения</item>
      </plurals>
      <string name="subscription_overrides">Переопределения</string>
@@ -21773,7 +22451,7 @@ index 78fcd87..9784760 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..204eba2 100644
+index cba1bbb..138732b 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -21864,7 +22542,16 @@ index cba1bbb..204eba2 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">文件管理</string>
-@@ -610,4 +628,6 @@
+@@ -594,8 +612,6 @@
+     <string name="override_url_placeholder">输入覆写地址</string>
+     <string name="override_local_file">本地文件</string>
+     <string name="override_format">文件格式</string>
+-    <string name="override_move_up">上移</string>
+-    <string name="override_move_down">下移</string>
+     <string name="override_format_yaml">YAML</string>
+     <string name="override_format_javascript">JavaScript</string>
+     <string name="override_delete_title">删除覆写</string>
+@@ -610,4 +626,6 @@
          <item quantity="other">已选择 %1$d 项覆写</item>
      </plurals>
      <string name="subscription_overrides">覆写</string>
@@ -21872,7 +22559,7 @@ index cba1bbb..204eba2 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..1234bed 100644
+index f6895e0..8f33921 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
 @@ -103,6 +103,9 @@
@@ -21963,7 +22650,16 @@ index f6895e0..1234bed 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">檔案管理</string>
-@@ -610,4 +628,6 @@
+@@ -594,8 +612,6 @@
+     <string name="override_url_placeholder">輸入覆寫網址</string>
+     <string name="override_local_file">本機檔案</string>
+     <string name="override_format">檔案格式</string>
+-    <string name="override_move_up">上移</string>
+-    <string name="override_move_down">下移</string>
+     <string name="override_format_yaml">YAML</string>
+     <string name="override_format_javascript">JavaScript</string>
+     <string name="override_delete_title">刪除覆寫</string>
+@@ -610,4 +626,6 @@
          <item quantity="other">已選擇 %1$d 項覆寫</item>
      </plurals>
      <string name="subscription_overrides">覆寫</string>
@@ -21971,7 +22667,7 @@ index f6895e0..1234bed 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..aea7465 100644
+index d1acc59..1cb982c 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
@@ -22062,7 +22758,16 @@ index d1acc59..aea7465 100644
  
      <!-- File Manager -->
      <string name="file_manager_title">File Manager</string>
-@@ -613,4 +631,6 @@
+@@ -596,8 +614,6 @@
+     <string name="override_url_placeholder">Enter an override URL</string>
+     <string name="override_local_file">Local file</string>
+     <string name="override_format">Format</string>
+-    <string name="override_move_up">Move up</string>
+-    <string name="override_move_down">Move down</string>
+     <string name="override_format_yaml">YAML</string>
+     <string name="override_format_javascript">JavaScript</string>
+     <string name="override_delete_title">Delete override</string>
+@@ -613,4 +629,6 @@
          <item quantity="other">%1$d overrides selected</item>
      </plurals>
      <string name="subscription_overrides">Overrides</string>

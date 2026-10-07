@@ -1,4 +1,73 @@
-# 本次改动（2026-10-06）
+# 本次改动（2026-10-07）——与 mihomo_box 模块对齐的三处交互
+
+基线未变：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`。参考实现是
+mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/core.js` /
+`js/page-proxies.js` / `css/style.css`）；三处交互全部落在原生 Compose，不涉及 web 面板
+（`custom/panel/` 保持既有移除状态）。
+
+补丁重新导出：文件数 64 → **67**（`patches/app/BASELINE.txt` 的 `patch_sha256` 同步更新）。
+新增 / 并入补丁的文件：
+
+- 新增 `custom/forms/DragSort.kt`（拖动排序 + 小图标按钮工具）；
+- `data/repository/MihomoRepositoryImpl.kt`（组延迟接口实现，此前未进补丁）；
+- `ui/screen/overrides/SubscriptionOverridesScreen.kt`（订阅覆盖列表换拖动排序，此前未进补丁）。
+
+## 1. 排序：所有排序入口换成「按住行首把手拖动」
+
+对齐 `js/core.js` 的 `enableDragSort` 语义（`.drag-handle` 按下即拖、被拖行跟手、
+其余行让位、越过中线定落点、松手一次性写回）：
+
+- 新增 `custom/forms/DragSort.kt`：`rememberDragSortState(count, onMove)` / `DragSortRow` /
+  `DragHandle`。把手是两列三点图形；被拖行跟手、其它行让出一行的空位；滚动容器（LazyColumn）
+  带边缘自动翻滚（96dp 触发区），长列表也能拖到首尾。
+- 接入 7 处列表：序列列表（代理组 / 代理 / 隧道 / 规则，`FlowFormPages.kt` 的 `SeqListPage`）、
+  映射列表（`MapListPage`，映射无顺序、不给把手）、监听者列表（`ConfigFormPanel.kt`）、
+  列表弹层（`FormDialogs.kt`）、DNS / 结构化编辑器（`P3FormEditors.kt`）、订阅覆盖列表
+  （`SubscriptionOverridesScreen.kt`，删除原 `MoveButton` 与 `List<String>.swap`）。
+- 「⋯」菜单式的上移 / 下移（`FormDialogs.kt` 的 `ItemMenuDialog`）整体删除；「在上方插入」
+  随之下线——新增项直接拖到位，与面板「有把手就不给第二套排序入口」的取舍一致。
+
+## 2. 编辑 / 删除：文字按钮换成图标按钮
+
+对齐面板的 `.mini-btn`（小方块、淡底、图标居中）：
+
+- 新增 `MiniIconButton`（`DragSort.kt`）：7 个文件共 47 处调用。行尾「编辑 / 删」文字按钮
+  全部替换为 ✎ / × 图标按钮——序列 / 映射列表行、详情页行、锚点面板、DNS 列表、列表弹层、
+  Provider 文件操作等。
+- `custom/anchor/AnchorPanel.kt`：定义行 / 引用行的 ✎、× 图标化；卡片底部「定位 / 改名 /
+  删除」改为三个等宽图标按钮（`MiuixIcons.Location / Rename / Delete`），删除按钮仍在
+  有引用时禁用。
+- 删掉不再被引用的 `override_move_up` / `override_move_down` 字符串（4 个语言共 8 条）。
+
+## 3. 代理页批量测速：改为并发（对齐面板 `testGroupAll`）
+
+对齐 `js/page-proxies.js`：先打组接口（内核内部并发），残余成员再用 8 路补齐；只有
+「有回话」的成员写结果，没回话的不伪造：
+
+- 新增组级接口 `MihomoApiClient.getGroupDelay(group, url, timeout)` →
+  `GET /group/{name}/delay`（默认 `timeout=2000`，对应面板 `BATCH_TIMEOUT`）；
+  `MihomoRepository` / `MihomoRepositoryImpl` 同步暴露。
+- `ProxyViewModel.testGroupDelay()` 重写：
+  ① 快路径一次组接口（整体预算 7s，对应 `GROUP_DELAY_BUDGET`）——固定选择的组
+  （`isFixed`）跳过组接口，内核会清掉钉住的选择；② 组接口没回话的成员按
+  `BATCH_CONCURRENCY=8` 逐节点补测（`BATCH_TIMEOUT_MILLIS=2000`）；③ 只在批次超过
+  `PENDING_HINT_MILLIS=400ms` 才点亮「测速中」；④ 504 / 503「An error occurred in the
+  delay test」判死，其余失败不判死；⑤ 单节点测速失败时退回组接口取值；⑥ `batchTesting`
+  防重入锁与 UI 的 `testingGroups` 解耦（UI 状态要等 400ms 才亮）。
+- 与面板的差异（有意）：不生成 `-1` 占位结果；延迟读回仍走 `loadProxies()` 与全局历史。
+
+## 验证
+
+- `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
+  应用结果与 `BASELINE.txt` 的 67 个 blob 逐文件一致；verify 断言 32 → 42 条
+  （新增 10 条覆盖三处交互 + 防回归）。
+- 沙箱内存 2GB，`:app:compileDebugKotlin` 跑不动，**本轮没有跑通 Gradle 编译验证**；
+  落地后请先跑一次编译（改动面在 Compose 表单层与 ViewModel，重点看漏改的引用）。
+- 三处交互与 2026-10-06 已交付的改动（file provider 上传 / 编辑、内置出站豁免、
+  `TetherInterfaceEditDialog`、候选池过滤等）已逐文件核对合并，13 个改动文件全部落在
+  10-06 基线上，无遗漏、无冲突残留。
+
+# 上一轮改动（2026-10-06）
 
 基线：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`（未变）
 补丁：`mishka-custom/patches/app/0001-anchor-panel.patch`（已重新导出）
