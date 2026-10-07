@@ -58,6 +58,13 @@
 > `awaitPointerEventScope` / `awaitPointerEvent` 是 `PointerInputScope` / `AwaitPointerEventScope` 的
 > **接口成员**（只能在 `pointerInput` 块里直接调，根本不是顶层函数、不能 import）。改对 import，
 > verify 用 4 条断言把正确 / 错误 import 形态都钉住（§13）。
+>
+> **追加（2026-10-07 实机反馈六轮）**：§13 后构建通过，但实机「只要快速往上拖动就会被打断排序，
+> 缓慢拖动没事」。根因不在手势仲裁（那已解决），而在**手势载体是会被 lazy 列表回收的把手节点**——
+> 快速拖动时换位 / 自动翻滚让把手解绑，挂在它上面的手势协程被取消、`finally` 收尾（= 打断排序）；
+> 慢速不触发回收故没事。修法：把整条拖动手势从把手挪到**容器**修饰符（容器节点拖动全程不被回收，
+> 协程活得到底），容器在 DOWN 命中把手后于 `PointerEventPass.Initial`（早于 scrollable 的 Main 相位）
+> 消费整条流——抢流 / 拦截也挡得更死，且不依赖 `userScrollEnabled` 的重组时序（§14）。
 
 基线未变：`upstream_commit=5e6743592b9c465eb015db7b05c588c50cd2b874`。参考实现是
 mihomo_box 模块（release `mihomo-box-20261001-1620` 的 `webroot/ui/`：`js/core.js` /
@@ -360,6 +367,44 @@ import 断言，与 §7/§8 给 `positionInWindow` / `LayoutCoordinates` 钉的�
 防回归：verify 换 / 增 4 条 —— 两条 `foundation.gestures` import 在位、`pointerInput` import 在位、
 `import androidx.compose.ui.input.pointer.await` 禁现（错误形态整类钉死）。
 
+## 14. 重写（拖动排序）：手势从「会被回收的把手节点」挪到「容器节点」
+
+症状（§13 落地后实机，构建已通过）：「只要快速往上拖动就会被打断排序，缓慢拖动没事」——快速上拖时
+虚线框消失、排序提前停住；慢速拖完全正常。
+
+根因排查（先排除两个想当然）：
+- **不是自动翻滚被 `userScrollEnabled` 关掉。** 对照 androidx 源码：`LazyListState.dispatchRawDelta`
+  → `DefaultScrollableState.dispatchRawDelta` 直接 `onDelta(delta)`，**没有 `isScrollEnabled` /
+  `enabled` 门**（`compose/foundation/.../gestures/ScrollableState.kt`）。边缘自动翻滚这类程序化滚动
+  不受 `userScrollEnabled` 影响——宿主那句「不吃 userScrollEnabled」的注释是对的。
+- **不是 `pointerInput(index)` 被换位重启。** 宿主是 `items(dragSort.order, key = { it })`，`index`
+  恒为稳定的原始下标，换位不改 key，协程不会因此重启。
+
+真正的根因：**手势协程挂在把手节点上，而把手是会被 lazy 列表回收的行内节点。** 快速拖动时，换位 +
+边缘自动翻滚让被拖行短时离开视口 / 缓存窗，把手节点解绑 → 挂在它上面的 `pointerInput` 协程被取消 →
+`finally { endDrag() }` 收尾（虚线框消失、提前提交 =「被打断」）。慢速拖动不触发回收，所以没事。这是
+把手势挂在把手 / 行内节点的四代（§8–§11）共有的结构性问题，与外层手势仲裁无关（仲裁 v6 已解决）。
+
+修法：**把整条拖动手势挪到容器修饰符（`containerModifier`，落在 LazyColumn / Column 本体上）。**
+- 容器节点在整个拖动里不会被回收（它就是滚动视口本身），协程活得到底——「被打断」不再发生；
+- 把手退化为**只量自己的窗口矩形**（`handleModifier` 只留 `onGloballyPositioned`）；容器在 DOWN 用这些
+  矩形做命中判定（`hitHandle`，靠 `isAttached` 过滤失效把手）：命中把手才进入拖动，没命中就一个事件都
+  不消费、列表照常滚动 / 点击；
+- **抢流口径更死**：容器修饰符在宿主链里排在 `scrollable` / `verticalScroll` **之前**；同一节点上多个
+  `pointerInput` 在 **Initial** pass 按链顺序（靠前先跑）、Main pass 按逆序，而 scrollable 的 slop 检测
+  在 **Main** 上跑。容器在 **Initial**（比 Main 更早的全局相位）消费整条流，**永远先于** scrollable 消费
+  ——不依赖同节点内的修饰符次序、也不依赖 `userScrollEnabled` 的重组时序（不再有 DOWN 后一帧仍为
+  true 的「首帧空窗」）；
+- 指尖 Y 仍只用窗口坐标：事件的容器局部坐标 + 容器窗口原点当场换算（`dragTo(change.position.y +
+  containerTop)`），与行身段 `tops` / `heights` 同系，绝不累加局部位移；
+- 结束条件仍只有主指针 `pressed=false`（真抬指 / 框架 CANCEL），`finally` 兜底 `endDrag`；
+- 宿主的 `userScrollEnabled` / `verticalScroll(enabled=…)` 保险**保留**（冗余但无害；自动翻滚走
+  `dispatchRawDelta` 不受它影响），宿主代码一行未改。
+
+防回归：verify 换 / 增 5 条 —— `awaitFirstDown(…, pass = PointerEventPass.Initial)`、`.pointerInput(Unit) {`
+（容器级手势）、`hitHandle`、`dragTo(change.position.y + containerTop)` 与 `fun dragTo(windowY: Float)`、
+`PointerEventPass` import 在位；删去 `fingerWindowY` / `positionInWindow` 两条断言（随重写移除）。
+
 ## 验证
 
 - `mishka-custom/tools/verify_app_patch.sh --repo <仓库>` → **PASS**：补丁双向可逆，
@@ -380,6 +425,11 @@ import 断言，与 §7/§8 给 `positionInWindow` / `LayoutCoordinates` 钉的�
   其余（含 v6 的 9 条）全绿。
 - §13（手势助手 import 纠正）后复跑 → **158 条 ok / 0 FAIL**：两条 `foundation.gestures` import
   断言、`ui.input.pointer.await*` 禁现断言在位，补丁双向可逆、67 blob 逐文件一致。
+- §14（手势挪到容器节点）后复跑 → **160 条 ok / 0 FAIL**：本轮换 / 增 5 条（容器级
+  `.pointerInput(Unit) {`、`awaitFirstDown(…, pass = PointerEventPass.Initial)`、`hitHandle`、
+  `dragTo(change.position.y + containerTop)` / `fun dragTo(windowY: Float)`、`PointerEventPass`
+  import），删 2 条（`fingerWindowY` / `positionInWindow`，随重写移除）；补丁双向可逆、67 blob
+  （含 DragSort.kt 新 hash `8d0139ca…`）逐文件一致。
 - 独立副本校验：基线 commit 上 `git apply` 补丁后与交付源码树 `diff -rq` 逐文件一致。
 - 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
 

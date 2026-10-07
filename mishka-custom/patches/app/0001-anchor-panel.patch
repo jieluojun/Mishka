@@ -6471,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..9d78436
+index 0000000..8d0139c
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,518 @@
+@@ -0,0 +1,531 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6510,11 +6510,11 @@ index 0000000..9d78436
 +import androidx.compose.ui.graphics.PathEffect
 +import androidx.compose.ui.graphics.drawscope.Stroke
 +import androidx.compose.ui.graphics.vector.ImageVector
++import androidx.compose.ui.input.pointer.PointerEventPass
 +import androidx.compose.ui.input.pointer.pointerInput
 +import androidx.compose.ui.layout.LayoutCoordinates
 +import androidx.compose.ui.layout.boundsInWindow
 +import androidx.compose.ui.layout.onGloballyPositioned
-+import androidx.compose.ui.layout.positionInWindow
 +import androidx.compose.ui.platform.LocalDensity
 +import androidx.compose.ui.semantics.contentDescription
 +import androidx.compose.ui.semantics.semantics
@@ -6537,22 +6537,23 @@ index 0000000..9d78436
 + *  - 行身段（窗口坐标）只用于命中判定，来自真实布局测量：每帧重算，不缓存槽位差、不模拟让位
 + *    位移——上一版按「实测槽位差」让位，行长不等（多行 AND 规则等）时被拖行会压到邻行身上，
 + *    且滚动中槽位表变旧，正是错位的根源；
-+ *  - **指尖位置只认窗口坐标**：每次事件按「把手节点实时的窗口顶 + 事件在手把内的局部 Y」当场还原成
-+ *    指尖的窗口 Y（[fingerWindowY]）——与参考实现全程用 `e.clientY` 同口径。Compose 的 `position`
-+ *    是节点局部坐标，被拖行「即换即到位」是整行高瞬跳、自动翻滚又在指下滚内容，局部坐标会「手指
-+ *    没动却变了」；把这种假位移累加，每换一次位手指 Y 就偏一整行：命中判定落回被拖行身后那一行、
-+ *    刚换上去又被换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进边缘带触发误翻滚（列表自己上滑）。
-+ *    参考实现 pointerdown 时特意从活动指针重新播种 pendX/pendY，注释原话：否则边缘翻滚用的是
-+ *    残留 / 0 的 Y，「点一下把手页面就滚」——同一类错的两种表现，这里一并掐掉；
-+ *  - **拖动逻辑不与任何外层手势仲裁**（v6，三轮实机翻车后的重写）：`detectDragGestures` 与
-+ *    `pointerInteropFilter` 两版都把「把手拖动」交给 Compose 的手势仲裁去和外层 scrollable 分流，
-+ *    实机上分别表现为「拖动被打断 + 整体上滑」与「把手按下退化成纯滚动」。现在改成双保险、谁都不依赖：
-+ *    ① 把手节点自己的 `pointerInput` 在 DOWN 当即 `startDrag` 并**逐事件消费整条流**（不做 slop 等待、
-+ *    不用 detectDragGestures），结束条件只有该指针 `pressed=false`（真抬指 / 框架 CANCEL 同形）或
-+ *    把手节点解绑（`finally` 兜底 `endDrag`，防 `dragging` 残留）；
-+ *    ② 宿主把容器的用户滚动绑到 `dragging < 0`（LazyColumn `userScrollEnabled` / verticalScroll
-+ *    `enabled`）：**拖动一开始外层 scrollable 整体退出**，slop 抢流、拦截、退化滚动全不发生；
-+ *    自动翻滚走 `dispatchRawDelta` 程序化滚动，不吃 `userScrollEnabled`，照旧可用；
++ *  - **指尖位置只认窗口坐标**：容器级手势把事件的容器局部坐标 + 容器窗口原点，当场还原成指尖的
++ *    窗口 Y（与行身段 [tops] / [heights] 同系）——与参考实现全程用 `e.clientY` 同口径。Compose 的
++ *    `position` 是节点局部坐标，被拖行「即换即到位」是整行高瞬跳、自动翻滚又在指下滚内容，局部坐标
++ *    会「手指没动却变了」；把这种假位移累加，每换一次位手指 Y 就偏一整行：命中判定落回被拖行身后那
++ *    一行、刚换上去又被换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进边缘带触发误翻滚（列表自己
++ *    上滑）。这里不累加任何位移，每个事件都由容器坐标当场换算成窗口坐标；
++ *  - **拖动逻辑不与任何外层手势仲裁，且手势挂在不会被回收的容器节点上**（v7，四轮实机翻车后的重写）：
++ *    `detectDragGestures` / `pointerInteropFilter` 两版被外层 scrollable 的仲裁分流；v6 把手势挪到把手
++ *    节点、逐事件消费整条流，抢流是解决了，但把手是会被 lazy 列表回收的行内节点——快速拖动时换位 /
++ *    滚动让把手解绑，挂在它上面的手势协程被取消（`finally` 收尾），表现为「快速拖动被打断、慢速没事」
++ *    （慢速不触发回收）。v7 把手势挪到**容器**修饰符上（容器节点在整个拖动里不会被回收，协程活得到底）：
++ *    ① 容器 `pointerInput` 在 DOWN 用把手窗口矩形命中判定，命中就在 `PointerEventPass.Initial` 上
++ *    **逐事件消费整条流**（容器修饰符在宿主链里排在 scrollable 之前、同节点 Initial pass 按链顺序先跑，
++ *    容器因此先于外层 scrollable 消费 DOWN——抢流 / 拦截在 Initial 阶段就被挡下，不依赖 `userScrollEnabled`
++ *    的重组时序，没有首帧空窗）；没命中把手就一个事件都不消费，列表照常滚动 / 点击；
++ *    ② 结束条件只有主指针 `pressed=false`（真抬指 / 框架 CANCEL 同形），`finally` 兜底 `endDrag`；
++ *    自动翻滚走 `dispatchRawDelta` 程序化滚动（实测不受 `userScrollEnabled` 影响），照旧可用；
 + *    **只要手指按住不松、事件还在来，排序就继续**；
 + *  - 被拖行永远停在手指命中的那一档里（手指在屏幕内），容器不可能把它回收掉——所以不再需要
 + *    「拖到视口外就先写回一段」的中途提交：宿主的数据只在松手时动一次（[DragSortState.endDrag]），
@@ -6620,12 +6621,12 @@ index 0000000..9d78436
 +
 +    private var fingerY = 0f
 +    private var draggingHeight = 0f
++    private var containerLeft = 0f
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
 +    private var scrollBy: ((Float) -> Float)? = null
 +    private val tops = HashMap<Int, Float>()
 +    private val heights = HashMap<Int, Float>()
-+    private val handleTops = HashMap<Int, Float>()
 +    private val handleCoords = HashMap<Int, LayoutCoordinates>()
 +
 +    internal var onMove: (from: Int, to: Int) -> Unit = { _, _ -> }
@@ -6652,16 +6653,80 @@ index 0000000..9d78436
 +    }
 +
 +    /**
-+     * 行容器（Column / LazyColumn 都可以）：量容器窗口位置，并接上滚动能力。
-+     * 滚动能力用于拖动时的边缘自动翻滚；返回本轮实际吃掉的位移（用于判断是否真的滚了）。
++     * 行容器（Column / LazyColumn 都可以）：量容器窗口位置，接上滚动能力，并**独占整条拖动手势**。
++     *
++     * v7 拖动逻辑（关键改动：手势不再挂在会被回收的把手节点上）：
++     * 把手是行内节点，快速拖动时行被 lazy 列表回收 / 换位 → 把手节点解绑 → 挂在它上面的手势协程被
++     * 取消 → `finally` 收尾（= 上一版「快速拖动被打断、慢速没事」的根因：慢速不触发回收）。
++     * 现在把手只负责在 [handleModifier] 里量出自己的窗口矩形；真正的手势挂在这个**容器**修饰符上——
++     * 容器节点在整个拖动里不会被回收，协程因此活得到底。
++     *
++     * 抢流：容器修饰符在宿主链里排在 `scrollable` / `verticalScroll` **之前**；同一节点上多个
++     * `pointerInput` 在 **Initial** pass 按链顺序（靠前先跑）、Main pass 按逆序（靠后先跑）。所以这里
++     * 用 `PointerEventPass.Initial` 消费整条流：DOWN 落在把手上时，容器先于外层滚动容器把 DOWN 及后续
++     * 每个事件消费掉——外层 scrollable 的 slop 检测看到已消费即取消，「整体上滑 / 抢流」在 Initial 阶段
++     * 就被挡下，且不依赖 `userScrollEnabled` 的重组时序（不再有首帧空窗）。DOWN 不在把手上就一个事件
++     * 都不消费，列表照常滚动 / 点击。
 +     */
 +    fun containerModifier(scrollBy: ((Float) -> Float)? = null): Modifier {
 +        this.scrollBy = scrollBy
-+        return Modifier.onGloballyPositioned { coords ->
++        return Modifier
++            .onGloballyPositioned { coords ->
++                val b = coords.boundsInWindow()
++                containerLeft = b.left
++                containerTop = b.top
++                containerBottom = b.bottom
++            }
++            .pointerInput(Unit) {
++                forEachGesture {
++                    awaitPointerEventScope {
++                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
++                        // 事件给的是容器局部坐标；+ 容器窗口原点 = 窗口坐标，与把手矩形同系
++                        val hit = hitHandle(down.position.x + containerLeft, down.position.y + containerTop)
++                        if (hit < 0) {
++                            // 不在把手上：整条手势一个事件都不消费（滚动 / 点击照常），
++                            // 但不重新命中判定——跟到手指离开为止，免得滚动途中误触到把手
++                            while (true) {
++                                val ev = awaitPointerEvent(PointerEventPass.Initial)
++                                if (ev.changes.none { it.pressed }) break
++                            }
++                            return@awaitPointerEventScope
++                        }
++                        down.consume()
++                        startDrag(hit, down.position.y + containerTop)
++                        try {
++                            while (true) {
++                                val event = awaitPointerEvent(PointerEventPass.Initial)
++                                var up = false
++                                for (change in event.changes) {
++                                    if (change.id == down.id) {
++                                        if (change.pressed) {
++                                            dragTo(change.position.y + containerTop)
++                                        } else {
++                                            up = true
++                                        }
++                                    }
++                                    // 主手指之外的事件（第二根手指）也吞掉，别漏给外层滚动容器
++                                    change.consume()
++                                }
++                                if (up) break
++                            }
++                        } finally {
++                            endDrag()
++                        }
++                    }
++                }
++            }
++    }
++
++    /** 命中判定：窗口坐标 (x, y) 落在哪个把手的窗口矩形里（只认当前还挂着的手柄）。没有 → -1。 */
++    private fun hitHandle(x: Float, y: Float): Int {
++        for ((i, coords) in handleCoords) {
++            if (!coords.isAttached) continue
 +            val b = coords.boundsInWindow()
-+            containerTop = b.top
-+            containerBottom = b.bottom
++            if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) return i
 +        }
++        return -1
 +    }
 +
 +    /**
@@ -6679,89 +6744,37 @@ index 0000000..9d78436
 +            .zIndex(if (index == dragging) 1f else 0f)
 +
 +    /**
-+     * 把手：按住即拖（DOWN 立刻进入拖动，与 WebUI 把手上 touch-action:none 同效果）。
++     * 把手：只负责**量出自己的窗口矩形**（[handleCoords]），供容器级手势在 DOWN 时命中判定。
 +     *
-+     * v6 拖动逻辑：不和任何外层手势仲裁。把手节点自己的 `pointerInput` 在 DOWN 当即 [startDrag]
-+     * 并逐事件消费整条流（不做 slop 等待、不用 detectDragGestures / pointerInteropFilter——前两版
-+     * 在实机上分别被外层 scrollable 取消拖动、退化成纯滚动）；宿主同时把容器用户滚动绑到
-+     * `dragging < 0`，拖动一开始外层 scrollable 整体退出，抢流 / 拦截无从发生。
-+     * 结束条件只有主指针 `pressed=false`（真抬指；框架 CANCEL 同形）或把手节点解绑
-+     * （`finally` 兜底 [endDrag]，防 `dragging` 残留导致容器滚动一直关着）。
-+     * **手指按住不松、事件还在来，排序就继续。**
++     * v7 起把手不再自带 `pointerInput` 手势——手势统一挂在 [containerModifier]（容器节点）上。
++     * 原因见 [containerModifier] 的 KDoc：把手是会被 lazy 列表回收的行内节点，快速拖动时它一解绑，
++     * 挂在它上面的手势协程就被取消（= 上一版「快速拖动被打断」的根因）。把手留在行里只为提供命中矩形
++     * 与语义 / 外观；矩形随每次布局刷新，节点回收后 [hitHandle] 靠 `isAttached` 过滤掉失效项。
 +     */
 +    fun handleModifier(index: Int): Modifier =
 +        Modifier
-+            // 记把手的窗口位置：手指的窗口 Y = 把手顶 + 把手内局部 Y，落点判定才不会带上系统偏差
-+            .onGloballyPositioned { coords ->
-+                handleTops[index] = coords.boundsInWindow().top
-+                handleCoords[index] = coords
-+            }
-+            .pointerInput(index) {
-+                forEachGesture {
-+                    awaitPointerEventScope {
-+                        val down = awaitFirstDown(requireUnconsumed = false)
-+                        down.consume()
-+                        startDrag(index, down.position.y)
-+                        try {
-+                            while (true) {
-+                                val event = awaitPointerEvent()
-+                                var up = false
-+                                for (change in event.changes) {
-+                                    if (change.id == down.id) {
-+                                        if (change.pressed) {
-+                                            dragTo(index, change.position.y)
-+                                        } else {
-+                                            up = true
-+                                        }
-+                                    }
-+                                    // 主手指之外的事件（第二根手指）也吞掉，别漏给外层滚动容器
-+                                    change.consume()
-+                                }
-+                                if (up) break
-+                            }
-+                        } finally {
-+                            endDrag()
-+                        }
-+                    }
-+                }
-+            }
-+    fun startDrag(index: Int, localY: Float) {
++            // 记把手节点：容器级手势用它的 boundsInWindow 做落点命中判定
++            .onGloballyPositioned { coords -> handleCoords[index] = coords }
++
++    /**
++     * 开始拖动：`windowY` 是 DOWN 时指尖的窗口 Y（已由容器手势用容器局部坐标 + 容器窗口原点换算好）。
++     */
++    fun startDrag(index: Int, windowY: Float) {
 +        if (index < 0 || index !in orderState) return
 +        draggingHeight = heights[index] ?: 0f
 +        dragging = index
-+        val top = tops[index]
-+        fingerY = fingerWindowY(index, localY)
-+            ?: if (top != null) top + draggingHeight / 2f
-+            else containerTop + draggingHeight / 2f
++        fingerY = windowY
 +    }
 +
 +    /**
-+     * 指尖的窗口 Y = 把手节点**现在**的窗口顶 + 事件在手把内的局部 Y。
++     * 手指移动：记下指尖的窗口 Y 后跑一轮命中判定；被拖行的位置由它命中的档位决定（不跟手漂浮）。
 +     *
-+     * 参考实现全程只用 `e.clientY`（窗口坐标）：行在视口里怎么挪都不影响指尖位置。
-+     * Compose 的 `PointerInputChange.position` 是**节点局部坐标**——被拖行「即换即到位」（换位没有动画，
-+     * 行会整行高整行高地瞬跳）、边缘自动翻滚让内容在指下滚动，这些都会让局部坐标「手指没动却变了」。
-+     * 把这种位移当手指位移累加，每换一次位就偏一行高：命中判定于是落到被拖行身后那一行、把刚换上去的
-+     * 位置又换回来（来回抖 = 拖动被打断），偏出的 Y 还会落进上/下边缘触发误翻滚（= 拖着拖着列表自己上滑）。
-+     * 所以这里不累加任何位移，每次事件当场把局部 Y 换算成窗口 Y。
-+     *
-+     * 优先读把手节点**实时**的 `positionInWindow()`（事件与坐标同属一帧的几何），拿不到（节点已解绑 / 还没量过）
-+     * 再退回最后一次 `onGloballyPositioned` 记下的窗口顶；两者都没有才返回 null（这一事件不更新手指位置）。
++     * 全程只用窗口 Y（与 [tops] / [heights] 同系）：行在视口里怎么挪、边缘自动翻滚让内容在指下滚动，
++     * 都不影响指尖位置，也就不会「每换一次位就偏一行高」地来回抖。
 +     */
-+    private fun fingerWindowY(index: Int, localY: Float): Float? {
-+        val coords = handleCoords[index]
-+        if (coords != null && coords.isAttached) return coords.positionInWindow().y + localY
-+        val top = handleTops[index] ?: return null
-+        return top + localY
-+    }
-+
-+    /**
-+     * 手指移动：把事件换算成指尖的窗口 Y 后跑一轮命中判定；被拖行的位置由它命中的档位决定
-+     * （不跟手漂浮）。
-+     */
-+    fun dragTo(index: Int, localY: Float) {
-+        if (dragging < 0 || dragging != index) return
-+        fingerY = fingerWindowY(index, localY) ?: return
++    fun dragTo(windowY: Float) {
++        if (dragging < 0) return
++        fingerY = windowY
 +        step()
 +    }
 +

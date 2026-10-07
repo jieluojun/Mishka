@@ -221,44 +221,51 @@ assert_contains 'if (cur < at) at -= 1' \
 assert_contains 'if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'finger over the dragged row itself is a no-op (no swap oscillation)'
-assert_contains 'private fun fingerWindowY(index: Int, localY: Float): Float?' \
+assert_contains 'dragTo(change.position.y + containerTop)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the finger Y is resolved in window coordinates (reference e.clientY, never accumulated)'
-assert_contains 'return coords.positionInWindow().y + localY' \
+  'the container gesture resolves the finger Y in window coordinates (container-local + window origin; reference e.clientY, never accumulated)'
+assert_contains 'fun dragTo(windowY: Float)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the handle node position is read live for every pointer event'
-assert_contains 'dragTo(index, change.position.y)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the handle loop converts the local offset to a window Y instead of adding deltas'
+  'dragTo takes an already-resolved window Y (no node-local delta accumulation)'
 assert_not_contains 'dragAmount' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'no local-delta accumulation: the dragged row jumps a whole row height per swap and the auto-scroll moves the content under the finger, so node-local deltas contain phantom motion (it drifted the finger Y by one row per swap -> swap flicker + stray up-scroll)'
-# 六版（2026-10-07 三轮实机后重写）：不再与外层手势仲裁。把手 pointerInput 自 DOWN 起逐事件
-# 消费整条流；宿主把容器用户滚动绑到 dragging<0（LazyColumn userScrollEnabled /
-# verticalScroll enabled），拖动一开始外层 scrollable 整体退出；自动翻滚走 dispatchRawDelta
-# 程序化滚动不吃 userScrollEnabled。detectDragGestures / pointerInteropFilter 两版仲裁路径整段移除。
-assert_contains 'val down = awaitFirstDown(requireUnconsumed = false)' \
+# 七版（2026-10-07 四轮实机后重写）：手势从「会被 lazy 列表回收的把手节点」挪到「不会被回收的容器节点」。
+# 把手只量窗口矩形；容器 pointerInput 在 DOWN 命中判定，命中就在 PointerEventPass.Initial 上逐事件消费
+# 整条流——Initial 是比 Main（scrollable 的 slop 检测所在相位）更早的全局相位，容器因此永远先于外层
+# scrollable 消费，抢流无从发生，且不依赖 userScrollEnabled 的重组时序；容器节点不被回收，手势协程活到
+# 底（修「快速拖动被打断、慢速没事」——慢速不触发回收）。detectDragGestures / pointerInteropFilter 仍整段移除。
+assert_contains 'val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'the handle grabs the stream on DOWN without slop waiting'
+  'the container grabs the stream on DOWN on the Initial pass (beats the Main-pass scrollable slop detection)'
+assert_contains '.pointerInput(Unit) {' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the gesture lives on the stable container node, not the recyclable handle node (fixes fast-drag interruption)'
+assert_contains 'private fun hitHandle(x: Float, y: Float): Int' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'DOWN is hit-tested against the handle window rects to decide drag vs. normal scroll'
 # §7 同类 CI 报错的防回归：v6 重写连踩两次 import 坑（CI 两轮各报一次）：
 #  1) pointerInput 的 import 漏补（跨包工具只管 custom.* 符号，androidx 的它看不见）；
 #  2) awaitFirstDown / forEachGesture 不在 ui.input.pointer 而在 foundation.gestures，
 #     awaitPointerEventScope / awaitPointerEvent 是接口成员、根本不能 import。
 assert_contains 'import androidx.compose.ui.input.pointer.pointerInput' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'pointerInput is imported (v6 handle loop uses it; missing import broke CI once)'
+  'pointerInput is imported (v7 container gesture uses it; missing import broke CI once)'
 assert_contains 'import androidx.compose.foundation.gestures.awaitFirstDown' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'awaitFirstDown is imported from foundation.gestures (it is NOT in ui.input.pointer)'
 assert_contains 'import androidx.compose.foundation.gestures.forEachGesture' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'forEachGesture is imported from foundation.gestures (it is NOT in ui.input.pointer)'
+assert_contains 'import androidx.compose.ui.input.pointer.PointerEventPass' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'PointerEventPass is imported (v7 container gesture consumes on the Initial pass)'
 assert_not_contains 'import androidx.compose.ui.input.pointer.await' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'no bogus ui.input.pointer.await* imports (those symbols are members or live in foundation.gestures)'
-assert_contains 'startDrag(index, down.position.y)' \
+assert_contains 'startDrag(hit, down.position.y + containerTop)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'press = immediate drag start (handle semantics unchanged)'
+  'press on a handle = immediate drag start at the DOWN window Y'
 assert_contains 'if (up) break' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the drag loop ends only when the pressed pointer goes up (lift or framework cancel)'
@@ -280,11 +287,11 @@ assert_contains 'verticalScroll(scrollState, enabled = dragSort.dragging < 0)' \
 assert_contains 'verticalScroll(dnsValueScroll, enabled = dnsValueSort.dragging < 0)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt \
   'dns value list disables user scrolling for the whole drag'
-# positionInWindow / boundsInWindow 是 androidx.compose.ui.layout 包里的扩展函数（不是接口成员）：
+# boundsInWindow 是 androidx.compose.ui.layout 包里的扩展函数（不是接口成员）：
 # 少了 import，K2 报 Unresolved reference —— 与曾经漏 import dragSortItem 的 CI 失败同一类。
-assert_contains 'import androidx.compose.ui.layout.positionInWindow' \
+assert_contains 'import androidx.compose.ui.layout.boundsInWindow' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'positionInWindow is imported (it is an extension, not a LayoutCoordinates member)'
+  'boundsInWindow is imported (it is an extension, not a LayoutCoordinates member; used by the handle hit-test)'
 assert_contains 'import androidx.compose.ui.layout.LayoutCoordinates' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'LayoutCoordinates is imported for the live handle coordinates map'
