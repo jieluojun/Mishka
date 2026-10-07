@@ -6471,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..0511913
+index 0000000..bdde1c5
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,535 @@
+@@ -0,0 +1,572 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6488,6 +6488,7 @@ index 0000000..0511913
 +import androidx.compose.foundation.lazy.LazyItemScope
 +import androidx.compose.foundation.shape.RoundedCornerShape
 +import androidx.compose.runtime.Composable
++import androidx.compose.runtime.DisposableEffect
 +import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.Stable
 +import androidx.compose.runtime.getValue
@@ -6596,6 +6597,18 @@ index 0000000..0511913
 +    internal var dragging by mutableStateOf(-1)
 +        private set
 +
++    /** 把手从 DOWN 到 UP / cancel 的完整指针生命周期，用来临时禁用 LazyColumn 的触摸滚动。 */
++    internal var handleGestureActive by mutableStateOf(false)
++        private set
++
++    internal fun beginHandleGesture() {
++        handleGestureActive = true
++    }
++
++    internal fun finishHandleGesture() {
++        handleGestureActive = false
++    }
++
 +    /** 拖动中是否真的换过位（换过才在松手时写回宿主）。 */
 +    private var reordered = false
 +
@@ -6645,6 +6658,15 @@ index 0000000..0511913
 +        reordered = false
 +    }
 +
++    /** LazyColumn 回收行时清除它的几何缓存，避免自动翻滚命中已离屏条目的旧坐标。 */
++    internal fun forgetRow(index: Int) {
++        if (index == dragging) cancelDrag()
++        tops.remove(index)
++        heights.remove(index)
++        handleTops.remove(index)
++        handleCoords.remove(index)
++    }
++
 +    /**
 +     * 行容器（Column / LazyColumn 都可以）：量容器窗口位置，并接上滚动能力。
 +     * 滚动能力用于拖动时的边缘自动翻滚；返回本轮实际吃掉的位移（用于判断是否真的滚了）。
@@ -6690,6 +6712,7 @@ index 0000000..0511913
 +                        pass = PointerEventPass.Main,
 +                    )
 +                    down.consume()
++                    beginHandleGesture()
 +
 +                    var dragStarted = false
 +                    var finished = false
@@ -6728,6 +6751,7 @@ index 0000000..0511913
 +                    } finally {
 +                        // 失焦 / 节点卸载 / 系统取消不等于用户松手：回滚视觉顺序，不写文档、不弹 toast。
 +                        if (dragStarted && !finished) cancelDrag()
++                        finishHandleGesture()
 +                    }
 +                }
 +            }
@@ -6809,7 +6833,11 @@ index 0000000..0511913
 +        if (cur < 0) return
 +        val curTop = tops[from]
 +        val curH = heights[from]
-+        if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return
++        if (
++            curTop != null && curH != null &&
++            curTop + curH > containerTop && curTop < containerBottom &&
++            fingerY >= curTop && fingerY <= curTop + curH
++        ) return
 +        var over = -1
 +        var nearest = -1
 +        var best = Float.MAX_VALUE
@@ -6817,6 +6845,8 @@ index 0000000..0511913
 +            if (o == from) continue
 +            val top = tops[o] ?: continue
 +            val h = heights[o] ?: continue
++            // LazyColumn may retain offscreen item coordinates; never use them as drop targets.
++            if (top + h <= containerTop || top >= containerBottom) continue
 +            if (fingerY >= top && fingerY <= top + h) { over = o; break }
 +            val d = abs(fingerY - (top + h / 2f))
 +            if (d < best) { best = d; nearest = o }
@@ -6849,6 +6879,9 @@ index 0000000..0511913
 +        val up = (containerTop + edge) - fingerY
 +        val down = fingerY - (containerBottom - edge)
 +        if (up <= 0f && down <= 0f) return
++        val currentSlot = orderState.indexOf(dragging)
++        if (up > down && currentSlot == 0) return
++        if (down >= up && currentSlot == orderState.lastIndex) return
 +        val depth = maxOf(up, down).coerceIn(0f, edge)
 +        val v = velMin + (depth / edge) * velRange
 +        if (scroller(if (up > down) -v else v) == 0f) return   // 已到尽头：不空转
@@ -6908,8 +6941,12 @@ index 0000000..0511913
 +    state: DragSortState,
 +    index: Int,
 +    modifier: Modifier = Modifier,
++    forgetOnDispose: Boolean = false,
 +    content: @Composable () -> Unit,
 +) {
++    DisposableEffect(state, index, forgetOnDispose) {
++        onDispose { if (forgetOnDispose) state.forgetRow(index) }
++    }
 +    val active = state.dragging == index
 +    val accent = MiuixTheme.colorScheme.primary
 +    Box(
@@ -7075,10 +7112,10 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..c7362cc
+index 0000000..7a67692
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2297 @@
+@@ -0,0 +1,2304 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -7198,6 +7235,8 @@ index 0000000..c7362cc
 +
 +    LazyColumn(
 +        state = listState,
++        // 把手从按下到抬起期间关掉常规触摸滚动，边缘自动滚动仍由 dispatchRawDelta 驱动。
++        userScrollEnabled = !dragSort.handleGestureActive,
 +        modifier = Modifier
 +            .fillMaxWidth()
 +            .then(dragSort.containerModifier { listState.dispatchRawDelta(it) }),
@@ -7225,7 +7264,12 @@ index 0000000..c7362cc
 +        // 行内容与回调一律按原始下标取，换位不会让「编辑 / 删除」指到别的项上。
 +        items(dragSort.order, key = { it }) { i ->
 +            items.getOrNull(i)?.let { node ->
-+                DragSortRow(state = dragSort, index = i, modifier = dragSortItem(dragSort, i)) {
++                DragSortRow(
++                    state = dragSort,
++                    index = i,
++                    modifier = dragSortItem(dragSort, i),
++                    forgetOnDispose = true,
++                ) {
 +                    RowCard(
 +                        title = rowTitle(i, node),
 +                        summary = rowSummary(i, node),
@@ -9376,6 +9420,7 @@ index 0000000..c7362cc
 +        )
 +    }
 +}
+
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt
 new file mode 100644
 index 0000000..033bcf3
@@ -20418,7 +20463,7 @@ index 018c54d..4623ff2 100644
  private fun tunStackLabel(stack: String): String =
      TUN_STACK_OPTIONS.firstOrNull { it.first == stack.lowercase() }?.second ?: stack.ifEmpty { "--" }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
-index 119695c..f3b883b 100644
+index 119695c..a4c3c5b 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 @@ -7,13 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
@@ -20470,18 +20515,19 @@ index 119695c..f3b883b 100644
      val selectedIds = displayed.filter { it in selected }
      val hasChanges = displayed != initialOrder || selectedIds != initialSelected
  
-@@ -129,8 +136,10 @@ fun SubscriptionOverridesScreen(
+@@ -129,8 +136,11 @@ fun SubscriptionOverridesScreen(
      ) { innerPadding ->
          WideContentBox { sidePadding ->
              LazyColumn(
 +                state = listState,
++                userScrollEnabled = !dragSort.handleGestureActive,
                  modifier = Modifier
                      .fillMaxSize()
 +                    .then(dragSort.containerModifier { listState.dispatchRawDelta(it) })
                      .horizontalCutoutPadding()
                      .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                      .scrollEndHaptic()
-@@ -164,21 +173,24 @@ fun SubscriptionOverridesScreen(
+@@ -164,21 +174,29 @@ fun SubscriptionOverridesScreen(
                      }
                  }
  
@@ -20506,7 +20552,12 @@ index 119695c..f3b883b 100644
 +                    val profile = id?.let { profilesById[it] }
 +                    if (id != null && profile != null) {
 +                        val checked = id in selected
-+                        DragSortRow(state = dragSort, index = index, modifier = dragSortItem(dragSort, index)) {
++                        DragSortRow(
++                            state = dragSort,
++                            index = index,
++                            modifier = dragSortItem(dragSort, index),
++                            forgetOnDispose = true,
++                        ) {
 +                            OverrideSelectionItem(
 +                                profile = profile,
 +                                checked = checked,
@@ -20521,7 +20572,7 @@ index 119695c..f3b883b 100644
                  }
  
                  item(key = "bottom_spacer") {
-@@ -193,15 +205,12 @@ fun SubscriptionOverridesScreen(
+@@ -193,15 +211,12 @@ fun SubscriptionOverridesScreen(
  private fun OverrideSelectionItem(
      profile: OverrideProfile,
      checked: Boolean,
@@ -20540,7 +20591,7 @@ index 119695c..f3b883b 100644
              .fillMaxWidth()
              .padding(horizontal = 12.dp)
              .padding(bottom = 12.dp),
-@@ -216,49 +225,9 @@ private fun OverrideSelectionItem(
+@@ -216,49 +231,9 @@ private fun OverrideSelectionItem(
                      modifier = Modifier.padding(end = 12.dp),
                  )
              },
@@ -20592,6 +20643,7 @@ index 119695c..f3b883b 100644
 -
 -private fun List<String>.swap(from: Int, to: Int): List<String> =
 -    toMutableList().also { it[from] = this[to]; it[to] = this[from] }
+
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
 index 93088aa..3eeddd1 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt

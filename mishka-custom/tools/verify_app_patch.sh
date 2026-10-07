@@ -218,9 +218,9 @@ assert_contains 'orderState.removeAt(cur)' \
 assert_contains 'if (cur < at) at -= 1' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'insert index is corrected for removing the dragged row first'
-assert_contains 'if (curTop != null && curH != null && fingerY >= curTop && fingerY <= curTop + curH) return' \
+assert_contains 'curTop + curH > containerTop && curTop < containerBottom' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'finger over the dragged row itself is a no-op (no swap oscillation)'
+  'dragged-row no-op is limited to the visible container bounds (no stale/offscreen hit)'
 assert_contains 'private fun fingerWindowY(index: Int, localY: Float): Float?' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'the finger Y is resolved in window coordinates (reference e.clientY, never accumulated)'
@@ -269,6 +269,33 @@ assert_not_contains 'detectDragGestures' \
 assert_not_contains 'onDragCancel = { endDrag() }' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'gesture cancellation cannot be mistaken for a normal drop'
+assert_contains 'internal var handleGestureActive by mutableStateOf(false)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'the full handle pointer lifetime is exposed to sortable LazyColumn hosts'
+assert_contains 'userScrollEnabled = !dragSort.handleGestureActive' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'route-rule LazyColumn disables touch scrolling for the complete handle gesture'
+assert_contains 'userScrollEnabled = !dragSort.handleGestureActive' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
+  'override LazyColumn disables touch scrolling for the complete handle gesture'
+assert_contains 'forgetOnDispose = true' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
+  'route-rule LazyColumn rows clear geometry when recycled'
+assert_contains 'forgetOnDispose = true' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt \
+  'override LazyColumn rows clear geometry when recycled'
+assert_contains 'internal fun forgetRow(index: Int)' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'disposed lazy rows clear cached window coordinates'
+assert_contains 'onDispose { if (forgetOnDispose) state.forgetRow(index) }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'only lazy drag rows clear geometry on disposal (eager Column hosts are unaffected)'
+assert_contains 'if (top + h <= containerTop || top >= containerBottom) continue' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'drop hit-testing ignores offscreen cached row coordinates'
+assert_contains 'if (up > down && currentSlot == 0) return' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'edge auto-scroll stops after the dragged item reaches the first slot'
 assert_contains 'placementSpec = FlipSpec' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
   'non-dragged rows get the reference FLIP easing, dragged row stays instant'

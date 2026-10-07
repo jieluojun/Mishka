@@ -204,35 +204,37 @@ CI `:app:compileReleaseKotlin` 报 `Unresolved reference 'dragSortItem'`
 `LayoutCoordinates` 是 `androidx.compose.ui.layout` 的**包级扩展函数 / 类型**（不是接口成员），
 漏 import 会重演 §7 那类 CI `Unresolved reference`。
 
-## 9. 四修（根据 2026-10-07 新录屏）：把手先独占指针流，父级上滑不能抢走排序
+## 9. 四修（第一次尝试）：把手先独占指针流
 
-你说得对：§8 只修了「指尖 Y 被行位移污染」这一条，**没有修好 Compose 手势竞争**。新录屏里
-从底部拖 `MATCH → REJECT` 往上时，蓝色拖动框走到列表上部后，列表开始普通纵向滚动，拖动提前结束，
-并出现「已移动 MATCH」提示；这是把手拖动被滚动手势抢走后的部分提交，不是正常松手排序。
+初步判断是把手与 `LazyColumn` 同时等待 touch slop；因此把 `detectDragGestures` 换为
+`awaitEachGesture`，在 Main pass 消费 DOWN / 移动，并把取消从「正常 drop」改成回滚。
 
-根因：`detectDragGestures` 与 `LazyColumn` 的 `scrollable` 都等同一条纵向移动越过 touch slop。
-父级先赢时子级拖动会收到 cancel；旧 `onDragCancel = { endDrag() }` 又把取消当成正常 drop，提交了当时
-只拖到一半的位置。窗口坐标换算不会改变谁拥有这条指针流，因此 §8 的修复不足以覆盖该录屏。
+**后续复测仍报告上拖会打断排序**，说明仅靠消费事件并不足以隔离列表滚动；本节只记第一次尝试，
+不能视为问题已解决。补充硬隔离见 §10。
 
-修复：
+## 10. 五修（复测后）：拖动时禁用列表触摸滚动，并清除离屏命中坐标
 
-- 把手改用 `awaitEachGesture` + `awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Main)`；
-  在子节点优先的 Main pass 立刻消费 DOWN，随后消费移动事件，让列表 / sheet 不会把把手的纵向拖动认成普通上滑。
-- 实际排序仍等垂直位移越过 `viewConfiguration.touchSlop` 才启动；仅点按把手不会启动边缘自动翻滚。
-- 只有真实抬手调用 `endDrag()` 并写回；指针流意外取消、节点卸载或失焦调用 `cancelDrag()`，恢复恒等视觉顺序，
-  不写文档、不弹「已移动」提示。
-- 边缘自动翻滚仍由 `autoScroll()` → `dispatchRawDelta` 主动驱动，不依赖父级接管拖动事件。
+路由规则页实际是 `LazyColumn`，它的 `userScrollEnabled` 此前一直为默认 `true`。把手消费事件不能作为
+唯一防线：拖动仍与列表的滚动 / nested-scroll 管线处于同一容器。此次复测后的修正是在整个把手指针生命期
+（按下到抬起 / cancel）显式关闭排序宿主的用户触摸滚动；拖动中的边缘翻滚仍由 `dispatchRawDelta` 作为
+程序化滚动执行，因此只保留排序器主动发出的滚动，不再让同一手指同时触发列表上滑。
 
-防回归：`verify_app_patch.sh` 新增断言，锁定 Main-pass DOWN 捕获 / 消费、touch slop 门槛、取消回滚、
-以及移除竞争式 `detectDragGestures` 与「cancel 当 drop」接线。
+同时修正一个 LazyColumn 坐标缓存风险：已回收条目的 `tops` / `heights` 之前会残留，自动翻滚时可能被当作
+仍可见的落点。Lazy 行离开组合时现在清除缓存，命中只考虑与容器视口相交的行；拖动项已到首 / 尾时停止
+继续向该方向自动翻滚。覆盖路由规则序列列表和订阅覆写序列列表。
+
+防回归断言新增：拖动全程 `userScrollEnabled = !dragSort.handleGestureActive`、离屏坐标不参与命中、Lazy 行回收
+会清除几何缓存，以及活动项到首尾后停止自动滚动。
 
 ## 验证
 
-- §8 所列 **146 条 ok / 0 FAIL**、独立副本比对是上一版（仅修窗口坐标）时的记录，不代表本次新补丁已跑过上游往返验证。
-- 本轮上传包没有包含 Mishka 上游仓库，因此无法在此运行 `verify_app_patch.sh --repo <仓库>` 或 Gradle 编译；
-  本轮会重新生成补丁、更新 `BASELINE.txt` 的 patch SHA 与 `DragSort.kt` blob，并做补丁格式 / 静态守护检查。
-  应用后仍需在真实仓库上跑一次 `verify_app_patch.sh`、Kotlin 编译及设备复测。
-- 防回归新增：`tools/check_cross_package_imports.py` 跨包 import 全树检查已挂进 verify（历史自测 0 误报；删掉 §7 那行 import 可精确复现 CI 报错点）。
+- §8 的 **146 条 ok / 0 FAIL** 和独立副本比对是此前版本的记录；§9 的第一次手势捕获也未能解决实机反馈。
+- 本轮更新了补丁、`BASELINE.txt` 中的 patch SHA / 源码 blob；在上游基线 commit `5e6743592b9c465eb015db7b05c588c50cd2b874` 上运行
+  `verify_app_patch.sh --repo` → **PASS**：补丁可应用、反向可还原，67 个文件与基线 blob 一致；新增指针捕获 / 滚动硬隔离 / 离屏坐标断言通过。
+- 本轮没有运行 Gradle 编译或设备复测；请安装新补丁后实机验证。若仍复现，请发该版本的最新录屏——此前录屏无法判断禁用
+  LazyColumn 用户滚动后是否还会出现同一种中断。
+- `tools/check_cross_package_imports.py` 跨包 import 全树检查继续挂在 verify（历史自测 0 误报；删掉 §7 的 import
+  可精确复现此前 CI 报错点）。
 
 - 上一版因沙箱内存限制未跑通 `:app:compileDebugKotlin`；本轮也未在设备上实测。
 - 三处交互与 2026-10-06 已交付的改动（file provider 上传 / 编辑、内置出站豁免、
