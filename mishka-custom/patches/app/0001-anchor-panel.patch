@@ -1,13 +1,16 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 93a1f15754748108e60c9a52bd5b8b156f2a79cb..0ebf6af7fb0238b52e41188f5bb8897f86dc07a4 100644
+index 93a1f15754748108e60c9a52bd5b8b156f2a79cb..6ecc565923a55fbb53b694964b2c321707ffc0e5 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
-@@ -217,7 +217,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
+@@ -217,7 +217,10 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
  
  val mihomoSubmoduleDir = rootProject.layout.projectDirectory.dir("mihomo")
  val mishkaCoreSourceDir = rootProject.layout.projectDirectory.dir("app/src/main/native/mishka_core")
 -val mihomoBuildTags = listOf("cmfa", "mishka", "with_gvisor")
-+val mihomoBuildTags = listOf("cmfa", "mishka", "with_gvisor", "with_ebpf")
++// Mishka runs mihomo as a standalone child/root process and does not install CMFA's
++// package-name callback. The cmfa tag would therefore skip Linux socket-owner lookup and leave
++// metadata.Uid=0, making PROCESS-NAME rules miss in both VPN and ROOT modes.
++val mihomoBuildTags = listOf("mishka", "with_gvisor", "with_ebpf")
  val mihomoVersion = providers.gradleProperty("mihomo.version").orElse("dev").get()
  val mihomoVersionPath = "github.com/metacubex/mihomo/constant.Version"
  val ndkDirectoryProvider = androidComponents.sdkComponents.ndkDirectory
@@ -18971,7 +18974,7 @@ index ecdcdb58040002a9172ae323f743e4e6326b6028..44da07197b532d9bc67dbd5b1c5ac32c
                  }
              )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
-index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..e551d93350d44a5af8c536c81a00abe255b705af 100644
+index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfdb80b6941 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
 @@ -16,6 +16,7 @@ class MihomoRunner(private val context: Context) {
@@ -19075,6 +19078,39 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..e551d93350d44a5af8c536c81a00abe2
      }
  
      /**
+@@ -203,16 +216,16 @@ class MihomoRunner(private val context: Context) {
+      * 其他 inbound 仍响应 /version，只有日志能区分 silent failure。
+      */
+     private suspend fun waitForReady(useRoot: Boolean, workDir: File): String? {
+-        repeat(20) { round ->
+-            delay(500)
++        repeat(40) { round ->
++            delay(100)
+             // API 响应则就绪 —— 但还需要确认 TUN inbound 也成功
+             if (isApiReady()) {
+-                // 额外等待让 mihomo 完成 TUN init 并输出日志
+-                delay(500)
++                // 给 TUN 初始化日志一个很短的落盘窗口；旧值 500ms 让每次启动固定变慢。
++                delay(100)
+                 return scanLogForTunError(useRoot, workDir)
+             }
+             // 进程退出则快速失败。ROOT 下 /proc 是 hidepid，判活要 fork 一次 su，
+-            // 故降到 2s 一次——总预算 10s，晚 1.5s 发现死亡不影响诊断
++            // 故每 1s 检查一次，避免每 100ms fork su；总就绪预算约 4s。
+             if (round % LIVENESS_CHECK_EVERY != 0) return@repeat
+             val alive = if (useRoot) RootHelper.isAliveAsRoot(childPid) else isProcessAlive(childPid)
+             if (!alive) {
+@@ -287,8 +300,8 @@ class MihomoRunner(private val context: Context) {
+     private fun isApiReady(): Boolean {
+         return try {
+             val conn = URL("http://$externalController/version").openConnection() as HttpURLConnection
+-            conn.connectTimeout = 500
+-            conn.readTimeout = 500
++            conn.connectTimeout = 250
++            conn.readTimeout = 250
+             conn.responseCode // 任何响应（200/401 等）都说明 API 已就绪
+             conn.disconnect()
+             true
 @@ -298,15 +311,17 @@ class MihomoRunner(private val context: Context) {
      }
  
@@ -19096,8 +19132,19 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..e551d93350d44a5af8c536c81a00abe2
              val code = conn.responseCode
              conn.disconnect()
              code in 200..299
+@@ -327,8 +342,8 @@ class MihomoRunner(private val context: Context) {
+     companion object {
+         private const val TAG = "MihomoRunner"
+ 
+-        /** waitForReady 每几轮（每轮 500ms）做一次判活 */
+-        private const val LIVENESS_CHECK_EVERY = 4
++        /** waitForReady 每 10 轮（约 1s）做一次 ROOT 判活，避免频繁 fork su。 */
++        private const val LIVENESS_CHECK_EVERY = 10
+ 
+         private const val GRACEFUL_STOP_TIMEOUT_MS = 3000
+         private const val FORCE_STOP_TIMEOUT_MS = 500
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..1659c7241b0d133d655f88ab829ed762beb28836 100644
+index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667cca1b2003 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 @@ -18,10 +18,10 @@ import kotlinx.coroutines.withContext
@@ -19140,7 +19187,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..1659c7241b0d133d655f88ab829ed762
  
          companion object {
              fun from(value: String?): Submode = entries.firstOrNull { it.storageValue == value } ?: Tun
-@@ -148,7 +151,7 @@ class MishkaRootService : Service() {
+@@ -148,13 +151,13 @@ class MishkaRootService : Service() {
      }
  
      private fun isRootRunning(mode: TunMode): Boolean =
@@ -19149,6 +19196,13 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..1659c7241b0d133d655f88ab829ed762
  
      /**
       * 启动代理。**幂等**：已有启动协程在跑时忽略本次请求。唯一例外是 fresh START 抢占
+      * 进行中的 attach-only——后者失败只保持停止，而 fresh 请求要求「必须跑起来」。
+      */
+-    private fun startProxy(subscriptionId: String? = null, attachOnly: Boolean = false) {
++    private fun startProxy(subscriptionId: String? = null, attachOnly: Boolean = false, preCleaned: Boolean = false) {
+         val inFlight = startJob?.takeIf { it.isActive }
+         if (inFlight != null) {
+             if (attachOnly || !startJobAttachOnly) {
 @@ -193,11 +196,27 @@ class MishkaRootService : Service() {
              )
              val tetherModeActive = storage.getString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, "")
@@ -19231,15 +19285,32 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..1659c7241b0d133d655f88ab829ed762
                              tunMode = tunMode,
                              startTime = existingStartTime,
                              mihomoPid = runner.pid
-@@ -301,7 +338,7 @@ class MishkaRootService : Service() {
-             if (runner.isRunning) {
-                 runner.stop()
+@@ -295,16 +332,16 @@ class MishkaRootService : Service() {
+                 return@launch
+             }
+ 
+-            // 2. 清理残留进程（上次的进程已失效，确保干净启动）
+-            // 先停自身 runner（Service 实例被复用时可能仍持有旧状态），再 pkill 孤儿进程
+-            // 同时清理 TUN 接口防止下次启动 sing-tun EEXIST（silent failure 源头）
+-            if (runner.isRunning) {
+-                runner.stop()
++            // 2. 清理残留进程与规则。restartProxy 已完成同样工作时通过 preCleaned 跳过，
++            // 避免一次“热重载”连续执行两轮 pkill + 两套 netfilter teardown。
++            if (!preCleaned) {
++                // pid 字段比 runner.isRunning 便宜；后者在 ROOT 下会额外 fork 一次 su 判活。
++                if (runner.pid > 0) runner.stop()
++                val currentTun = if (existingPid > 0) existingTunDevice else rootTunDeviceFallback
++                RootHelper.cleanupOrphanedMihomo(tunDevice = currentTun)
++                // 启动前把上一次残留的 iptables 规则（另一个 submode 可能还没清干净）彻底擦一遍
++                teardownAllRootRules()
              }
 -            val currentTun = storage.getString(StorageKeys.ROOT_TUN_DEVICE, RuntimeOverrideBuilder.DEFAULT_TUN_DEVICE)
-+            val currentTun = if (existingPid > 0) existingTunDevice else rootTunDeviceFallback
-             RootHelper.cleanupOrphanedMihomo(tunDevice = currentTun)
-             // 启动前把上一次残留的 iptables 规则（另一个 submode 可能还没清干净）彻底擦一遍
-             teardownAllRootRules()
+-            RootHelper.cleanupOrphanedMihomo(tunDevice = currentTun)
+-            // 启动前把上一次残留的 iptables 规则（另一个 submode 可能还没清干净）彻底擦一遍
+-            teardownAllRootRules()
+ 
+             // 3. 检查 ROOT 权限
+             if (!RootHelper.hasRootAccess()) {
 @@ -330,6 +367,28 @@ class MishkaRootService : Service() {
                  storage.putString(StorageKeys.ROOT_TPROXY_KERNEL_CAPABLE, "true")
              }
@@ -19468,6 +19539,24 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..1659c7241b0d133d655f88ab829ed762
      private fun restartProxy(subscriptionId: String?) {
          Log.i(TAG, "Restarting proxy (ROOT)...")
          monitorJob?.cancel()
+@@ -592,14 +737,13 @@ class MishkaRootService : Service() {
+             // 先让进行中的启动协程收敛，否则下面的 startProxy 会被幂等检查挡掉
+             startJob?.cancelAndJoin()
+             val storage = PlatformStorage(this@MishkaRootService)
+-            val runningSubscriptionId = storage.getString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "").ifEmpty { null }
+             runner.stop()
+             teardownAllRootRules()
+-            // 清掉上一轮 runtime 沙箱，下轮 startProxy 会 prepareRootRuntime 重新从 imported/ 复制
+-            runningSubscriptionId?.let { ProfileFileOps.cleanupRootRuntime(this@MishkaRootService, it) }
++            // 不在这里先 rm runtime：下一轮 prepareRootRuntime 会一次性替换；旧流程先清一次、
++            // startProxy 再清一次，并且还重复执行 orphan cleanup + 两套规则 teardown。
+             clearPersistedState(storage)
+             withContext(Dispatchers.Main) {
+-                startProxy(subscriptionId)
++                startProxy(subscriptionId, preCleaned = true)
+             }
+         }
+     }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302fd5be6149 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
@@ -19646,7 +19735,7 @@ index e86fc359b1c92bbcdac1630bc274497fcee58254..0a19898c71ce3b19d59a4241ea665bbc
  
      /**
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
-index 0a60c2efb1c64b81457ee54706fed3e23f93e421..80c22412e0642f1504734481d30d2f2502b92390 100644
+index 0a60c2efb1c64b81457ee54706fed3e23f93e421..a209ad8f47287cbca6422ccca5c494b5e9fab039 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 @@ -1,6 +1,7 @@
@@ -19657,7 +19746,153 @@ index 0a60c2efb1c64b81457ee54706fed3e23f93e421..80c22412e0642f1504734481d30d2f25
  import java.util.concurrent.TimeUnit
  
  object RootHelper {
-@@ -264,6 +265,26 @@ object RootHelper {
+@@ -122,69 +123,57 @@ object RootHelper {
+         }
+     }
+ 
+-    fun killAsRoot(pid: Int, tunDevice: String = "Mishka"): Boolean {
+-        try {
+-            Log.i(TAG, "Killing root process: pid=$pid")
+-            runRootCommand("kill $pid")
+-            for (i in 1..6) {
+-                Thread.sleep(500)
+-                if (!isAliveAsRoot(pid)) {
+-                    Log.i(TAG, "Process $pid terminated after SIGTERM")
+-                    return true
+-                }
+-            }
+-            // SIGKILL（进程无法优雅清理，需要手动清理 TUN 残留）
+-            Log.w(TAG, "Process $pid still alive after SIGTERM, sending SIGKILL")
+-            runRootCommand("kill -9 $pid")
+-            for (i in 1..4) {
+-                Thread.sleep(500)
+-                if (!isAliveAsRoot(pid)) {
+-                    Log.i(TAG, "Process $pid terminated after SIGKILL")
+-                    cleanupRootNetwork(tunDevice)
+-                    return true
+-                }
+-            }
+-            Log.e(TAG, "Process $pid still alive after SIGKILL")
+-            return false
+-        } catch (e: Exception) {
+-            Log.w(TAG, "Failed to kill root process: ${e.message}")
+-            return false
+-        }
+-    }
+-
+-    fun killMihomoByName(tunDevice: String = "Mishka") {
+-        try {
+-            Log.w(TAG, "Falling back to pkill for libmihomo_runner.so")
+-            runRootCommand("pkill -TERM -f libmihomo_runner.so")
+-            Thread.sleep(1000)
+-            runRootCommand("pkill -9 -f libmihomo_runner.so")
+-            cleanupRootNetwork(tunDevice)
+-        } catch (_: Exception) {
+-        }
+-    }
+-
+     /**
+-     * 清理 Root 模式 mihomo 被 SIGKILL 后残留的 TUN 设备和路由表。
+-     * SIGKILL 不给进程清理机会，需要手动清理。
++     * 单次 su 完成 TERM → 短轮询 → KILL。旧实现每 500ms 重新 fork 一次 su，正常重启也会
++     * 累积数秒 Magisk/SU 握手；这里把判活留在同一个 root shell 内，正常退出通常 < 300ms。
+      */
+-    private fun cleanupRootNetwork(tunDevice: String) {
+-        try {
+-            Log.i(TAG, "Cleaning up root network state")
+-            runRootCommand("ip link delete ${escapeShellSingleQuoted(tunDevice)} 2>/dev/null; true")
+-        } catch (_: Exception) {
+-        }
++    fun killAsRoot(pid: Int, tunDevice: String = "Mishka"): Boolean {
++        if (pid <= 0) return true
++        Log.i(TAG, "Killing root process: pid=$pid")
++        val escapedTun = escapeShellSingleQuoted(tunDevice)
++        val script = """
++            #!/system/bin/sh
++            kill -0 $pid 2>/dev/null || exit 0
++            kill -TERM $pid 2>/dev/null
++            i=0
++            while kill -0 $pid 2>/dev/null && [ ${'$'}i -lt 10 ]; do
++                sleep 0.1
++                i=${'$'}((i+1))
++            done
++            if kill -0 $pid 2>/dev/null; then
++                kill -KILL $pid 2>/dev/null
++                i=0
++                while kill -0 $pid 2>/dev/null && [ ${'$'}i -lt 10 ]; do
++                    sleep 0.05
++                    i=${'$'}((i+1))
++                done
++                ip link delete $escapedTun 2>/dev/null || true
++            fi
++            kill -0 $pid 2>/dev/null && exit 1
++            exit 0
++        """.trimIndent()
++        val code = runRootScriptHeredoc(script, timeoutSeconds = 3)
++        if (code != 0) Log.e(TAG, "Process $pid still alive after SIGKILL (code=$code)")
++        return code == 0
+     }
+ 
+-    private fun runRootCommand(command: String): Boolean {
+-        return try {
+-            val process = ProcessBuilder("su", "-c", command)
+-                .redirectErrorStream(true)
+-                .start()
+-            process.waitFor(3, TimeUnit.SECONDS)
+-            process.exitValue() == 0
+-        } catch (_: Exception) {
+-            false
+-        }
++    /** 按名称兜底清理，同样只 fork 一次 su。 */
++    fun killMihomoByName(tunDevice: String = "Mishka") {
++        Log.w(TAG, "Falling back to pkill for libmihomo_runner.so")
++        val escapedTun = escapeShellSingleQuoted(tunDevice)
++        val script = """
++            #!/system/bin/sh
++            pkill -TERM -f libmihomo_runner.so 2>/dev/null || true
++            i=0
++            while pgrep -f libmihomo_runner.so >/dev/null 2>&1 && [ ${'$'}i -lt 5 ]; do
++                sleep 0.1
++                i=${'$'}((i+1))
++            done
++            pgrep -f libmihomo_runner.so >/dev/null 2>&1 && pkill -KILL -f libmihomo_runner.so 2>/dev/null
++            ip link delete $escapedTun 2>/dev/null || true
++            exit 0
++        """.trimIndent()
++        runRootScriptHeredoc(script, timeoutSeconds = 2)
+     }
+ 
+ 
+@@ -207,15 +196,15 @@ object RootHelper {
+         val script = """
+             pgrep -f libmihomo_runner.so >/dev/null 2>&1 && {
+                 pkill -TERM -f libmihomo_runner.so 2>/dev/null
+-                i=0; while [ ${'$'}i -lt 6 ]; do
+-                    sleep 0.5
++                i=0; while [ ${'$'}i -lt 10 ]; do
++                    sleep 0.1
+                     pgrep -f libmihomo_runner.so >/dev/null 2>&1 || break
+                     i=${'$'}((i+1))
+                 done
+                 pgrep -f libmihomo_runner.so >/dev/null 2>&1 && {
+                     pkill -KILL -f libmihomo_runner.so 2>/dev/null
+-                    i=0; while [ ${'$'}i -lt 4 ]; do
+-                        sleep 0.5
++                    i=0; while [ ${'$'}i -lt 10 ]; do
++                        sleep 0.05
+                         pgrep -f libmihomo_runner.so >/dev/null 2>&1 || break
+                         i=${'$'}((i+1))
+                     done
+@@ -231,7 +220,7 @@ object RootHelper {
+             val process = ProcessBuilder("su", "-c", script)
+                 .redirectErrorStream(true)
+                 .start()
+-            val exited = process.waitFor(8, TimeUnit.SECONDS)
++            val exited = process.waitFor(3, TimeUnit.SECONDS)
+             if (!exited) {
+                 process.destroyForcibly()
+                 Log.e(TAG, "cleanupOrphanedMihomo timed out")
+@@ -264,6 +253,26 @@ object RootHelper {
          }
      }
  
@@ -19833,7 +20068,7 @@ index 2a8f11d4ffe8485775de9eba2cd5dcf5a92b1921..948ec257a69df036d0b72ccb86dc4c1e
                                  "pre-tproxy-tether-$proto-v6"
                              )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
-index b57d68772dc1b9e1b643e151e7399b48555ec4f5..b3ca80838914b901b18b9ca69edb1d410f1684d3 100644
+index b57d68772dc1b9e1b643e151e7399b48555ec4f5..bf26706ed9dabfdfc44837595dc17f7812f68c88 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 @@ -2,6 +2,8 @@ package top.yukonga.mishka.service
@@ -19876,7 +20111,7 @@ index b57d68772dc1b9e1b643e151e7399b48555ec4f5..b3ca80838914b901b18b9ca69edb1d41
      ): File {
          val storage = PlatformStorage(context)
          val wifiRuntimeMode = storage.getString(StorageKeys.WIFI_POLICY_RUNTIME_MODE, "")
-@@ -85,12 +96,14 @@ object RuntimeOverrideBuilder {
+@@ -85,26 +96,39 @@ object RuntimeOverrideBuilder {
                  else -> null
              },
              tproxyPort = when (tunMode) {
@@ -19897,9 +20132,19 @@ index b57d68772dc1b9e1b643e151e7399b48555ec4f5..b3ca80838914b901b18b9ca69edb1d41
              },
              // RootTproxy 下**不**注入 routing-mark：Android Netd 用 fwmark 低 16 位编码 netId，
              // mihomo 若带 SO_MARK 会被解释为不存在的 netId，命中 legacy_system 表（无默认路由）
-@@ -104,7 +117,19 @@ object RuntimeOverrideBuilder {
+             // → mihomo 出站全部 `network unreachable`。iptables 改用 `-m owner --uid-owner 0`
+             // 放行 mihomo（它以 root 运行），副作用是所有 root 进程都不经 TPROXY，但用户 app 正常代理
+             routingMark = userOverride.routingMark,
+-            // tcp-concurrent：代理侧并发拨号，显著降低首包延迟，多客户端并发场景尤其有效；
+-            // find-process-mode=off：ROOT TUN 分应用已由 sing-tun include/exclude-package 的 uidrange
+-            // 处理，mihomo 运行期遍历 /proc 查进程纯属冗余；VPN 模式 AppProxy 走 VpnService 同理。
+-            // 用户显式设置优先：仅在未设置时注入默认值
++            // tcp-concurrent：代理侧并发拨号，显著降低首包延迟，多客户端并发场景尤其有效。
              tcpConcurrent = userOverride.tcpConcurrent ?: true,
-             findProcessMode = userOverride.findProcessMode ?: "off",
+-            findProcessMode = userOverride.findProcessMode ?: "off",
++            // null 必须保持不写入 override.run.json：这样配置文件里的 find-process-mode 才不会
++            // 被 App 的隐式 off 覆盖。Meta 设置选择 off/strict/always 时则显式覆盖配置文件。
++            findProcessMode = userOverride.findProcessMode,
              dns = buildDnsOverride(tunMode, userOverride.dns),
 -            tun = buildTunOverride(context, tunMode, tunFd, userOverride.tun),
 +            tun = buildTunOverride(
@@ -19918,7 +20163,7 @@ index b57d68772dc1b9e1b643e151e7399b48555ec4f5..b3ca80838914b901b18b9ca69edb1d41
              profile = ProfileOverride(storeSelected = false, storeFakeIp = true),
          )
          // 原子写：mihomo 紧接着就以 --override-json 读它，半个 JSON 会让启动失败且难以定位
-@@ -132,14 +157,40 @@ object RuntimeOverrideBuilder {
+@@ -132,14 +156,40 @@ object RuntimeOverrideBuilder {
          tunMode: TunMode,
          tunFd: Int,
          userTun: TunOverride?,
@@ -19962,7 +20207,7 @@ index b57d68772dc1b9e1b643e151e7399b48555ec4f5..b3ca80838914b901b18b9ca69edb1d41
  
          // 分应用代理：仅 RootTun 通过 mihomo include/exclude-package 实现；
          // VPN 由 VpnService.Builder.addAllowed/DisallowedApplication 管；
-@@ -186,15 +237,19 @@ object RuntimeOverrideBuilder {
+@@ -186,15 +236,19 @@ object RuntimeOverrideBuilder {
          // 破坏同 LAN 设备发现 / P2P 直连（如妙享桌面）。注入私网 + 组播 route-exclude 留在物理网卡，
          // 与 VPN / TPROXY 的 LAN 放行对齐；仅 ROOT TUN 需要，用户显式设置优先。
          val routeExclude: List<String>? = when {
@@ -19986,7 +20231,7 @@ index b57d68772dc1b9e1b643e151e7399b48555ec4f5..b3ca80838914b901b18b9ca69edb1d41
  
          // sing-tun userspace TUN 性能：mtu=9000 + gso + gso-max-size=65535 让大包聚合，
          // 减少每包 read syscall；仅 ROOT TUN 注入 GSO（VPN fd 由 VpnService 创建无 vnet header）。
-@@ -209,20 +264,148 @@ object RuntimeOverrideBuilder {
+@@ -209,20 +263,148 @@ object RuntimeOverrideBuilder {
          return TunOverride(
              enable = true,
              device = device,

@@ -70,10 +70,10 @@ git -C "$REPO" apply --check "$PATCH" && echo "ok  补丁可应用"
 echo "--- apply（正向） ---"
 git -C "$REPO" apply "$PATCH"
 
-if grep -Fq 'val mihomoBuildTags = listOf("cmfa", "mishka", "with_gvisor", "with_ebpf")' "$REPO/app/build.gradle.kts"; then
-  echo "ok  Android mihomo build enables the with_ebpf feature tag"
+if grep -Fq 'val mihomoBuildTags = listOf("mishka", "with_gvisor", "with_ebpf")' "$REPO/app/build.gradle.kts"; then
+  echo "ok  Android mihomo build enables eBPF and the native process resolver (no callback-less cmfa tag)"
 else
-  echo "FAIL Android mihomo build is missing the with_ebpf feature tag" >&2
+  echo "FAIL Android mihomo build tags would disable VPN/ROOT PROCESS-NAME support" >&2
   fail=1
 fi
 
@@ -113,6 +113,18 @@ assert_contains 'if (secret.isNotEmpty())' \
 assert_contains 'if (secret.isNotEmpty())' \
   app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
   'empty secrets omit API authorization headers'
+assert_contains 'findProcessMode = userOverride.findProcessMode' \
+  app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
+  'profile find-process-mode survives when Meta setting is not modified'
+assert_not_contains 'findProcessMode = userOverride.findProcessMode ?: "off"' \
+  app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
+  'runtime override no longer silently forces process lookup off'
+assert_contains 'startProxy(subscriptionId, preCleaned = true)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt \
+  'ROOT restart skips duplicate orphan/rule cleanup'
+assert_contains 'while kill -0 $pid 2>/dev/null' \
+  app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt \
+  'ROOT process shutdown polls inside one su session'
 assert_contains 'mishkaReadRuntimeConfigValues' \
   app/src/main/native/mishka_core/transform_bridge.go \
   'native runtime config reader is exported'
