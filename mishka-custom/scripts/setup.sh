@@ -14,9 +14,10 @@
 #      随后依次叠加 0002 内置「免流」配置、0003 可视化编辑器修复、
 #      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐、
 #      0005 主页面板 / Web 界面（box.app 同款）+ 路由规则匹配值省略号、
-#      0006 规则编辑按钮间距 + 连接页代理类型标签 + Web 面板不闪/不缺内容，
-#      0007 字段整理按钮移到标题左侧 + 面板缓存页重进黑屏修复（沿用平台 WebView API，不加依赖）、
-#      0008 面板重进「先刷新、再露内容」：复用缓存 WebView 时先刷新再显形，修掉重进闪烁 / 内容缺失
+#      0006 规则编辑按钮间距 + 连接页代理类型标签、
+#      0007 字段整理按钮移到标题左侧（沿用平台 WebView API，不加依赖）、
+#      0008 ROOT TPROXY / eBPF 子模式下把活动配置里的 tun.enable 写死 false（与运行时一致）、
+#      0009 面板改用独立 Activity 承载（换加载方式：不再挂在主界面导航栈里）
 #
 # 回滚：scripts/revert-patches.sh --all
 set -euo pipefail
@@ -249,7 +250,7 @@ EOF
 fi
 
 # ---------------------------------------------------------------- 5. app 侧补丁
-step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理 + Web 面板修复 + 面板重进刷新）"
+step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理 + 面板 + 关配置 tun + 面板独立 Activity）"
 if app_patch_applied "$REPO"; then
   ok "已应用（$CUSTOM_REL/anchor 与编辑器入口都在）"
 else
@@ -335,59 +336,86 @@ else
   die "面板补丁（0005）打不上：custom/panel、navigation 或 home 下的文件与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0005\" 看详细原因"
 fi
 
-# 0006 在 0005 之上：三个小修复——
+# 0006 在 0005 之上：两个小修复——
 #  1) 规则编辑对话框「切换为可视化编辑」按钮与输入框之间补 8dp 垂直间距；
-#  2) 连接列表每条 TCP/UDP 标签后追加代理类型标签（TUN/TPROXY/EBPF，取 metadata.type）；
-#  3) Web 界面面板反复返回/进入闪烁 + 内容缺失：factory 首帧即置 alpha=0 去白闪、
-#     去掉 INVISIBLE（Chromium 在 INVISIBLE 下会暂停合成，SPA 首屏易残缺）、
-#     WebView 实例跨进入缓存复用（同 sessionKey 再进不再 destroy→new→loadUrl）。
-PATCH_0006="$DELIVER/patches/app/0006-fixes-editor-margin-conn-proxytype-panel-flicker.patch"
-if grep -q "takeCached" "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt" 2>/dev/null; then
-  ok "规则编辑间距 / 连接代理类型 / 面板不闪（0006）已应用"
+#  2) 连接列表每条 TCP/UDP 标签后追加代理类型标签（TUN/TPROXY/EBPF，取 metadata.type）。
+PATCH_0006="$DELIVER/patches/app/0006-fixes-editor-margin-conn-proxytype.patch"
+FFP_REL="app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt"
+CONN_REL="app/src/main/kotlin/top/yukonga/mishka/ui/screen/connection/ConnectionScreen.kt"
+if grep -q 'import androidx.compose.foundation.layout.height' "$REPO/$FFP_REL" 2>/dev/null \
+    && grep -q 'val proxyType = meta.type.trim().uppercase()' "$REPO/$CONN_REL" 2>/dev/null; then
+  ok "规则编辑间距 / 连接代理类型（0006）已应用"
 elif git -C "$REPO" apply --check "$PATCH_0006" 2>/dev/null; then
   git -C "$REPO" apply "$PATCH_0006"
-  ok "已应用 patches/app/0006-fixes-editor-margin-conn-proxytype-panel-flicker.patch（按钮间距 + 代理类型标签 + 面板不闪）"
+  ok "已应用 patches/app/0006-fixes-editor-margin-conn-proxytype.patch（按钮间距 + 代理类型标签）"
 elif git -C "$REPO" apply --check --3way "$PATCH_0006" 2>/dev/null; then
   git -C "$REPO" apply --3way "$PATCH_0006"
-  ok "已应用（3way 合并，注意确认 FlowFormPages / ConnectionScreen / PanelWebView 的改动）"
+  ok "已应用（3way 合并，注意确认 FlowFormPages / ConnectionScreen 的改动）"
 else
-  die "修复补丁（0006）打不上：规则编辑 / 连接列表 / PanelWebView 与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0006\" 看详细原因"
+  die "修复补丁（0006）打不上：规则编辑 / 连接列表与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0006\" 看详细原因"
 fi
 
-# 0007：把字段整理按钮放到「config.yaml」标题左侧；修复返回/重进后缓存 WebView 仍透明的问题。
-PATCH_0007="$DELIVER/patches/app/0007-config-tidy-toolbar-and-panel-reentry.patch"
-if grep -q 'val contentCommitted: Boolean = false' "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt" 2>/dev/null \
-    && grep -q 'fun tidyConfig()' "$REPO/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt" 2>/dev/null; then
-  ok "字段整理工具栏位置 / 面板缓存页重进黑屏修复（0007）已应用"
+# 0007：把字段整理按钮放到「config.yaml」标题左侧（文件管理器编辑器）。
+PATCH_0007="$DELIVER/patches/app/0007-config-tidy-toolbar.patch"
+if grep -q 'fun tidyConfig()' "$REPO/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt" 2>/dev/null; then
+  ok "字段整理工具栏位置（0007）已应用"
 elif git -C "$REPO" apply --check "$PATCH_0007" 2>/dev/null; then
   git -C "$REPO" apply "$PATCH_0007"
-  ok "已应用 patches/app/0007-config-tidy-toolbar-and-panel-reentry.patch"
+  ok "已应用 patches/app/0007-config-tidy-toolbar.patch"
 elif git -C "$REPO" apply --check --3way "$PATCH_0007" 2>/dev/null; then
   git -C "$REPO" apply --3way "$PATCH_0007"
-  ok "已应用（3way 合并，注意确认 FileManagerEditorScreen / PanelWebView）"
+  ok "已应用（3way 合并，注意确认 FileManagerEditorScreen 的改动）"
 else
-  die "补丁（0007）打不上：FileManagerEditorScreen / PanelWebView 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0007\" 看详细原因"
+  die "补丁（0007）打不上：FileManagerEditorScreen 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0007\" 看详细原因"
 fi
 
-# ---------------------------------------------------------------- 5h. 面板重进「先刷新、再露内容」
-# 0008 在 0007 之上：重启 App 后第一次进 Web 界面正常，之后再进就「闪一下 + 内容缺一块」——
-# 复用的缓存 WebView 重新挂回窗口时，手上是 detach 前的合成帧，SPA 面板的首屏资源在 detach
-# 期间并不保证还在。现在复用实例一律先把 alpha 归 0，onResume + 重排之后把刷新排到 attach
-# 之后执行（没 commit 过的半截页 loadUrl 入口，已提交过的页 reload 当前地址），新页面 commit
-# （最迟 onPageFinished）才显形；顶栏通过 onRefreshStart 同步转圈。首次进入没有缓存实例，
-# 本来就是新建 + loadUrl，行为与重进一致。仍然只用平台 android.webkit，不加依赖。
-PATCH_0008="$DELIVER/patches/app/0008-panel-reentry-refresh-before-show.patch"
-if grep -q 'refreshBeforeShow: Boolean = true' "$REPO/$CUSTOM_REL/panel/PanelWebView.kt" 2>/dev/null \
-    && grep -q 'onRefreshStart = { refreshing = true }' "$REPO/$CUSTOM_REL/panel/PanelScreen.kt" 2>/dev/null; then
-  ok "面板重进先刷新（0008）已应用"
+# ---------------------------------------------------------------- 5h. TPROXY / eBPF 关闭配置里的 tun
+# 0008 在 0007 之上：ROOT 的 TPROXY 与 eBPF 两个子模式都不初始化 sing-tun，运行时 override 里
+# 也一直是 tun.enable=false，但活动配置（config.yaml / 订阅配置）里的 tun.enable 仍会被补成
+# true——导出或手看配置时与运行时不一致，排查极易误导。现在 prepare() 增加 forceTunDisabled：
+# 这两个子模式下明文配置把 tun.enable 写死 false（缺 tun 段就按 enable=false 补默认段），age
+# 密文配置无法回写，改为在 per-profile overlay 的 tunDefaults 里记 enable=false。TUN 子模式的
+# forceTunEnabled 与 VPN 路径完全不变。
+PATCH_0008="$DELIVER/patches/app/0008-root-tproxy-ebpf-disable-profile-tun.patch"
+APRC_REL="app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt"
+ROOTSVC_REL="app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt"
+if grep -q 'forceTunDisabled: Boolean = false' "$REPO/$APRC_REL" 2>/dev/null \
+    && grep -q 'forceTunDisabled = submode == Submode.Tproxy || submode == Submode.Ebpf' "$REPO/$ROOTSVC_REL" 2>/dev/null; then
+  ok "TPROXY / eBPF 关闭配置 tun（0008）已应用"
 elif git -C "$REPO" apply --check "$PATCH_0008" 2>/dev/null; then
   git -C "$REPO" apply "$PATCH_0008"
-  ok "已应用 patches/app/0008-panel-reentry-refresh-before-show.patch（面板重进先刷新）"
+  ok "已应用 patches/app/0008-root-tproxy-ebpf-disable-profile-tun.patch（TPROXY / eBPF 关配置 tun）"
 elif git -C "$REPO" apply --check --3way "$PATCH_0008" 2>/dev/null; then
   git -C "$REPO" apply --3way "$PATCH_0008"
-  ok "已应用（3way 合并，注意确认 PanelWebView / PanelScreen 的改动）"
+  ok "已应用（3way 合并，注意确认 ActiveProfileRuntimeConfig / MishkaRootService 的改动）"
 else
-  die "补丁（0008）打不上：PanelWebView / PanelScreen 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0008\" 看详细原因"
+  die "补丁（0008）打不上：ActiveProfileRuntimeConfig / MishkaRootService 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0008\" 看详细原因"
+fi
+
+# ---------------------------------------------------------------- 5i. 面板改用独立 Activity 承载
+# 0009 在 0008 之上：面板 WebView 原先挂在主界面的导航栈里，重进要跟着转场 / 导航 detach-attach，
+# 白闪与内容缺失都出在这一层。现在换掉加载方式——
+#   · 新增 PanelActivity（exported=false、singleTop、Theme.Mishka、edge-to-edge 跟随主题），
+#     主页「外部面板」改成起 intent，Route.Panel 与导航里的 entry<Route.Panel> 一并删除；
+#   · 主题从 App.kt 里原样抽出 MishkaTheme（ui/theme/MishkaTheme.kt）给两个宿主共用，
+#     面板的配色 / 缩放密度 / CompositionLocal 与主界面完全一致；
+#   · 每次进入都是干净的新 WebView + 入口 URL（重进回面板首页，页内历史清掉），退出 finish
+#     即丢弃实例；登录态在 localStorage / CookieManager 里，跨实例保留；
+#   · PanelScreen 不再需要 isDark 入参（改读 LocalAppDarkMode），onBack 由宿主传 finish()。
+# 仍然只用平台 android.webkit 与项目现有 Compose API，不引入新依赖。
+PATCH_0009="$DELIVER/patches/app/0009-panel-standalone-activity.patch"
+PANEL_ACT_REL="app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt"
+ROUTE_REL="app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt"
+if [ -f "$REPO/$PANEL_ACT_REL" ] && ! grep -q 'data object Panel : Route' "$REPO/$ROUTE_REL" 2>/dev/null; then
+  ok "面板独立 Activity（0009）已应用"
+elif git -C "$REPO" apply --check "$PATCH_0009" 2>/dev/null; then
+  git -C "$REPO" apply "$PATCH_0009"
+  ok "已应用 patches/app/0009-panel-standalone-activity.patch（面板独立 Activity）"
+elif git -C "$REPO" apply --check --3way "$PATCH_0009" 2>/dev/null; then
+  git -C "$REPO" apply --3way "$PATCH_0009"
+  ok "已应用（3way 合并，注意确认 PanelActivity / App.kt / AppNavigation.kt 的改动）"
+else
+  die "补丁（0009）打不上：PanelActivity / App.kt / AppNavigation.kt / Route.kt 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0009\" 看详细原因"
 fi
 
 # ---------------------------------------------------------------- 6. 总结
@@ -399,7 +427,7 @@ cat <<EOF
   下一步：
     bash $DELIVER/scripts/build-release.sh --repo "$REPO"      # 本地出 release APK（只出 release）
     bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO"     # 校验 app 补丁可逆（只验 0001）
-    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0008 整套校验
+    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0009 整套校验
     bash $DELIVER/tools/verify_mihomo_patches.sh --kernel-dir "$KERNEL_DIR"
   回滚：
     bash $DELIVER/scripts/revert-patches.sh --repo "$REPO" --all

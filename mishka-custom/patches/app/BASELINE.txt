@@ -97,28 +97,38 @@ patch0005_blob_new=a031029de0fab172a031522c3fac2d85390c3b2c app/src/main/kotlin/
 patch0005_blob_new=199e71c370e100dc3c33b9d8802801a447c2d807 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelStore.kt
 patch0005_blob_new=1769d75b488fc4fa4085445501b85783959af1e6 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 # tools/verify_app_patch.sh --series 会按 0002 → 0003 → 0004 → 0005 的顺序把后续补丁也应用上并跑各自的断言。
-# --- 0006：三个小修复（在 0001–0005 之上应用）---
+# --- 0006：两个小修复（在 0001–0005 之上应用）---
 # 1. 规则编辑对话框「切换为可视化编辑/文本编辑」按钮与下面输入框之间补 8dp 垂直间距；
 # 2. 连接列表每条的 TCP/UDP 网络标签后追加代理类型标签（TUN/TPROXY/EBPF，取自 metadata.type），
-#    用 primary 色胶囊和网络标签并排；与 network 重复或为空时不显示；
-# 3. Web 界面面板反复返回/进入闪烁 + 内容缺失：
-#    - factory 构造完 WebView 立刻将 alpha 置 0（而不是等 update 重组才设），去掉首帧白底；
-#    - 不再用 INVISIBLE 隐藏——INVISIBLE 会让 Chromium 暂停渲染/合成，SPA 面板首屏资源未落完
-#      即被暂停时会出现「画布空/部分 DOM 缺失」的现象；全程保持 VISIBLE，仅用 alpha 控制显隐；
-#    - 新增「实例缓存」：离开面板时缓存 WebView，下次同 sessionKey 进入直接复用（DOM/JS 状态保留），
-#      不再每次 destroy→new→loadUrl；切面板（sessionKey 变化）时旧实例自动销毁，同时补一个预热空位。
+#    用 primary 色胶囊和网络标签并排；与 network 重复或为空时不显示。
 patch0006_prereq=0001,0002,0003,0004,0005
-patch0006_sha256=d0dee8edabb0df0f19ec14124d70d69ea5caa08b1637bc164ff4bcb254f893cf
-# --- 0007：字段整理按钮移到文件名左侧；修复面板缓存页重进后透明黑屏（在 0001–0006 之上应用）---
-# WebView tag 持久记录内容已提交状态；已提交且 URL/reloadKey 未变时直接显示缓存页；未提交缓存页重载入口 URL；
-# 同步恢复 canGoBack。Sort 按钮放在返回键之后、config.yaml 文件名之前，保留原来的整理行为；不引入新依赖。
+patch0006_sha256=9a7ce3bd7aebef50442fbb2c409fcec9357ebd910d15f7cff75af6741afcac4c
+# --- 0007：字段整理按钮移到文件名左侧（在 0001–0006 之上应用）---
+# Sort 按钮放在返回键之后、config.yaml 文件名之前，保留原来的整理行为；不引入新依赖。
 patch0007_prereq=0001,0002,0003,0004,0005,0006
-patch0007_sha256=5a55cf1d214e606f8851b17a242002f7f52d4c7886a7c5e8f2685f4078e80ed4
-# --- 0008：面板重进「先刷新、再露内容」（在 0001–0007 之上应用）---
-# 重启 App 后第一次进 Web 界面正常、之后再进就「闪一下 + 内容缺一块」：复用缓存 WebView 重新挂回
-# 窗口时，手上是 detach 前的合成帧，SPA 首屏资源不保证还在。现在复用实例一律先 onResume +
-# 重排，并把刷新 post 到 attach 之后（未提交的半截页 loadUrl 入口、已提交页 reload），刷新完成
-# （onPageCommitVisible / onPageFinished）前 alpha 保持 0，只露底色；新增 onRefreshStart 回调用来
-# 让顶栏转圈，onRelease 里补 onPause 与 onResume 配对。首次进入仍走新建实例 + loadUrl。不引入新依赖。
+patch0007_sha256=b3d3ebfaca5a9ed9910c4c5fb52f0f5431725469d2b0d7f1a333a0a8904c9a0a
+# --- 0008：TPROXY / eBPF 子模式关闭活动配置里的 tun（在 0001–0007 之上应用）---
+# ROOT 的 TPROXY 与 eBPF 两个子模式都不初始化 sing-tun，运行时 override 里也一直是
+# tun.enable=false，但活动配置（明文 config.yaml / 订阅配置）里的 tun 仍会被补成 enable: true，
+# 与运行时不一致，导出或手看配置时极易误导排查。现在 prepare() 增加 forceTunDisabled：
+#   · 这两个子模式下把明文配置的 tun.enable 写死 false（缺 tun 段时按 enable=false 补默认段）；
+#   · age 密文配置无法回写，改为在 per-profile overlay 的 tunDefaults 里记 enable=false；
+#   · TUN 子模式的 forceTunEnabled、以及 VPN 路径（MishkaTunService）完全不变。
 patch0008_prereq=0001,0002,0003,0004,0005,0006,0007
-patch0008_sha256=1c86a86bd741767a70db562dc88a76ba2bc00e1f4df35c40f30487fe90bb5687
+patch0008_sha256=498eb06fd94df6fa265f05eabafb1a86f93f38cf129eea0c071cace02ad9e3fa
+# --- 0009：面板改用独立 Activity 承载（换加载方式，在 0001–0008 之上应用）---
+# 面板 WebView 原先挂在主界面的导航栈里，重进要跟着转场 / 导航 detach-attach，白闪与内容缺失
+# 都出在这一层。现在换成独立 Activity：
+#   · 新增 PanelActivity（exported=false、singleTop、Theme.Mishka、edge-to-edge 跟随主题）；
+#   · 主题从 App.kt 里原样抽出 MishkaTheme（ui/theme/MishkaTheme.kt），主界面与面板 Activity
+#     共用同一份配色 / 缩放密度 / CompositionLocal；
+#   · 主页「外部面板」改为起 intent（HomeScreen / QuickEntriesSection 的回调不动），Route.Panel
+#     与导航里的 entry<Route.Panel> 一并删除；
+#   · 每次进入都是干净的新 WebView + 入口 URL（重进回面板首页，页内历史清掉），退出 finish 即
+#     丢弃实例；登录态在 localStorage / CookieManager 里，跨实例保留；
+#   · PanelScreen 不再需要 isDark 入参（改读 LocalAppDarkMode），onBack 由宿主传 finish()。
+# 仍然只用平台 android.webkit 与项目现有 Compose API，不引入新依赖。
+patch0009_prereq=0001,0002,0003,0004,0005,0006,0007,0008
+patch0009_sha256=258b1ccfe59f2ac560e9c463b7120b9ae35874b4395f02b2545a68ce7f57c5c3
+patch0009_blob_new=89a0fc21c1d02369e859c389e69a1c10b5e63d29 app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt
+patch0009_blob_new=4055f3cc1e20cf48dda4e1ffc2069b635fdfdd9e app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt

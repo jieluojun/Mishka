@@ -1,0 +1,507 @@
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 9ba59f6..f857004 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -42,6 +42,13 @@
+             </intent-filter>
+         </activity>
+ 
++        <activity
++            android:name=".PanelActivity"
++            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|mnc|colorMode|density|fontScale|fontWeightAdjustment|keyboard|layoutDirection|locale|mcc|navigation|smallestScreenSize|touchscreen|uiMode"
++            android:exported="false"
++            android:launchMode="singleTop"
++            android:theme="@style/Theme.Mishka"
++            android:windowSoftInputMode="adjustResize" />
+         <!-- clash:// / clashmeta:// 订阅一键导入深链入口 -->
+         <activity
+             android:name=".ExternalImportActivity"
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/App.kt b/app/src/main/kotlin/top/yukonga/mishka/App.kt
+index 333338c..77870ac 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/App.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/App.kt
+@@ -1,25 +1,12 @@
+ package top.yukonga.mishka
+ 
+-import androidx.compose.foundation.isSystemInDarkTheme
+ import androidx.compose.runtime.Composable
+-import androidx.compose.runtime.CompositionLocalProvider
+-import androidx.compose.runtime.remember
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.platform.LocalDensity
+-import androidx.compose.ui.unit.Density
+ import top.yukonga.mishka.platform.BootStartManager
+ import top.yukonga.mishka.platform.FilePicker
+ import top.yukonga.mishka.platform.PlatformStorage
+ import top.yukonga.mishka.platform.WifiPolicyController
+-import top.yukonga.mishka.ui.component.blur.LocalBlurEnabled
+-import top.yukonga.mishka.ui.component.blur.LocalTopBarBlurStyle
+ import top.yukonga.mishka.ui.navigation.AppNavigation
+-import top.yukonga.mishka.ui.theme.LocalAppDarkMode
+-import top.yukonga.mishka.ui.theme.LocalAppMonetEnabled
+-import top.yukonga.mishka.ui.theme.LocalPlatformDensity
+-import top.yukonga.mishka.ui.theme.ThemeAccentColor
+ import top.yukonga.mishka.ui.theme.ThemeConfig
+-import top.yukonga.mishka.ui.theme.resolveIsDark
+ import top.yukonga.mishka.viewmodel.AppProxyViewModel
+ import top.yukonga.mishka.viewmodel.BackupViewModel
+ import top.yukonga.mishka.viewmodel.ConnectionViewModel
+@@ -33,12 +20,6 @@ import top.yukonga.mishka.viewmodel.ProviderViewModel
+ import top.yukonga.mishka.viewmodel.ProxyViewModel
+ import top.yukonga.mishka.viewmodel.OverrideProfileViewModel
+ import top.yukonga.mishka.viewmodel.SubscriptionViewModel
+-import top.yukonga.miuix.kmp.theme.ColorSchemeMode
+-import top.yukonga.miuix.kmp.theme.LocalContentColor
+-import top.yukonga.miuix.kmp.theme.MiuixTheme
+-import top.yukonga.miuix.kmp.theme.ThemeColorSpec
+-import top.yukonga.miuix.kmp.theme.ThemeController
+-import top.yukonga.miuix.kmp.theme.platformDynamicColors
+ 
+ @Composable
+ fun App(
+@@ -71,92 +52,36 @@ fun App(
+     backupViewModel: BackupViewModel? = null,
+     onRestartApp: () -> Unit = {},
+ ) {
+-    val colorSchemeMode = when {
+-        !themeConfig.useMonet && themeConfig.colorMode == 1 -> ColorSchemeMode.Light
+-        !themeConfig.useMonet && themeConfig.colorMode == 2 -> ColorSchemeMode.Dark
+-        !themeConfig.useMonet -> ColorSchemeMode.System
+-        themeConfig.colorMode == 1 -> ColorSchemeMode.MonetLight
+-        themeConfig.colorMode == 2 -> ColorSchemeMode.MonetDark
+-        else -> ColorSchemeMode.MonetSystem
+-    }
+-    val isDark = themeConfig.resolveIsDark(isSystemInDarkTheme())
+-    val systemSeedColor = if (themeConfig.useMonet && themeConfig.accentColor == ThemeAccentColor.Default) {
+-        platformDynamicColors(isDark).primary
+-    } else {
+-        null
+-    }
+-    val keyColor = when {
+-        !themeConfig.useMonet -> null
+-        themeConfig.accentColor == ThemeAccentColor.Default -> systemSeedColor
+-        else -> themeConfig.accentColor.seedColor
+-    }
+-    val controller = remember(themeConfig, colorSchemeMode, keyColor, isDark) {
+-        ThemeController(
+-            colorSchemeMode = colorSchemeMode,
+-            keyColor = keyColor,
+-            colorSpec = ThemeColorSpec.Spec2025,
+-            paletteStyle = themeConfig.paletteStyle,
++    MishkaTheme(themeConfig = themeConfig) {
++        AppNavigation(
++            themeConfig = themeConfig,
++            onThemeConfigChange = onThemeConfigChange,
++            homeViewModel = homeViewModel,
++            subscriptionViewModel = subscriptionViewModel,
++            overrideProfileViewModel = overrideProfileViewModel,
++            proxyViewModel = proxyViewModel,
++            logViewModel = logViewModel,
++            providerViewModel = providerViewModel,
++            connectionViewModel = connectionViewModel,
++            dnsQueryViewModel = dnsQueryViewModel,
++            networkSettingsViewModel = networkSettingsViewModel,
++            metaSettingsViewModel = metaSettingsViewModel,
++            externalControlViewModel = externalControlViewModel,
++            appProxyViewModel = appProxyViewModel,
++            filePicker = filePicker,
++            storage = storage,
++            bootStartManager = bootStartManager,
++            mihomoVersion = mihomoVersion,
++            onScanQR = onScanQR,
++            wifiPolicyController = wifiPolicyController,
++            onRequestWifiPermission = onRequestWifiPermission,
++            onPredictiveBackChange = onPredictiveBackChange,
++            onHideTaskCardChange = onHideTaskCardChange,
++            hasRootPermission = hasRootPermission,
++            deepLinkImport = deepLinkImport,
++            onDeepLinkImportConsumed = onDeepLinkImportConsumed,
++            backupViewModel = backupViewModel,
++            onRestartApp = onRestartApp,
+         )
+     }
+-    val colors = controller.currentColors()
+-    val themedColors = remember(colors, isDark, themeConfig.pureBlack) {
+-        if (themeConfig.useMonet && themeConfig.pureBlack && isDark) {
+-            colors.copy(
+-                background = Color.Black,
+-                surface = Color.Black,
+-            )
+-        } else {
+-            colors
+-        }
+-    }
+-
+-    MiuixTheme(colors = themedColors) {
+-        val currentDensity = LocalDensity.current
+-        val appDensity = remember(currentDensity, themeConfig.densityScale) {
+-            Density(
+-                density = currentDensity.density * themeConfig.densityScale,
+-                fontScale = currentDensity.fontScale,
+-            )
+-        }
+-        CompositionLocalProvider(
+-            LocalAppDarkMode provides isDark,
+-            LocalAppMonetEnabled provides themeConfig.useMonet,
+-            LocalPlatformDensity provides currentDensity,
+-            LocalDensity provides appDensity,
+-            LocalBlurEnabled provides themeConfig.blurEnabled,
+-            LocalTopBarBlurStyle provides themeConfig.topBarBlurStyle,
+-            LocalContentColor provides MiuixTheme.colorScheme.onBackground,
+-        ) {
+-            AppNavigation(
+-                themeConfig = themeConfig,
+-                onThemeConfigChange = onThemeConfigChange,
+-                homeViewModel = homeViewModel,
+-                subscriptionViewModel = subscriptionViewModel,
+-                overrideProfileViewModel = overrideProfileViewModel,
+-                proxyViewModel = proxyViewModel,
+-                logViewModel = logViewModel,
+-                providerViewModel = providerViewModel,
+-                connectionViewModel = connectionViewModel,
+-                dnsQueryViewModel = dnsQueryViewModel,
+-                networkSettingsViewModel = networkSettingsViewModel,
+-                metaSettingsViewModel = metaSettingsViewModel,
+-                externalControlViewModel = externalControlViewModel,
+-                appProxyViewModel = appProxyViewModel,
+-                filePicker = filePicker,
+-                storage = storage,
+-                bootStartManager = bootStartManager,
+-                mihomoVersion = mihomoVersion,
+-                onScanQR = onScanQR,
+-                wifiPolicyController = wifiPolicyController,
+-                onRequestWifiPermission = onRequestWifiPermission,
+-                onPredictiveBackChange = onPredictiveBackChange,
+-                onHideTaskCardChange = onHideTaskCardChange,
+-                hasRootPermission = hasRootPermission,
+-                deepLinkImport = deepLinkImport,
+-                onDeepLinkImportConsumed = onDeepLinkImportConsumed,
+-                backupViewModel = backupViewModel,
+-                onRestartApp = onRestartApp,
+-            )
+-        }
+-    }
+ }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt
+new file mode 100644
+index 0000000..89a0fc2
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt
+@@ -0,0 +1,109 @@
++package top.yukonga.mishka
++
++import android.content.Context
++import android.content.Intent
++import android.content.res.Configuration
++import android.graphics.Color
++import android.os.Bundle
++import androidx.activity.ComponentActivity
++import androidx.activity.SystemBarStyle
++import androidx.activity.compose.setContent
++import androidx.activity.enableEdgeToEdge
++import androidx.core.view.WindowInsetsControllerCompat
++import org.koin.android.ext.android.get
++import top.yukonga.mishka.custom.panel.PanelScreen
++import top.yukonga.mishka.custom.panel.WebViewPreloader
++import top.yukonga.mishka.platform.PlatformStorage
++import top.yukonga.mishka.ui.theme.MishkaTheme
++import top.yukonga.mishka.ui.theme.ThemeConfig
++import top.yukonga.mishka.ui.theme.readThemeConfig
++import top.yukonga.mishka.ui.theme.resolveIsDark
++
++/**
++ * 外部面板（Web 界面）的独立 Activity——面板不再挂在主界面的 Compose 树里。
++ *
++ * **为什么单独开一个 Activity**：面板 WebView 原来是主界面导航栈里的一屏，重进要跟着
++ * 转场 / 导航重建实例，白闪、内容缺失都出在这一层；把它挪到独立 Activity 后，每次进入
++ * 都是「干净的新 WebView + 加载入口 URL」这一条确定路径（和 box.app 的重进语义一致），
++ * 退出即 finish、实例整体丢弃，不再和主界面的转场、弹层窗口抢合成。
++ *
++ * **登录态不受影响**：面板自己的控制器地址 / 密钥存在 WebView 的 localStorage，Cookie
++ * 也在系统 CookieManager 里，两者都跨实例保留——丢的只是 WebView 对象，不是数据。
++ *
++ * **外观跟主界面一致**：主题走 [MishkaTheme]（与 [App] 同一份配色与 CompositionLocal），
++ * 系统栏按 [ThemeConfig] 做 edge-to-edge，行为和 MainActivity 相同。
++ *
++ * **返回键**：页内历史由 [PanelScreen] 内部的 BackHandler 先接（canGoBack 时退网页历史），
++ * 退无可退时系统默认收尾本 Activity，等同于「退出面板」。
++ */
++class PanelActivity : ComponentActivity() {
++
++    private var latestThemeConfig: ThemeConfig? = null
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        // 预热主界面已经调过一次；这里是幂等的兜底（例如进程恢复时先起面板 Activity）
++        WebViewPreloader.preload(this)
++
++        val storage: PlatformStorage = get()
++        val themeConfig = readThemeConfig(storage)
++        updateEdgeToEdge(themeConfig)
++
++        setContent {
++            MishkaTheme(themeConfig = themeConfig) {
++                PanelScreen(onBack = { finish() })
++            }
++        }
++    }
++
++    override fun onConfigurationChanged(newConfig: Configuration) {
++        super.onConfigurationChanged(newConfig)
++        // manifest configChanges=uiMode 吞掉了深浅色切换的重建，前台期间系统定时深色模式
++        // 翻转既无焦点变化也无其它回调，只有这里能重新应用系统栏外观
++        latestThemeConfig?.let(::updateEdgeToEdge)
++    }
++
++    private fun updateEdgeToEdge(themeConfig: ThemeConfig) {
++        latestThemeConfig = themeConfig
++        val isDark = themeConfig.resolveIsDark(
++            (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES,
++        )
++        val systemBarStyle = themeConfig.systemBarStyle()
++        enableEdgeToEdge(
++            statusBarStyle = systemBarStyle,
++            navigationBarStyle = systemBarStyle,
++        )
++        enforceSystemBarsAppearance(isDark)
++        window.decorView.post {
++            enforceSystemBarsAppearance(isDark)
++        }
++    }
++
++    private fun ThemeConfig.systemBarStyle(): SystemBarStyle = when (colorMode) {
++        1 -> SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
++        2 -> SystemBarStyle.dark(Color.TRANSPARENT)
++        else -> SystemBarStyle.auto(
++            lightScrim = Color.TRANSPARENT,
++            darkScrim = Color.TRANSPARENT,
++            detectDarkMode = { resources ->
++                (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
++                    Configuration.UI_MODE_NIGHT_YES
++            },
++        )
++    }
++
++    private fun enforceSystemBarsAppearance(isDark: Boolean) {
++        WindowInsetsControllerCompat(window, window.decorView).apply {
++            isAppearanceLightStatusBars = !isDark
++            isAppearanceLightNavigationBars = !isDark
++        }
++    }
++
++    companion object {
++        private const val ACTION_OPEN_PANEL = "top.yukonga.mishka.action.OPEN_PANEL"
++
++        /** 主界面「外部面板」入口：显式 intent 只在本应用内跳转（manifest 里 exported=false）。 */
++        fun createIntent(context: Context): Intent =
++            Intent(context, PanelActivity::class.java).setAction(ACTION_OPEN_PANEL)
++    }
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+index 7d462ca..f04fa48 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+@@ -47,6 +47,7 @@ import top.yukonga.mishka.R
+ import top.yukonga.mishka.platform.ProxyServiceBridge
+ import top.yukonga.mishka.platform.ProxyState
+ import top.yukonga.mishka.platform.showToast
++import top.yukonga.mishka.ui.theme.LocalAppDarkMode
+ import top.yukonga.mishka.ui.theme.StatusColors
+ import top.yukonga.miuix.kmp.basic.ButtonDefaults
+ import top.yukonga.miuix.kmp.basic.Card
+@@ -80,21 +81,22 @@ import top.yukonga.miuix.kmp.window.WindowDialog
+  * **顶栏对齐 box.app 的布局、颜色跟随 App 主题**：单行布局——`ChevronBackward` 返回、18sp
+  * 左对齐标题、刷新 / 面板清单（`Tune` 滑杆）/ 清除数据；底色用 `MiuixTheme.colorScheme.surface`
+  * 、标题与图标用 `onSurface`，和 App 其它顶栏同色系、随深浅色主题走。顶栏铺到状态栏后面，
+- * 状态栏图标外观交给 MainActivity 的主题化 enforce，不再强制。
++ * 状态栏图标外观交给 [top.yukonga.mishka.PanelActivity] 的主题化 enforce，不再强制。
+  *
+- * **返回进入逻辑整套照搬 box.app `ThemedWebView`**：每次进入都是新 WebView + 加载入口
+- * （重进总是面板首页），返回先退页内历史、退无可退退出页面；防白闪靠组件的
+- * `hideUntilCommitVisible`（内容提交前隐藏 WebView、只露底色），换面板加载完清 history。
+- * 新实例由 [WebViewPreloader] 秒建。
++ * **宿主是独立 Activity**（[top.yukonga.mishka.PanelActivity]，不在主界面导航栈里）：每次
++ * 进入都是新 WebView + 加载入口（重进总是面板首页，页内历史可清），返回先退页内历史、
++ * 退无可退由系统收尾 Activity；防白闪靠组件的 `hideUntilCommitVisible`（内容提交前隐藏
++ * WebView、只露底色），换面板加载完清 history。新实例由 [WebViewPreloader] 秒建。
+  *
+- * @param isDark 跟随 App 主题，交给 WebView 的算法深色
++ * @param onBack 顶栏返回 / 页内历史退完后的收尾，由宿主 Activity 传 `finish()`
+  */
+ @Composable
+ fun PanelScreen(
+-    isDark: Boolean,
+     onBack: () -> Unit = {},
+ ) {
+     val context = LocalContext.current
++    // 跟随 App 主题（宿主 Activity 用 MishkaTheme 提供），交给 WebView 的算法深色
++    val isDark = LocalAppDarkMode.current
+     val scope = rememberCoroutineScope()
+     val status by ProxyServiceBridge.state.collectAsStateWithLifecycle()
+ 
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+index 6090441..88af607 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+@@ -46,6 +46,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.platform.LocalLayoutDirection
+ import androidx.compose.ui.platform.LocalUriHandler
+ import androidx.compose.ui.res.stringResource
+@@ -65,8 +66,8 @@ import kotlinx.coroutines.job
+ import kotlinx.coroutines.launch
+ import kotlinx.serialization.json.Json
+ import top.yukonga.mishka.DeepLinkImportRequest
++import top.yukonga.mishka.PanelActivity
+ import top.yukonga.mishka.R
+-import top.yukonga.mishka.custom.panel.PanelScreen
+ import top.yukonga.mishka.platform.BootStartManager
+ import top.yukonga.mishka.platform.FilePicker
+ import top.yukonga.mishka.platform.PlatformStorage
+@@ -413,15 +414,6 @@ fun AppNavigation(
+                     )
+                 }
+             }
+-            // 外部面板：返回键优先给网页翻历史（canGoBack 时），而边缘侧滑走的是同一条
+-            // NavigationEvent 分发，会先被子级 BackHandler 截走变成「网页后退」，看着像卡住。
+-            // 这一屏干脆关掉横滑返回，只保留系统返回键
+-            entry<Route.Panel>(swipeDismiss = NavSwipeDirection.None) {
+-                PanelScreen(
+-                    isDark = LocalAppDarkMode.current,
+-                    onBack = { navigator.pop() },
+-                )
+-            }
+             entry<Route.VpnSettings>(swipeDismiss = swipeDismiss) {
+                 storage?.let {
+                     VpnSettingsScreen(
+@@ -560,6 +552,8 @@ private fun MainPage(
+ ) {
+     val homeUiState = homeViewModel?.uiState?.collectAsStateWithLifecycle()?.value ?: HomeUiState()
+     val selectedPage = mainPagerState.selectedPage
++    // 外部面板走独立 Activity（见 PanelActivity）：这里只负责起 intent
++    val context = LocalContext.current
+     val interceptPagerGestures =
+         themeConfig.pagerInterceptionMode == PagerInterceptionMode.CrossAxisInterceptor
+     val nativePagerNestedScrollConnection = PagerDefaults.pageNestedScrollConnection(
+@@ -602,7 +596,7 @@ private fun MainPage(
+                     onNavigateProvider = { navigator.push(Route.Provider) },
+                     onNavigateConnection = { navigator.push(Route.Connection) },
+                     onNavigateDnsQuery = { navigator.push(Route.DnsQuery) },
+-                    onNavigatePanel = { navigator.push(Route.Panel) },
++                    onNavigatePanel = { context.startActivity(PanelActivity.createIntent(context)) },
+                     onStartProxy = { homeViewModel?.startProxy() },
+                     onSwitchMode = { homeViewModel?.switchMode(it) },
+                     onSwitchTunStack = { homeViewModel?.switchTunStack(it) },
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
+index d1bf50e..c5f8970 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
+@@ -34,9 +34,6 @@ sealed interface Route : NavKey {
+     @Serializable
+     data object DnsQuery : Route
+ 
+-    @Serializable
+-    data object Panel : Route
+-
+     @Serializable
+     data object Connection : Route
+ 
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt
+new file mode 100644
+index 0000000..4055f3c
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt
+@@ -0,0 +1,90 @@
++package top.yukonga.mishka.ui.theme
++
++import androidx.compose.foundation.isSystemInDarkTheme
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.CompositionLocalProvider
++import androidx.compose.runtime.remember
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.platform.LocalDensity
++import androidx.compose.ui.unit.Density
++import top.yukonga.mishka.ui.component.blur.LocalBlurEnabled
++import top.yukonga.mishka.ui.component.blur.LocalTopBarBlurStyle
++import top.yukonga.miuix.kmp.theme.ColorSchemeMode
++import top.yukonga.miuix.kmp.theme.LocalContentColor
++import top.yukonga.miuix.kmp.theme.MiuixTheme
++import top.yukonga.miuix.kmp.theme.ThemeColorSpec
++import top.yukonga.miuix.kmp.theme.ThemeController
++import top.yukonga.miuix.kmp.theme.platformDynamicColors
++
++/**
++ * App 统一主题容器：Miuix 配色 + App 级 CompositionLocal（深浅色、Monet、缩放密度、模糊开关）。
++ *
++ * 从 [top.yukonga.mishka.App] 里原样抽出来，给独立面板 Activity（[top.yukonga.mishka.PanelActivity]）
++ * 复用同一份主题：面板是单独任务栈外的 Activity，缺了这层会掉回 Miuix 默认配色、顶栏与弹窗
++ * 颜色跟主界面不一致。
++ */
++@Composable
++fun MishkaTheme(
++    themeConfig: ThemeConfig = ThemeConfig(),
++    content: @Composable () -> Unit,
++) {
++    val colorSchemeMode = when {
++        !themeConfig.useMonet && themeConfig.colorMode == 1 -> ColorSchemeMode.Light
++        !themeConfig.useMonet && themeConfig.colorMode == 2 -> ColorSchemeMode.Dark
++        !themeConfig.useMonet -> ColorSchemeMode.System
++        themeConfig.colorMode == 1 -> ColorSchemeMode.MonetLight
++        themeConfig.colorMode == 2 -> ColorSchemeMode.MonetDark
++        else -> ColorSchemeMode.MonetSystem
++    }
++    val isDark = themeConfig.resolveIsDark(isSystemInDarkTheme())
++    val systemSeedColor = if (themeConfig.useMonet && themeConfig.accentColor == ThemeAccentColor.Default) {
++        platformDynamicColors(isDark).primary
++    } else {
++        null
++    }
++    val keyColor = when {
++        !themeConfig.useMonet -> null
++        themeConfig.accentColor == ThemeAccentColor.Default -> systemSeedColor
++        else -> themeConfig.accentColor.seedColor
++    }
++    val controller = remember(themeConfig, colorSchemeMode, keyColor, isDark) {
++        ThemeController(
++            colorSchemeMode = colorSchemeMode,
++            keyColor = keyColor,
++            colorSpec = ThemeColorSpec.Spec2025,
++            paletteStyle = themeConfig.paletteStyle,
++        )
++    }
++    val colors = controller.currentColors()
++    val themedColors = remember(colors, isDark, themeConfig.pureBlack) {
++        if (themeConfig.useMonet && themeConfig.pureBlack && isDark) {
++            colors.copy(
++                background = Color.Black,
++                surface = Color.Black,
++            )
++        } else {
++            colors
++        }
++    }
++
++    MiuixTheme(colors = themedColors) {
++        val currentDensity = LocalDensity.current
++        val appDensity = remember(currentDensity, themeConfig.densityScale) {
++            Density(
++                density = currentDensity.density * themeConfig.densityScale,
++                fontScale = currentDensity.fontScale,
++            )
++        }
++        CompositionLocalProvider(
++            LocalAppDarkMode provides isDark,
++            LocalAppMonetEnabled provides themeConfig.useMonet,
++            LocalPlatformDensity provides currentDensity,
++            LocalDensity provides appDensity,
++            LocalBlurEnabled provides themeConfig.blurEnabled,
++            LocalTopBarBlurStyle provides themeConfig.topBarBlurStyle,
++            LocalContentColor provides MiuixTheme.colorScheme.onBackground,
++        ) {
++            content()
++        }
++    }
++}

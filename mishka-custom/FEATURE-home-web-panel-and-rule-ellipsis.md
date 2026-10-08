@@ -32,6 +32,7 @@
 - **换面板即换会话**：`sessionKey` 自增触发 WebView 重建，登录态与页内历史不跨面板串；
 - **防白闪**：内容提交（`onPageCommitVisible`）前 WebView 保持隐藏、只露底色（`hideUntilCommitVisible`）；换 URL 加载完清 history（`resetHistoryOnUrlChange`）；
 - **返回语义**：`NavigationBackHandler(isBackEnabled = canGoBack)`——页内能后退就先退网页，退无可退才退出本页；这一屏的横滑返回关掉（`entry<Route.Panel>(swipeDismiss = NavSwipeDirection.None)`），否则边缘手势会被子级返回处理器截成「网页后退」，看着像卡住；
+  > **0009 起面板改由独立 Activity 承载**（`FIX-panel-standalone-activity.md`）：`Route.Panel` 与这条 `entry` 一并删除，返回语义本身不变——页内历史优先，退无可退由系统收尾面板 Activity；
 - **WebView 能力**：JS / DOM storage / Cookie（第三方 Cookie 也接受，面板登录态可持久）、混合内容放行（https 面板拉 http 控制器接口）、`textZoom = 100`（系统字体缩放不撑爆桌面端面板布局）、深色跟随 App（API 33+ `isAlgorithmicDarkeningAllowed`，29–32 `forceDark`）、`<a download>` 的 `blob:` / `data:` 走 JS 桥 → SAF 存盘、`http(s)` 下载走 `ACTION_CREATE_DOCUMENT`、`<input type=file>` 打开系统选择器、`onPageCommitVisible` 前不露白帧、触摸事件不被外层容器抢走（`requestDisallowInterceptTouchEvent`）、`WebViewPreloader` 两阶段预热（`MainActivity.onCreate` 触发：后台加载 Chromium provider + 主线程空闲预建实例），每次进入新实例但近乎零延迟；
 - **清除数据**：顶栏 → 确认弹窗 → `clearWebViewAppData()`（缓存 / Cookie / Storage / 历史 / 表单 / SSL 偏好）→ toast 提示并重载。
 
@@ -71,11 +72,12 @@ python3 <本包路径>/tools/check_cross_package_imports.py --repo <仓库>
 python3 <本包路径>/tools/check_trailing_lambda.py --repo <仓库>
 ```
 
-0005 段断言覆盖：五个面板文件的关键行为、`Route.Panel` 注册（含 `swipeDismiss = NavSwipeDirection.None`）、主页入口排在「工具」网格之后且不受 `isRunning` 门控、`MainActivity` 的预热调用、四个 locale 的 `home_panel*` / `panel_*` 字符串、`RowCard` 的限行参数与 `rowMaxLines = 1` 只出现在规则页这一处。
+0005 段断言覆盖：五个面板文件的关键行为、`Route.Panel` 注册（含 `swipeDismiss = NavSwipeDirection.None`，0009 之后这条路由被删除，断言在叠 0009 之前跑）、主页入口排在「工具」网格之后且不受 `isRunning` 门控、`MainActivity` 的预热调用、四个 locale 的 `home_panel*` / `panel_*` 字符串、`RowCard` 的限行参数与 `rowMaxLines = 1` 只出现在规则页这一处。
 
 ## 仍然保留的行为
 
 - 0001–0004 的全部功能与断言不变（字段整理 / 列表拖动 / 序号 / 批量测速 / 锚点面板 / 免流配置）；
 - 面板不代填控制器地址与密钥：与 box.app 一致，面板自己首次进入时让用户填一次（MIUI/HyperOS 上各家面板对 `?hostname=&secret=` 的支持不一致，代填错了反而更难排查）；
 - 面板是纯前端页面，代理没起也能进（拿不到数据而已），所以这个入口不跟其它入口一起受「代理运行中」门控；
-- 未引入任何新依赖：`android.webkit` 属系统框架，`AndroidView` 来自已在用的 compose-ui。
+- 未引入任何新依赖：`android.webkit` 属系统框架，`AndroidView` 来自已在用的 compose-ui；
+- 面板的**加载方式**在 0009 里换成了独立 Activity（`FIX-panel-standalone-activity.md`）：本页描述的面板能力（清单、WebView 配置、防白闪、清除数据、预热）全部保留，只是宿主从导航栈里的一屏变成自己的 Activity。

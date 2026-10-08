@@ -6,11 +6,11 @@
 # 要求仓库处在补丁基线 commit（BASELINE.txt 的 upstream_commit）且工作区干净；
 # 脚本跑完不会留下任何改动（成功与失败都还原）。
 #
-# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 → 0006 → 0007 → 0008 的顺序叠加，
-#           逐条跑 0004 专属断言（字段整理 / DNS maplist 拖动 / 规则序号 / 批量测速），
-#           0005 面板 / 规则省略号断言，再检查 0006 编辑间距 / 连接代理类型 / WebView 缓存，
-#           0007 字段整理按钮位置与面板缓存页重进黑屏修复，
-#           0008 面板重进「先刷新、再露内容」，最后逆序还原。
+# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 → 0006 → 0007 → 0008 → 0009 的顺序
+#           叠加，逐条跑 0004 专属断言（字段整理 / DNS maplist 拖动 / 规则序号 / 批量测速），
+#           0005 面板 / 规则省略号断言，再检查 0006 编辑间距 / 连接代理类型、0007 字段整理按钮
+#           位置、0008 TPROXY / eBPF 活动配置里的 tun 关闭、0009 面板改用独立 Activity 承载
+#           （换加载方式：不再挂在主界面导航栈里），最后逆序还原。
 #           0005 还会顺带跑 tools/panel/check_panel_refs.py（面板字符串键 × 4 locale、图标名对表）。
 #           不加 --series 只验 0001（与原行为一致）。
 set -euo pipefail
@@ -722,9 +722,9 @@ sys.exit(0 if s.count("rowMaxLines = 1,") == 1 else 1)
 PY7
   echo "ok  省略号只开在规则列表这一处调用点"
 
-  # ---- 0006–0008：编辑 / 连接 / WebView 修复系列 ----
+  # ---- 0006–0009：编辑 / 连接 / ROOT 配置 / 面板 Activity ----
   LATEST_PATCHES=()
-  for n in 0006 0007 0008; do
+  for n in 0006 0007 0008 0009; do
     p="$(find "$ROOT/patches/app" -maxdepth 1 -name "$n-*.patch" | sort | head -1)"
     if [[ -z "$p" ]]; then
       echo "FAIL 缺少 $n 补丁文件" >&2; fail=1; continue
@@ -744,68 +744,33 @@ PY7
     fi
   done
 
-  echo "--- 0006–0008 修复断言 ---"
+  echo "--- 0006–0009 修复断言 ---"
   FFP="app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt"
   CONN="app/src/main/kotlin/top/yukonga/mishka/ui/screen/connection/ConnectionScreen.kt"
   PW="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt"
   PS="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt"
   EDITOR="app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt"
+  APRC="app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt"
+  ROOTSVC="app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt"
+  TUNSVC="app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt"
+  APP="app/src/main/kotlin/top/yukonga/mishka/App.kt"
+  NAV="app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt"
+  ROUTE="app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt"
+  PANEL_ACT="app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt"
+  THEME="app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt"
+  MANIFEST="app/src/main/AndroidManifest.xml"
+
+  # ---- 0006：规则编辑间距 + 连接列表代理类型 ----
   assert_contains 'Spacer(Modifier.height(8.dp))' "$FFP" \
     'raw rule editor toggle has the requested vertical gap'
   assert_contains 'val proxyType = meta.type.trim().uppercase()' "$CONN" \
     'connection rows read the inbound proxy type from metadata.type'
-  assert_contains 'fun takeCached(sessionKey: Int): WebView?' "$PW" \
-    'same-session WebView is cached and reused across re-entry'
-  assert_contains 'webView.visibility = WebView.VISIBLE' "$PW" \
-    'the WebView stays VISIBLE so Chromium does not pause SPA rendering'
+
+  # ---- 0007：字段整理按钮位置 ----
   assert_contains 'fun tidyConfig()' "$EDITOR" \
     'field tidy behavior is extracted and remains available to the toolbar button'
   assert_contains '与文件名同处导航区' "$EDITOR" \
     'the field-tidy button is intentionally placed beside the config filename'
-  assert_contains 'val contentCommitted: Boolean = false' "$PW" \
-    'WebView tag remembers content commit across Compose screen disposal'
-  assert_contains 'markContentCommitted(view)' "$PW" \
-    'page commit and page finish persist the committed state on the WebView'
-  assert_contains 'val reusableCommittedPage = reusedTag?.let {' "$PW" \
-    'same URL/reloadKey committed cache page is eligible for immediate display'
-  assert_contains 'val reusablePendingPage = reusedTag?.let {' "$PW" \
-    'an uncommitted cached page is detected separately from a ready cache page'
-  assert_contains 'needsCanGoBackSync = true' "$PW" \
-    'a reattached cached view requests a one-time host canGoBack resync'
-  assert_contains 'else if (last?.needsCanGoBackSync == true)' "$PW" \
-    'cached-view back state is synchronized without requiring a navigation event'
-  assert_not_contains 'androidx.webkit' "$PW" \
-    'WebView re-entry fix uses only platform android.webkit APIs'
-  assert_not_contains 'androidx.webkit' app/build.gradle.kts \
-    'the patch series does not add an AndroidX WebKit dependency'
-  assert_not_contains 'androidx.webkit' gradle/libs.versions.toml \
-    'the version catalog remains unchanged by the WebView fix'
-
-  # ---- 0008：面板重进「先刷新、再露内容」（重启后第一次正常、之后闪烁 / 缺内容）----
-  assert_contains 'refreshBeforeShow: Boolean = true' "$PW" \
-    'panel WebView exposes the refresh-before-show switch (default on)'
-  assert_contains 'val willRefreshBeforeShow = isReused &&' "$PW" \
-    'a reused cached WebView is refreshed instead of being revealed as-is'
-  assert_contains 'runCatching { self.onResume() }' "$PW" \
-    'a reattached WebView resumes Chromium processing before refreshing'
-  assert_contains 'self.requestLayout()' "$PW" \
-    'a reattached WebView asks for a fresh layout and redraw after attach'
-  assert_contains 'if (reusablePendingPage) self.loadUrl(entryUrl) else self.reload()' "$PW" \
-    'a half-loaded cached page reloads the entry URL, a committed page reloads in place'
-  assert_contains 'self.post {' "$PW" \
-    'the re-entry refresh is queued with post so it runs after the view is attached'
-  assert_contains 'val refreshPending: Boolean = false' "$PW" \
-    'the queued pre-show refresh is tracked on the WebView tag'
-  assert_contains 'else if (last?.refreshPending == true)' "$PW" \
-    'the host is notified once when the automatic re-entry refresh starts'
-  assert_contains 'runCatching { released.onPause() }' "$PW" \
-    'the cached WebView is paused on release, pairing with the onResume on reattach'
-  assert_contains 'refreshBeforeShow = true' "$PS" \
-    'the panel screen opts into refreshing before content is shown'
-  assert_contains 'onRefreshStart = { refreshing = true }' "$PS" \
-    'the panel top bar spins while the automatic re-entry refresh runs'
-  assert_not_contains 'androidx.webkit' "$PW" \
-    'the re-entry refresh still uses only platform android.webkit APIs'
   if python3 - "$REPO/$EDITOR" <<'PY8'
 import sys
 s = open(sys.argv[1], encoding="utf-8").read()
@@ -821,17 +786,94 @@ PY8
     echo "FAIL 字段整理 Sort 按钮未放进 navigationIcon，或仍留在 actions" >&2; fail=1
   fi
 
-  echo "--- 0006–0008 静态检查 ---"
+  # ---- 0008：TPROXY / eBPF 把活动配置里的 tun 关掉 ----
+  assert_contains 'forceTunDisabled: Boolean = false' "$APRC" \
+    'prepare() can force the profile tun switch off'
+  assert_contains 'val tunEnabledInSource = when {' "$APRC" \
+    'the profile tun switch is resolved from the ROOT submode'
+  assert_contains 'tunDefaults(enable = tunEnabledInSource ?: true)' "$APRC" \
+    'a missing tun block is inserted with the submode switch value'
+  assert_contains 'defaultTunJson(enable = !forceTunDisabled)' "$APRC" \
+    'age-encrypted profiles record the same switch in the root-mode overlay'
+  assert_contains 'forceTunDisabled = submode == Submode.Tproxy || submode == Submode.Ebpf' "$ROOTSVC" \
+    'both TPROXY and eBPF run with the profile tun disabled'
+  assert_contains 'forceTunEnabled = submode == Submode.Tun' "$ROOTSVC" \
+    'the TUN submode still declares tun enabled in the profile'
+  assert_not_contains 'forceTunDisabled' "$TUNSVC" \
+    'the VPN path keeps inserting the tun defaults unchanged'
+
+  # ---- 0009：面板改用独立 Activity 承载（换加载方式）----
+  assert_contains 'class PanelActivity : ComponentActivity()' "$PANEL_ACT" \
+    'the panel is hosted by its own ComponentActivity'
+  assert_contains 'MishkaTheme(themeConfig = themeConfig)' "$PANEL_ACT" \
+    'the panel activity reuses the shared app theme container'
+  assert_contains 'PanelScreen(onBack = { finish() })' "$PANEL_ACT" \
+    'leaving the panel finishes the activity (no detach/attach in the nav host)'
+  assert_contains 'WebViewPreloader.preload(this)' "$PANEL_ACT" \
+    'the prewarm helper is still wired into the panel host'
+  assert_contains 'fun MishkaTheme(' "$THEME" \
+    'the app theme container is extracted so both hosts share one implementation'
+  assert_contains 'LocalAppDarkMode provides isDark' "$THEME" \
+    'theme locals stay identical between the main app and the panel activity'
+  assert_contains 'MishkaTheme(themeConfig = themeConfig) {' "$APP" \
+    'the main app renders through the shared theme container'
+  assert_contains 'context.startActivity(PanelActivity.createIntent(context))' "$NAV" \
+    'the home panel entry launches the panel activity instead of pushing a route'
+  assert_contains 'val isDark = LocalAppDarkMode.current' "$PS" \
+    'the panel screen reads the app dark mode instead of taking a parameter'
+  assert_contains 'NavigationBackHandler(' "$PS" \
+    'in-page history still wins over the system back gesture'
+  if python3 - "$REPO/$MANIFEST" <<'PY9'
+import re
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'<activity\s+android:name="\.PanelActivity"[^>]*>', s, re.S)
+if not m:
+    sys.exit(1)
+block = m.group(0)
+sys.exit(0 if 'android:exported="false"' in block and 'launchMode="singleTop"' in block and 'uiMode' in block else 1)
+PY9
+  then
+    echo "ok  面板 Activity 已注册：exported=false / singleTop / 自行处理深浅色等配置变更"
+  else
+    echo "FAIL 面板 Activity 的 manifest 声明不符合预期" >&2; fail=1
+  fi
+  assert_not_contains 'data object Panel : Route' "$ROUTE" \
+    'the panel route is removed from the navigation graph'
+  assert_not_contains 'Route.Panel' "$NAV" \
+    'the navigator no longer pushes a panel destination'
+  assert_not_contains 'PanelWebViewRuntime' "$PW" \
+    'the resident panel layer is gone'
+  assert_not_contains 'PanelWebViewRuntime' "$APP" \
+    'the app root no longer hosts a resident WebView layer'
+  assert_not_contains 'takeCached' "$PW" \
+    'the detach/reattach instance cache is gone'
+  assert_contains 'fun take(): WebView?' "$PW" \
+    'a prewarmed WebView instance is handed out to the panel activity'
+  assert_contains 'webView.visibility = WebView.VISIBLE' "$PW" \
+    'the WebView stays VISIBLE so Chromium does not pause SPA rendering'
+  assert_contains 'override fun onPageCommitVisible' "$PW" \
+    'the anti-flicker gate is still driven by page commit'
+  assert_not_contains 'androidx.webkit' "$PW" \
+    'the panel WebView still uses only platform android.webkit APIs'
+  assert_not_contains 'androidx.webkit' "$APP" \
+    'the app root does not pull in AndroidX WebKit'
+  assert_not_contains 'androidx.webkit' app/build.gradle.kts \
+    'the patch series does not add an AndroidX WebKit dependency'
+  assert_not_contains 'androidx.webkit' gradle/libs.versions.toml \
+    'the version catalog remains unchanged by the panel fix'
+
+  echo "--- 0006–0009 静态检查 ---"
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_cross_package_imports.py" ]]; then
     python3 "$ROOT/tools/check_cross_package_imports.py" --repo "$REPO" || {
-      echo "FAIL 跨包 import 检查（0001–0008 全序列）" >&2; fail=1; }
+      echo "FAIL 跨包 import 检查（0001–0009 全序列）" >&2; fail=1; }
   fi
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_trailing_lambda.py" ]]; then
     python3 "$ROOT/tools/check_trailing_lambda.py" --repo "$REPO" || {
-      echo "FAIL 尾随 lambda 检查（0001–0008 全序列）" >&2; fail=1; }
+      echo "FAIL 尾随 lambda 检查（0001–0009 全序列）" >&2; fail=1; }
   fi
 
-  echo "--- 0006–0008 apply -R（逆序还原） ---"
+  echo "--- 0006–0009 apply -R（逆序还原） ---"
   for ((i = ${#LATEST_PATCHES[@]} - 1; i >= 0; i--)); do
     git -C "$REPO" apply -R "${LATEST_PATCHES[$i]}" && echo "ok  已反向应用 $(basename "${LATEST_PATCHES[$i]}")"
   done
@@ -856,4 +898,4 @@ else
   echo "ok  工作区已回到干净状态"
 fi
 
-[[ $fail -eq 0 ]] && echo "PASS: app 侧补丁双向可逆、结果与基线逐文件一致（已校验到 0008）" || exit 1
+[[ $fail -eq 0 ]] && echo "PASS: app 侧补丁双向可逆、结果与基线逐文件一致（已校验到 0009）" || exit 1
