@@ -17941,10 +17941,10 @@ index 0000000..0434c16
 +    private fun leadingIndent(value: String): Int = value.takeWhile { it == ' ' }.length
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-index c982b6d..038716c 100644
+index 33aa9cc..eec239e 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-@@ -20,6 +20,9 @@ import io.ktor.http.encodeURLPath
+@@ -19,6 +19,9 @@ import io.ktor.http.contentType
  import io.ktor.http.isSuccess
  import io.ktor.serialization.kotlinx.json.json
  import kotlinx.serialization.json.Json
@@ -17954,12 +17954,20 @@ index c982b6d..038716c 100644
  import top.yukonga.mishka.domain.model.ConnectionsResponse
  import top.yukonga.mishka.domain.model.DelayResult
  import top.yukonga.mishka.domain.model.DnsQueryResponse
-@@ -91,13 +94,16 @@ class MihomoApiClient(
+@@ -29,6 +32,7 @@ import top.yukonga.mishka.domain.model.ProvidersResponse
+ import top.yukonga.mishka.domain.model.ProxiesResponse
+ import top.yukonga.mishka.domain.model.RuleProvidersResponse
+ import top.yukonga.mishka.domain.model.RulesResponse
++import java.net.URLEncoder
+ 
+ class MihomoApiClient(
+     private val baseUrl: String = "http://127.0.0.1:9090",
+@@ -90,13 +94,16 @@ class MihomoApiClient(
          ensureSuccess(response, "proxy group '$group'")
      }
  
 -    suspend fun getProxyDelay(name: String, testUrl: String = "http://www.gstatic.com/generate_204", timeout: Int = 5000): DelayResult =
--        client.get("$baseUrl/proxies/${pathSegment(name)}/delay") {
+-        client.get("$baseUrl/proxies/$name/delay") {
 -            url {
 -                parameters.append("url", testUrl)
 -                parameters.append("timeout", timeout.toString())
@@ -17967,7 +17975,7 @@ index c982b6d..038716c 100644
 -        }.body()
 +    suspend fun getProxyDelay(name: String, testUrl: String = DEFAULT_DELAY_TEST_URL, timeout: Int = 8000): DelayResult =
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/proxies/${pathSegment(name)}/delay") {
++            client.get("$baseUrl/proxies/${pathSeg(name)}/delay") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -17978,7 +17986,7 @@ index c982b6d..038716c 100644
  
      /**
       * 测试 proxy-provider 内单节点延迟。provider 节点不在 /proxies 命名空间，
-@@ -106,15 +112,80 @@ class MihomoApiClient(
+@@ -105,15 +112,88 @@ class MihomoApiClient(
      suspend fun getProviderProxyDelay(
          provider: String,
          name: String,
@@ -17986,9 +17994,9 @@ index c982b6d..038716c 100644
 +        testUrl: String = DEFAULT_DELAY_TEST_URL,
          timeout: Int = 5000,
      ): DelayResult =
--        client.get("$baseUrl/providers/proxies/${pathSegment(provider)}/${pathSegment(name)}/healthcheck") {
+-        client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/providers/proxies/${pathSegment(provider)}/${pathSegment(name)}/healthcheck") {
++            client.get("$baseUrl/providers/proxies/${pathSeg(provider)}/${pathSeg(name)}/healthcheck") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -18015,7 +18023,7 @@ index c982b6d..038716c 100644
 +        testUrl: String = DEFAULT_DELAY_TEST_URL,
 +        timeout: Int = GROUP_DELAY_TIMEOUT_MILLIS,
 +    ): Map<String, Int> {
-+        val response: HttpResponse = client.get("$baseUrl/group/${pathSegment(group)}/delay") {
++        val response: HttpResponse = client.get("$baseUrl/group/${pathSeg(group)}/delay") {
              url {
                  parameters.append("url", testUrl)
                  parameters.append("timeout", timeout.toString())
@@ -18049,6 +18057,14 @@ index c982b6d..038716c 100644
 +        return response.body()
 +    }
 +
++    /**
++     * 路径段 URL 编码：节点名 / provider 名会含 `/`、空格与 emoji（如 `免流订阅/🇺🇸 美国-17`），
++     * 裸拼进 URL 会被 chi 路由拆成多层路径直接 404（整组测速全失败的根因）。
++     * URLEncoder 是表单编码：`+` 要还原成 `%20`；`/` 编成 `%2F` 正是路径段需要的，
++     * 内核侧 `getEscapeParam` 会解码回原名。
++     */
++    private fun pathSeg(raw: String): String = URLEncoder.encode(raw, "UTF-8").replace("+", "%20")
++
 +    companion object {
 +        /** 测速地址与 mihomo_box 参考实现对齐（https：免流/直连节点上 http 明文探测更易被重置）。 */
 +        const val DEFAULT_DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
@@ -18062,7 +18078,7 @@ index c982b6d..038716c 100644
  
      suspend fun getRules(): RulesResponse =
          client.get("$baseUrl/rules").body()
-@@ -228,4 +299,8 @@ class MihomoApiClient(
+@@ -219,4 +299,8 @@ class MihomoApiClient(
      }
  }
  
