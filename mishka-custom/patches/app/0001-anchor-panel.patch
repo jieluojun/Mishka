@@ -4414,10 +4414,10 @@ index 0000000000000000000000000000000000000000..d4c65088f0c20b3c08f6c75cfcfff8c9
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1387959a8
+index 0000000000000000000000000000000000000000..87fa179b745851d71f4f3e945a7bbfb5e6bd07a2
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1497 @@
+@@ -0,0 +1,1527 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4506,7 +4506,8 @@ index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1
 +    val nav = remember(visible) { FormNav() }
 +
 +    fun apply(newText: String, toast: String, revealLine1: Int?) {
-+        if (newText == text) {
++        // 与编辑器此刻的文本比较（而不是组合期的 text）：同一帧里连续两次写回也能正确判断
++        if (newText == controller.getText()) {
 +            showToast(toast)
 +            return
 +        }
@@ -4520,7 +4521,9 @@ index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1
 +        showToast(toast)
 +    }
 +
-+    val host = remember(doc, fileBaseDir) { FormHost(doc, ::apply, fileBaseDir) }
++    val host = remember(doc, fileBaseDir) {
++        FormHost(doc, ::apply, fileBaseDir, liveDoc = { YamlDoc.parse(controller.getText()) })
++    }
 +    val route = nav.current
 +
 +    WindowBottomSheet(
@@ -4612,14 +4615,24 @@ index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1
 + * 每个方法返回是否真的改了文本（页面据此决定要不要跳转 / 返回）。
 + */
 +internal class FormHost(
++    /** 组合期快照：只用来渲染。写回与「现在是什么值」的判断一律走 [current]。 */
 +    val doc: YamlDoc,
 +    private val applyText: (newText: String, toast: String, revealLine1: Int?) -> Unit,
 +    /** 当前编辑文件所属订阅的 imported/ 目录；file 类型合集的源文件上传 / 编辑靠它落盘。null = 无文件能力。 */
 +    val fileBaseDir: String? = null,
++    /**
++     * 取编辑器里「此刻」的文档。组合期的 [doc] 可能落后于编辑器：同一次点击被派发两次（Switch 本身 + 整行 onClick）、
++     * 或两次写回之间还没重组时，闭包里的 hasVal / doc 都是旧的，会把已经写进去的值判成「没有变化 / 本来就没有设置」。
++     */
++    private val liveDoc: () -> YamlDoc = { doc },
 +) {
++    /** 此刻的文档（编辑器草稿）。 */
++    fun current(): YamlDoc = liveDoc()
++
 +    /** 行级手术（锚点继承等）的落地通道：整篇替换，与 set / batch 同一套「无变化」提示。 */
 +    fun applyRawText(newText: String, label: String, revealLine1: Int? = null): Boolean {
-+        if (newText == doc.dump()) {
++        val base = current()
++        if (newText == base.dump()) {
 +            showToast("$label 没有变化")
 +            return false
 +        }
@@ -4632,13 +4645,13 @@ index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1
 +        showToast("$label 未改动：这个位置不能这样写，请在编辑器里直接改这一段", long = true)
 +    }
 +
-+    private fun commit(out: YamlDoc, label: String, verb: String, reveal: YPath?): Boolean {
-+        if (out === doc) {
++    private fun commit(base: YamlDoc, out: YamlDoc, label: String, verb: String, reveal: YPath?): Boolean {
++        if (out === base) {
 +            refuse(label)
 +            return false
 +        }
 +        val dumped = out.dump()
-+        if (dumped == doc.dump()) {
++        if (dumped == base.dump()) {
 +            showToast("$label 没有变化")
 +            return false
 +        }
@@ -4647,45 +4660,56 @@ index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1
 +    }
 +
 +    fun set(path: YPath, value: Any?, label: String): Boolean {
-+        if (!doc.canSet(path)) {
++        val base = current()
++        if (!base.canSet(path)) {
 +            showToast("$label 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
 +            return false
 +        }
 +        // 继承感知：值来自 `<<:` 继承时按参考实现写穿锚点 / 物化整块，绝不建半块本地映射顶掉继承内容
-+        val w = AnchorInheritance.applySetAware(doc, path, value)
++        val w = AnchorInheritance.applySetAware(base, path, value)
 +        val named = if (w.anchor != null) "$label（已同步到锚点 &${w.anchor}，继承它的所有条目一起生效）" else label
-+        return commit(w.doc, named, "已写入", w.path)
++        return commit(base, w.doc, named, "已写入", w.path)
 +    }
 +
 +    fun clear(path: YPath, label: String): Boolean {
-+        if (doc.get(path) == null) {
-+            if (FormValues.hasEffective(doc, path)) {
++        val base = current()
++        if (base.get(path) == null) {
++            if (FormValues.hasEffective(base, path)) {
 +                showToast("$label 来自锚点继承，本地没有可删的行：直接填入新值即可覆盖，或在「锚点与继承」里解除继承", long = true)
 +            } else showToast("$label 本来就没有设置")
 +            return false
 +        }
-+        return commit(YamlPatch.removeKey(doc, path), label, "已清空", null)
++        return commit(base, YamlPatch.removeKey(base, path), label, "已清空", null)
 +    }
 +
-+    fun insertItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean =
-+        commit(YamlPatch.insertItem(doc, seqPath, index, value), label, "已新增", seqPath + index)
++    fun insertItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean {
++        val base = current()
++        return commit(base, YamlPatch.insertItem(base, seqPath, index, value), label, "已新增", seqPath + index)
++    }
 +
-+    fun setItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean =
-+        commit(YamlPatch.setItem(doc, seqPath, index, value), label, "已写入", seqPath + index)
++    fun setItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean {
++        val base = current()
++        return commit(base, YamlPatch.setItem(base, seqPath, index, value), label, "已写入", seqPath + index)
++    }
 +
-+    fun removeItem(seqPath: YPath, index: Int, label: String): Boolean =
-+        commit(YamlPatch.removeItem(doc, seqPath, index), label, "已删除", null)
++    fun removeItem(seqPath: YPath, index: Int, label: String): Boolean {
++        val base = current()
++        return commit(base, YamlPatch.removeItem(base, seqPath, index), label, "已删除", null)
++    }
 +
-+    fun moveItem(seqPath: YPath, from: Int, to: Int, label: String): Boolean =
-+        commit(YamlPatch.moveItem(doc, seqPath, from, to), label, "已移动", seqPath + to)
++    fun moveItem(seqPath: YPath, from: Int, to: Int, label: String): Boolean {
++        val base = current()
++        return commit(base, YamlPatch.moveItem(base, seqPath, from, to), label, "已移动", seqPath + to)
++    }
 +
 +    fun rename(path: YPath, newKey: String, label: String): Boolean {
-+        val parent = doc.get(path.dropLast(1))
-+        if (parent != null && doc.findEntry(parent, newKey) != null) {
++        val base = current()
++        val parent = base.get(path.dropLast(1))
++        if (parent != null && base.findEntry(parent, newKey) != null) {
 +            showToast("已经有叫「$newKey」的了，换个名字", long = true)
 +            return false
 +        }
-+        return commit(YamlPatch.renameKey(doc, path, newKey), label, "已改名", path.dropLast(1) + newKey)
++        return commit(base, YamlPatch.renameKey(base, path, newKey), label, "已改名", path.dropLast(1) + newKey)
 +    }
 +
 +    /**
@@ -4694,7 +4718,8 @@ index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1
 +     * [BatchOp.Remove] 对不存在的键是空操作。
 +     */
 +    fun batch(ops: List<BatchOp>, label: String, verb: String = "已写入", reveal: YPath? = null): Boolean {
-+        var cur = doc
++        val base = current()
++        var cur = base
 +        var touched = false
 +        val syncedAnchors = LinkedHashSet<String>()
 +        for (op in ops) {
@@ -4736,7 +4761,7 @@ index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1
 +            val names = syncedAnchors.joinToString("、") { "&$it" }
 +            "$label（已同步到锚点 $names，继承它的所有条目一起生效）"
 +        }
-+        return commit(cur, named, verb, reveal)
++        return commit(base, cur, named, verb, reveal)
 +    }
 +
 +    // ---- 动态候选（下拉 / 多选里的节点名、代理组名、集合名）
@@ -5597,16 +5622,21 @@ index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1
 +    }
 +
 +    fun setSwitchValue(value: Boolean) {
-+        if (!editable) {
++        // 以编辑器此刻的文档为准：开关上的 hasVal / editable 是组合期快照，同一次点击派发两次时第二次会读到旧值
++        val live = host.current()
++        if (!live.canSet(path)) {
 +            showToast("${field.label} 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
 +            return
 +        }
++        val liveHasVal = FormValues.hasValue(live, path)
++        // 已经是目标值：这是同一次点击的重复派发（或刚写完还没重组），什么也不做、也不提示
++        if (liveHasVal && FormValues.readBool(live, path) == value) return
 +        if (field.asSwitch) {
 +            val defaultValue = field.default == true
-+            if (value == defaultValue && !hasVal) showToast("${field.label} 本来就是默认值")
++            if (value == defaultValue && !liveHasVal) showToast("${field.label} 本来就是默认值")
 +            else write(value)
 +        } else {
-+            if (!value && field.optional && !hasVal) showToast("${field.label} 本来就没有设置")
++            if (!value && field.optional && !liveHasVal) showToast("${field.label} 本来就没有设置")
 +            else write(value)
 +        }
 +    }
@@ -6474,10 +6504,10 @@ index 0000000000000000000000000000000000000000..537f72b93dbf41bb2be1ff5df20f01dc
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..8d0139ca28e61476321f17c44d4cc77fe33fe444
+index 0000000000000000000000000000000000000000..ecbfe869e9eaa036faee3ec2962799ae21cd0d5d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,531 @@
+@@ -0,0 +1,540 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6630,7 +6660,15 @@ index 0000000000000000000000000000000000000000..8d0139ca28e61476321f17c44d4cc77f
 +    private var scrollBy: ((Float) -> Float)? = null
 +    private val tops = HashMap<Int, Float>()
 +    private val heights = HashMap<Int, Float>()
++    private val rowCoords = HashMap<Int, LayoutCoordinates>()
 +    private val handleCoords = HashMap<Int, LayoutCoordinates>()
++
++    /**
++     * 这一行此刻还在布局里（没被 lazy 列表回收、没滚出去）。tops / heights 是按行下标记的最后一次量到的值，
++     * 行滚出视口 / 被回收后不会自己清掉——留着就会变成「幽灵身段」：手指拖到列表顶边以上时，离手指最近的
++     * 可能正是一条早已滚走的行，于是落点落到错误的档位（上滑越过顶边 = 落到倒数第几条）。命中判定只认在布局里的行。
++     */
++    private fun liveRow(index: Int): Boolean = rowCoords[index]?.isAttached == true
 +
 +    internal var onMove: (from: Int, to: Int) -> Unit = { _, _ -> }
 +
@@ -6740,6 +6778,7 @@ index 0000000000000000000000000000000000000000..8d0139ca28e61476321f17c44d4cc77f
 +    fun rowModifier(index: Int): Modifier =
 +        Modifier
 +            .onGloballyPositioned { coords ->
++                rowCoords[index] = coords
 +                val b = coords.boundsInWindow()
 +                tops[index] = b.top
 +                heights[index] = b.height
@@ -6813,7 +6852,7 @@ index 0000000000000000000000000000000000000000..8d0139ca28e61476321f17c44d4cc77f
 +        var nearest = -1
 +        var best = Float.MAX_VALUE
 +        for (o in orderState) {
-+            if (o == from) continue
++            if (o == from || !liveRow(o)) continue
 +            val top = tops[o] ?: continue
 +            val h = heights[o] ?: continue
 +            if (fingerY >= top && fingerY <= top + h) { over = o; break }
@@ -6821,7 +6860,7 @@ index 0000000000000000000000000000000000000000..8d0139ca28e61476321f17c44d4cc77f
 +            if (d < best) { best = d; nearest = o }
 +        }
 +        if (over < 0) over = nearest
-+        if (over < 0) return
++        if (over < 0 || !liveRow(over)) return
 +        val overTop = tops[over] ?: return
 +        val overH = heights[over] ?: return
 +        val ov = orderState.indexOf(over)
