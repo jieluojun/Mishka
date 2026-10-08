@@ -76,3 +76,13 @@ blob_after=1cb982cd341d13bda1c58af0c2a29669f8cf8890 app/src/main/res/values/stri
 patch0002_base_commit=09f9a80d161fd9cda8867b86acf61fc62f80783f
 patch0002_sha256=899afc43f835bb1788d691553bb74670217eddd6ad72a0af65f6fa02d8040432
 patch0002_blob_new=8ec35cfb03eed33b5172ea01957a699dec65bec4 app/src/main/res/raw/builtin_mianliu.yaml
+# --- 0003：可视化编辑器修复（在 0001、0002 之上应用；基准仍是 upstream dd21ee4）---
+# 拖动落点 / 回弹、开关误报、挪动末尾规则残留字符；新增 custom/forms/DragSortGeometry.kt。
+patch0003_prereq=0001,0002
+patch0003_sha256=8e453ac0a7471495e55cadd329482bde0539e15accaa17c11305e2a5a956ce91
+# --- 0004：字段整理 + 列表拖动排序 / 路由规则序号 + 批量测速对齐（在 0001–0003 之上应用）---
+# 新增 custom/forms/ConfigTidy.kt；对拍脚本与用例见 tools/tidy/（node 参考实现 ⇄ Kotlin 版逐字节比对）。
+patch0004_prereq=0001,0002,0003
+patch0004_sha256=b8b9a2c0781964db0a947eb95f85fd4b363d3e835fc8e324e4b5a0e5fd84823d
+patch0004_blob_new=765fec986c7339455d2c8c496dd20b45d25291d9 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigTidy.kt
+# tools/verify_app_patch.sh --series 会按 0002 → 0003 → 0004 的顺序把后续补丁也应用上并跑各自的断言。

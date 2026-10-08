@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # 校验 app 侧补丁：apply --check → apply → 逐文件比对基线 blob → apply -R → 工作区必须回到干净。
 #
-# 用法: tools/verify_app_patch.sh --repo <Mishka 仓库>
+# 用法: tools/verify_app_patch.sh --repo <Mishka 仓库> [--series]
 #
 # 要求仓库处在补丁基线 commit（BASELINE.txt 的 upstream_commit）且工作区干净；
 # 脚本跑完不会留下任何改动（成功与失败都还原）。
+#
+# --series：0001 验收通过后，按 0002 → 0003 → 0004 的顺序把后续补丁也叠上，
+#           逐条跑 0004 的专属断言（字段整理按钮与四类提示 / DNS maplist 拖动排序 /
+#           路由规则序号 / 批量测速与 testGroupAll 对齐），再按逆序还原。
+#           不加 --series 只验 0001（与原行为一致）。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,10 +18,12 @@ PATCH="$ROOT/patches/app/0001-anchor-panel.patch"
 BASELINE="$ROOT/patches/app/BASELINE.txt"
 
 REPO=""
+SERIES=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
-    -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --series) SERIES=1; shift ;;
+    -h|--help) sed -n '2,14p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
 done
@@ -69,6 +76,17 @@ git -C "$REPO" apply --check "$PATCH" && echo "ok  补丁可应用"
 
 echo "--- apply（正向） ---"
 git -C "$REPO" apply "$PATCH"
+
+# 基线 blob 记录的是**只应用 0001 之后**的状态（BASELINE.txt 生成时点），所以要在叠 0002+ 之前比。
+echo "--- 逐文件比对基线 blob（0001 之后的状态） ---"
+while read -r _ expected path; do
+  actual="$(git -C "$REPO" hash-object "$path")"
+  if [[ "$actual" == "$expected" ]]; then
+    echo "ok  $path"
+  else
+    echo "FAIL $path 期望 $expected 实际 $actual" >&2; fail=1
+  fi
+done < <(grep -E '^blob_(new|after)=' "$BASELINE" | sed 's/^blob_[a-z]*=/x /')
 
 if grep -Fq 'val mihomoBuildTags = listOf("mishka", "with_gvisor", "with_ebpf")' "$REPO/app/build.gradle.kts"; then
   echo "ok  Android mihomo build enables eBPF and the native process resolver (no callback-less cmfa tag)"
@@ -421,14 +439,157 @@ else
   echo "ok  web panel package (custom/panel) is gone"
 fi
 
-while read -r _ expected path; do
-  actual="$(git -C "$REPO" hash-object "$path")"
-  if [[ "$actual" == "$expected" ]]; then
-    echo "ok  $path"
-  else
-    echo "FAIL $path 期望 $expected 实际 $actual" >&2; fail=1
+# ---------------------------------------------------------------- 后续补丁（--series）
+EXTRA_PATCHES=()
+if [[ $SERIES -eq 1 ]]; then
+  for n in 0002 0003 0004; do
+    p="$(find "$ROOT/patches/app" -maxdepth 1 -name "$n-*.patch" | sort | head -1)"
+    [[ -n "$p" ]] && EXTRA_PATCHES+=("$p")
+  done
+
+  echo "--- 后续补丁：sha256 与基线比对 ---"
+  for p in "${EXTRA_PATCHES[@]}"; do
+    name="$(basename "$p" | cut -d- -f1)"
+    expected="$(sed -n "s/^patch${name}_sha256=//p" "$BASELINE" | head -1)"
+    actual="$(sha256sum "$p" | cut -d' ' -f1)"
+    if [[ -z "$expected" ]]; then
+      echo "warn BASELINE.txt 里没有 patch${name}_sha256，跳过 $(basename "$p") 的 sha 校验"
+    elif [[ "$actual" == "$expected" ]]; then
+      echo "ok  $(basename "$p") sha256 与基线一致"
+    else
+      echo "FAIL $(basename "$p") sha256 与基线不一致：$actual != $expected" >&2; fail=1
+    fi
+  done
+
+  echo "--- 后续补丁：应用（0002 → 0003 → 0004） ---"
+  for p in "${EXTRA_PATCHES[@]}"; do
+    git -C "$REPO" apply --check "$p" || { echo "FAIL $(basename "$p") 无法应用" >&2; fail=1; }
+    git -C "$REPO" apply "$p" && echo "ok  已应用 $(basename "$p")"
+  done
+
+  # 静态检查在整个序列（0001–0004）上再跑一遍：上面那次只看到 0001 之后的树。
+  echo "--- 0001–0004 全序列的静态检查 ---"
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_cross_package_imports.py" ]]; then
+    python3 "$ROOT/tools/check_cross_package_imports.py" --repo "$REPO" || {
+      echo "FAIL 跨包 import 检查（0001–0004 全序列）" >&2; fail=1; }
   fi
-done < <(grep -E '^blob_(new|after)=' "$BASELINE" | sed 's/^blob_[a-z]*=/x /')
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_trailing_lambda.py" ]]; then
+    python3 "$ROOT/tools/check_trailing_lambda.py" --repo "$REPO" || {
+      echo "FAIL 尾随 lambda 检查（0001–0004 全序列）" >&2; fail=1; }
+  fi
+
+  # ---- 0004：字段整理（ConfigTidy）----
+  CT="app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigTidy.kt"
+  assert_contains 'internal object ConfigTidy {' "$CT" \
+    'field-tidy core object exists (ported from mihomo_box tidyMihomoConfig)'
+  assert_contains 'fun apply(source: String): Outcome' "$CT" \
+    'apply() is the single entry the editor button calls'
+  assert_contains 'internal sealed interface Outcome {' "$CT" \
+    'apply() reports a structured outcome instead of guessing from the string'
+  assert_contains 'data class Tidied(val text: String) : Outcome' "$CT" \
+    'tidied text is carried in the outcome'
+  assert_contains 'data class SourceInvalid(val detail: String) : Outcome' "$CT" \
+    'YAML syntax errors are reported before any rewrite (reference: 源码存在 YAML 语法错误)'
+  assert_contains 'data class VerifyFailed(val detail: String) : Outcome' "$CT" \
+    'post-tidy structural re-check can fail loudly instead of writing a broken file'
+  assert_contains 'val eol = if (text.contains("\r\n")) "\r\n" else "\n"' "$CT" \
+    'CRLF files keep CRLF (documented divergence from the JS reference, which joins with LF only)'
+
+  # ---- 0004：配置页入口按钮 ----
+  FMES="app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt"
+  assert_contains 'import top.yukonga.mishka.custom.forms.ConfigTidy' "$FMES" \
+    'the editor screen imports ConfigTidy (missing import = same class of CI failure as dragSortItem)'
+  assert_contains 'import top.yukonga.miuix.kmp.icon.extended.Sort' "$FMES" \
+    'MiuixIcons.Sort is imported (整理配置字段顺序 icon, left of 配置表单)'
+  assert_contains 'MiuixIcons.Sort,' "$FMES" \
+    'the tidy button renders the Sort icon'
+  assert_contains 'when (val outcome = ConfigTidy.apply(controller.getText()))' "$FMES" \
+    'the button runs ConfigTidy.apply on the live editor buffer'
+  assert_contains 'showToast("✅ 已按官方规范整理配置字段顺序")' "$FMES" \
+    'success toast matches the reference wording'
+  assert_contains 'showToast("配置字段顺序已符合官方规范")' "$FMES" \
+    'no-op toast matches the reference wording'
+  assert_contains '源码存在 YAML 语法错误，请先修正后再整理' "$FMES" \
+    'syntax-error toast is long-form (the user must fix the source first)'
+  assert_contains '整理后验证失败：' "$FMES" \
+    'verification-failure toast carries the detail'
+  python3 - "$REPO/$FMES" <<'PY2' || { echo "FAIL 字段整理按钮不在「配置表单」按钮左侧" >&2; fail=1; }
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+sort_at = s.index("MiuixIcons.Sort,")
+tune_at = s.index("MiuixIcons.Tune,")
+sys.exit(0 if sort_at < tune_at else 1)
+PY2
+  echo "ok  字段整理按钮在「配置表单」（Tune）按钮左侧"
+
+  # ---- 0004：路由规则数字序号 ----
+  FFP="app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt"
+  assert_contains 'numbered: Boolean = false,' "$FFP" \
+    'sequence list can optionally number its rows (default off for the other lists)'
+  assert_contains 'numbered = seqPath == TOP_RULES_PATH,' "$FFP" \
+    'only the top-level rules page is numbered (子规则 in the reference is a maplist, no .rule-no)'
+  assert_contains 'private val TOP_RULES_PATH: YPath = listOf("rules")' "$FFP" \
+    'the rules path constant exists'
+  assert_contains 'private fun RuleIndexBadge(index: Int) {' "$FFP" \
+    'the badge composable mirrors the reference .rule-no pill'
+  assert_contains 'text = index.toString(),' "$FFP" \
+    'the badge shows the 1-based rule index'
+  assert_not_contains 'numbered = true,' "$FFP" \
+    'numbering is not hard-wired on (it would leak into the sub-rule lists)'
+
+  # ---- 0004：DNS maplist（按域名分流解析）拖动排序 ----
+  P3="app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt"
+  assert_contains 'val listScroll = rememberScrollState()' "$P3" \
+    'maplist dialog owns its scroll state (needed by the drag auto-scroll)'
+  assert_contains 'val dragSort = rememberDragSortState(rows.size)' "$P3" \
+    'maplist dialog wires the shared drag-sort state'
+  assert_contains '.then(dragSort.containerModifier { listScroll.dispatchRawDelta(it) })' "$P3" \
+    'container grabs the drag gesture and drives edge auto-scroll'
+  assert_contains '.verticalScroll(listScroll, enabled = dragSort.dragging < 0),' "$P3" \
+    'user scrolling is disabled for the whole drag (outer scrollable exits arbitration)'
+  assert_contains 'dragSort.order.forEach { index ->' "$P3" \
+    'maplist rows render the live drag order'
+  # 只看 MapListFieldDialog 自己的函数体（同文件里 HeadersEditorDialog 仍是普通滚动，别误伤）
+  python3 - "$REPO/$P3" <<'PY3' || { echo "FAIL maplist（DNS 按域名分流解析）对话框仍是旧的普通滚动实现" >&2; fail=1; }
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+i = s.index("internal fun MapListFieldDialog(")
+m = re.search(r"\n@Composable\ninternal fun ", s[i + 10:])
+body = s[i:i + 10 + (m.start() if m else len(s) - i)]
+assert "rememberDragSortState" in body, "no drag-sort state in MapListFieldDialog"
+assert "verticalScroll(rememberScrollState())" not in body, "old plain-scroll body still there"
+PY3
+  echo "ok  maplist（DNS 按域名分流解析）对话框已换成拖动排序实现"
+
+  # ---- 0004：整组测速与 mihomo_box testGroupAll 逐条对齐 ----
+  API="app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt"
+  VM="app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt"
+  assert_contains 'delays[name] = delay' "$API" \
+    'getGroupDelay keeps every parseable member verdict, including 0'
+  assert_not_contains 'if (delay > 0) delays[name] = delay' "$API" \
+    'the old 0-filter is gone (0 = 内核测过但不通 — must not be re-tested in the batch pool)'
+  assert_contains 'private fun isSpeedTestable(name: String, type: String): Boolean' "$VM" \
+    'isSpeedTestable mirrors the reference isProxySpeedTestable'
+  assert_contains 'private val NOT_SPEED_TESTABLE = setOf("reject", "reject-drop", "block", "pass", "pass-rule", "dns")' "$VM" \
+    'the untestable built-in policies match the reference list'
+  assert_contains 'private fun applyBatchDelays(group: String, verdicts: Map<String, Int>)' "$VM" \
+    'per-node verdicts are written straight into that group (reference paint)'
+  assert_contains 'private fun setNodesTesting(names: List<String>, testing: Boolean)' "$VM" \
+    'per-node testing flags are set/cleared through one helper (no leaked spinners)'
+  assert_contains 'val fromGroup = withTimeoutOrNull(GROUP_DELAY_BUDGET_MILLIS)' "$VM" \
+    'the group endpoint is still the first (fast) path'
+  assert_contains 'name !in answered && name !in inFlight && isSpeedTestable(name, target.nodeTypes[name].orEmpty())' "$VM" \
+    'only members the group endpoint did not answer, that are not already testing and are testable, go to the pool'
+  assert_contains 'settled.add(nodeName)' "$VM" \
+    'finished lanes are recorded so the 400ms loading hint cannot re-light them'
+  assert_contains 'val loading = nodes.filter { name ->' "$VM" \
+    'the 400ms hint lights only the still-unanswered testable members (reference hintTimer)'
+
+  echo "--- 后续补丁 apply -R（逆序还原） ---"
+  for ((i = ${#EXTRA_PATCHES[@]} - 1; i >= 0; i--)); do
+    git -C "$REPO" apply -R "${EXTRA_PATCHES[$i]}" && echo "ok  已反向应用 $(basename "${EXTRA_PATCHES[$i]}")"
+  done
+fi
 
 echo "--- apply -R（反向） ---"
 git -C "$REPO" apply -R "$PATCH"

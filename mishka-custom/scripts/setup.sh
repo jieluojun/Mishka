@@ -11,7 +11,8 @@
 #      校验并应用 patches/mihomo/*.patch（用 --kernel-dir 可以放到仓库外）
 #   3. 写 go.work + go.work.sum（内核换了分支后缺的依赖哈希都在这，仓库自带的 go.mod/go.sum 不动）
 #   4. 应用 app 侧补丁 patches/app/0001-anchor-panel.patch（自定义编辑器 + 订阅页可视化配置入口迁移
-#      + 主页外部面板 Web 界面）
+#      + 主页外部面板 Web 界面），随后依次叠加 0002 内置「免流」配置、0003 可视化编辑器修复、
+#      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐
 #
 # 回滚：scripts/revert-patches.sh --all
 set -euo pipefail
@@ -62,6 +63,8 @@ if [[ "$DELIVER" != "$REPO/$CUSTOM_DIR_NAME" ]]; then
     [[ -e "$DELIVER/$d" ]] && cp -r "$DELIVER/$d" "$target/" 2>/dev/null || true
   done
   cp "$DELIVER"/README.md "$DELIVER"/BUILD.md "$DELIVER"/INSTALL.md "$DELIVER"/CUSTOMIZATION.md "$DELIVER"/VERIFY.md "$target/" 2>/dev/null || true
+  # 变更说明（FIX-*.md / FEATURE-*.md）一起带过去；交付里没有这些文件时静默跳过
+  cp "$DELIVER"/FIX-*.md "$DELIVER"/FEATURE-*.md "$target/" 2>/dev/null || true
   DELIVER="$target"
   ok "已复制到 $DELIVER"
 else
@@ -242,7 +245,7 @@ EOF
 fi
 
 # ---------------------------------------------------------------- 5. app 侧补丁
-step "5/6 app 侧补丁（锚点面板）"
+step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理）"
 if app_patch_applied "$REPO"; then
   ok "已应用（$CUSTOM_REL/anchor 与编辑器入口都在）"
 else
@@ -289,6 +292,25 @@ else
   die "可视化编辑器修复（0003）打不上：custom/forms 或 anchor 下的文件与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0003\" 看详细原因"
 fi
 
+# ---------------------------------------------------------------- 5d. 字段整理 + 列表排序 / 序号 + 批量测速对齐
+# 0004 在 0003 之上：配置页源码工具条左侧新增「字段整理」按钮（按官方字段顺序重排，注释 / 空行 /
+# 块式流式写法 / 锚点标记原样保留）；DNS「按域名分流解析」（nameserver-policy）与其它 maplist
+# 可按住行首把手拖动排序；路由规则页每行显示序号；代理页整组测速与 mihomo_box 的 testGroupAll
+# 逐条对齐（组接口的 0 值结论不重测、不可测策略不发请求、每路结果当场回写）。
+# 与 0003 同样是硬依赖：打不上就中断（否则「字段整理」按钮会引用不存在的 ConfigTidy）。
+PATCH_0004="$DELIVER/patches/app/0004-field-tidy-and-list-parity.patch"
+if [[ -f "$REPO/$CUSTOM_REL/forms/ConfigTidy.kt" ]]; then
+  ok "字段整理 / 列表排序 / 批量测速对齐（0004）已应用"
+elif git -C "$REPO" apply --check "$PATCH_0004" 2>/dev/null; then
+  git -C "$REPO" apply "$PATCH_0004"
+  ok "已应用 patches/app/0004-field-tidy-and-list-parity.patch（字段整理 + 列表排序 / 序号 + 批量测速对齐）"
+elif git -C "$REPO" apply --check --3way "$PATCH_0004" 2>/dev/null; then
+  git -C "$REPO" apply --3way "$PATCH_0004"
+  ok "已应用（3way 合并，注意确认 FlowFormPages.kt / P3FormEditors.kt / ProxyViewModel.kt 的改动）"
+else
+  die "字段整理补丁（0004）打不上：custom/forms 或 viewmodel/ProxyViewModel.kt 与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0004\" 看详细原因"
+fi
+
 # ---------------------------------------------------------------- 6. 总结
 step "6/6 完成"
 say "  仓库状态："
@@ -297,7 +319,8 @@ cat <<EOF
 
   下一步：
     bash $DELIVER/scripts/build-release.sh --repo "$REPO"      # 本地出 release APK（只出 release）
-    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO"     # 校验 app 补丁可逆
+    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO"     # 校验 app 补丁可逆（只验 0001）
+    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0004 整套校验（含 0004 断言）
     bash $DELIVER/tools/verify_mihomo_patches.sh --kernel-dir "$KERNEL_DIR"
   回滚：
     bash $DELIVER/scripts/revert-patches.sh --repo "$REPO" --all

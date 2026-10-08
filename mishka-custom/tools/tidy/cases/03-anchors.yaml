@@ -1,0 +1,31 @@
+mode: rule
+
+anchors:
+  proxy-common: &pc
+    udp: true
+    skip-cert-verify: false
+
+proxies:
+  - name: 香港01
+    <<: *pc
+    type: vmess
+    server: hk1.example.com
+    port: 443
+  - <<: *pc
+    name: 香港02
+    server: hk2.example.com
+    port: 443
+    type: vmess
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - 香港01
+      - 香港02
+  - names-are-long: 1
+    name: AUTO
+    <<: *pc
+    type: url-test
+    url: http://www.gstatic.com/generate_204
+    interval: 300
