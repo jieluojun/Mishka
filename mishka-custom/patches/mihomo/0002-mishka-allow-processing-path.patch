@@ -1,0 +1,25 @@
+diff --git a/app/src/main/native/mishka_core/fetch.go b/app/src/main/native/mishka_core/fetch.go
+index 04ed042..df91cca 100644
+--- a/app/src/main/native/mishka_core/fetch.go
++++ b/app/src/main/native/mishka_core/fetch.go
+@@ -27,6 +27,7 @@ import (
+ 	"github.com/metacubex/mihomo/common/utils"
+ 	clashHttp "github.com/metacubex/mihomo/component/http"
+ 	"github.com/metacubex/mihomo/config"
++	"github.com/metacubex/mihomo/constant"
+ )
+ 
+ const fetchTimeout = 60 * time.Second
+@@ -94,6 +95,12 @@ func runFetchAndValid(
+ 	if err := os.MkdirAll(workDir, 0700); err != nil {
+ 		return nil, fmt.Errorf("create workDir: %w", err)
+ 	}
++	// Providers are staged in processing/providers/. Mishka sets mihomo's HomeDir
++	// to geodata/, so register only this app-owned staging directory rather than
++	// globally disabling Mihomo's safe-path checks.
++	if err := constant.AddSafePath(workDir); err != nil {
++		return nil, fmt.Errorf("allow processing path: %w", err)
++	}
+ 	// 空 UA 退回 mishkaCoreInit 设置的全局默认 —— 用户没显式覆写时仍走 ClashMetaForAndroid
+ 	effectiveUA := strings.TrimSpace(userAgent)
+ 	if effectiveUA == "" {
