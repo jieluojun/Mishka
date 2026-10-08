@@ -10,9 +10,10 @@
 #   2. 内核：在 <仓库>/mihomo 放一份 jieluojun/mihomo(Alpha)，checkout 到补丁基线 commit，
 #      校验并应用 patches/mihomo/*.patch（用 --kernel-dir 可以放到仓库外）
 #   3. 写 go.work + go.work.sum（内核换了分支后缺的依赖哈希都在这，仓库自带的 go.mod/go.sum 不动）
-#   4. 应用 app 侧补丁 patches/app/0001-anchor-panel.patch（自定义编辑器 + 订阅页可视化配置入口迁移
-#      + 主页外部面板 Web 界面），随后依次叠加 0002 内置「免流」配置、0003 可视化编辑器修复、
-#      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐
+#   4. 应用 app 侧补丁 patches/app/0001-anchor-panel.patch（自定义编辑器 + 订阅页可视化配置入口迁移），
+#      随后依次叠加 0002 内置「免流」配置、0003 可视化编辑器修复、
+#      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐、
+#      0005 主页面板 / Web 界面（box.app 同款）+ 路由规则匹配值省略号
 #
 # 回滚：scripts/revert-patches.sh --all
 set -euo pipefail
@@ -245,7 +246,7 @@ EOF
 fi
 
 # ---------------------------------------------------------------- 5. app 侧补丁
-step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理）"
+step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理 + 面板 / Web 界面）"
 if app_patch_applied "$REPO"; then
   ok "已应用（$CUSTOM_REL/anchor 与编辑器入口都在）"
 else
@@ -311,6 +312,26 @@ else
   die "字段整理补丁（0004）打不上：custom/forms 或 viewmodel/ProxyViewModel.kt 与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0004\" 看详细原因"
 fi
 
+# ---------------------------------------------------------------- 5e. 主页面板 / Web 界面 + 路由规则省略号
+# 0005 在 0004 之上：主页「工具」分组下面一格就是「面板 / Web 界面」——照着 box.app 的 PanelScreen，
+# 内嵌 WebView 打开 mihomo 的 external-controller 面板（本地面板 = http://<控制器>/ui），另带
+# Zashboard / MetaCubeXD 与自定义面板（列表、选中项与上次解析到的本地地址都持久在 panel_cache）；
+# 面板里的 http(s) 下载与文件选择走系统 SAF / 选择器，深色跟随 App 主题。同时路由规则列表每行收成
+# 一行、末尾省略号（匹配值很长的规则不再把行高撑开）。
+# 与 0003 / 0004 同样是硬依赖：打不上就中断（否则主页入口会引用不存在的 custom/panel）。
+PATCH_0005="$DELIVER/patches/app/0005-home-web-panel-and-rule-ellipsis.patch"
+if [[ -f "$REPO/$CUSTOM_REL/panel/PanelScreen.kt" ]]; then
+  ok "主页面板 / Web 界面 + 路由规则省略号（0005）已应用"
+elif git -C "$REPO" apply --check "$PATCH_0005" 2>/dev/null; then
+  git -C "$REPO" apply "$PATCH_0005"
+  ok "已应用 patches/app/0005-home-web-panel-and-rule-ellipsis.patch（面板 / Web 界面 + 规则省略号）"
+elif git -C "$REPO" apply --check --3way "$PATCH_0005" 2>/dev/null; then
+  git -C "$REPO" apply --3way "$PATCH_0005"
+  ok "已应用（3way 合并，注意确认 custom/panel、AppNavigation.kt、QuickEntriesSection.kt 的改动）"
+else
+  die "面板补丁（0005）打不上：custom/panel、navigation 或 home 下的文件与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0005\" 看详细原因"
+fi
+
 # ---------------------------------------------------------------- 6. 总结
 step "6/6 完成"
 say "  仓库状态："
@@ -320,7 +341,7 @@ cat <<EOF
   下一步：
     bash $DELIVER/scripts/build-release.sh --repo "$REPO"      # 本地出 release APK（只出 release）
     bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO"     # 校验 app 补丁可逆（只验 0001）
-    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0004 整套校验（含 0004 断言）
+    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0005 整套校验（含 0004 / 0005 断言）
     bash $DELIVER/tools/verify_mihomo_patches.sh --kernel-dir "$KERNEL_DIR"
   回滚：
     bash $DELIVER/scripts/revert-patches.sh --repo "$REPO" --all

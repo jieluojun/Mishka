@@ -85,4 +85,15 @@ patch0003_sha256=8e453ac0a7471495e55cadd329482bde0539e15accaa17c11305e2a5a956ce9
 patch0004_prereq=0001,0002,0003
 patch0004_sha256=b8b9a2c0781964db0a947eb95f85fd4b363d3e835fc8e324e4b5a0e5fd84823d
 patch0004_blob_new=765fec986c7339455d2c8c496dd20b45d25291d9 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigTidy.kt
-# tools/verify_app_patch.sh --series 会按 0002 → 0003 → 0004 的顺序把后续补丁也应用上并跑各自的断言。
+# --- 0005：主页「工具」下方的面板 / Web 界面 + 路由规则匹配值省略号（在 0001–0004 之上应用）---
+# 参考 box.app 的「面板 / Web 界面」：本地面板 = 内核 external-controller 的 /ui，另带 Zashboard /
+# MetaCubeXD 与自定义面板（地址 / 选中项持久在 panel_cache），WebView 支持下载、文件选择与跟随深浅色；
+# 路由规则行改单行 + 省略号（行高不再被最长的一条撑开）。
+patch0005_prereq=0001,0002,0003,0004
+patch0005_sha256=134b68f1bc55d599eadf49bc3be625468c81355553926ee210f2f42c1ed1e74e
+patch0005_blob_new=857c0e78b914c99b043cd4fb4e72413f8b873bb1 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt
+patch0005_blob_new=7d462ca4e9f2fde660d429645450b7f9d3d70469 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+patch0005_blob_new=a031029de0fab172a031522c3fac2d85390c3b2c app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt
+patch0005_blob_new=199e71c370e100dc3c33b9d8802801a447c2d807 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelStore.kt
+patch0005_blob_new=1769d75b488fc4fa4085445501b85783959af1e6 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+# tools/verify_app_patch.sh --series 会按 0002 → 0003 → 0004 → 0005 的顺序把后续补丁也应用上并跑各自的断言。

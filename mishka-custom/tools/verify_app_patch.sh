@@ -6,9 +6,11 @@
 # 要求仓库处在补丁基线 commit（BASELINE.txt 的 upstream_commit）且工作区干净；
 # 脚本跑完不会留下任何改动（成功与失败都还原）。
 #
-# --series：0001 验收通过后，按 0002 → 0003 → 0004 的顺序把后续补丁也叠上，
+# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 的顺序把后续补丁也叠上，
 #           逐条跑 0004 的专属断言（字段整理按钮与四类提示 / DNS maplist 拖动排序 /
-#           路由规则序号 / 批量测速与 testGroupAll 对齐），再按逆序还原。
+#           路由规则序号 / 批量测速与 testGroupAll 对齐），再跑 0005 的
+#           （主页「工具」下方的面板 / Web 界面 + 路由规则匹配值省略号），最后按逆序还原。
+#           0005 还会顺带跑 tools/panel/check_panel_refs.py（面板字符串键 × 4 locale、图标名对表）。
 #           不加 --series 只验 0001（与原行为一致）。
 set -euo pipefail
 
@@ -414,35 +416,14 @@ else
   echo "warn 没有 python3，跳过 tools/check_cross_package_imports.py"
 fi
 
-# --- web 界面已完全移除（防回归）---
-assert_not_contains 'PanelScreen' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt \
-  'web panel is fully removed from navigation'
-assert_not_contains 'onNavigatePanel' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt \
-  'web panel quick entry is fully removed from home'
-assert_not_contains 'home_panel' \
-  app/src/main/res/values/strings.xml \
-  'web panel strings are fully removed (default locale)'
-assert_not_contains 'home_panel' \
-  app/src/main/res/values-zh-rCN/strings.xml \
-  'web panel strings are fully removed (Chinese locale)'
-assert_not_contains 'home_panel' \
-  app/src/main/res/values-zh-rTW/strings.xml \
-  'web panel strings are fully removed (Taiwan locale)'
-assert_not_contains 'home_panel' \
-  app/src/main/res/values-ru/strings.xml \
-  'web panel strings are fully removed (Russian locale)'
-if [ -d "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel" ]; then
-  echo "FAIL web panel package still exists" >&2; fail=1
-else
-  echo "ok  web panel package (custom/panel) is gone"
-fi
+# 注：这里原先有一组「web 界面已完全移除（防回归）」的断言。0005 起按用户要求把面板 / Web 界面
+# 加了回来（custom/panel + Route.WebPanel + 主页入口 + home_panel_* 字符串），那组否定断言已被
+# 0005 series 段里的肯定断言取代——再留着只会和 0005 的验收目标打架。
 
 # ---------------------------------------------------------------- 后续补丁（--series）
 EXTRA_PATCHES=()
 if [[ $SERIES -eq 1 ]]; then
-  for n in 0002 0003 0004; do
+  for n in 0002 0003 0004 0005; do
     p="$(find "$ROOT/patches/app" -maxdepth 1 -name "$n-*.patch" | sort | head -1)"
     [[ -n "$p" ]] && EXTRA_PATCHES+=("$p")
   done
@@ -461,21 +442,21 @@ if [[ $SERIES -eq 1 ]]; then
     fi
   done
 
-  echo "--- 后续补丁：应用（0002 → 0003 → 0004） ---"
+  echo "--- 后续补丁：应用（0002 → 0003 → 0004 → 0005） ---"
   for p in "${EXTRA_PATCHES[@]}"; do
     git -C "$REPO" apply --check "$p" || { echo "FAIL $(basename "$p") 无法应用" >&2; fail=1; }
     git -C "$REPO" apply "$p" && echo "ok  已应用 $(basename "$p")"
   done
 
   # 静态检查在整个序列（0001–0004）上再跑一遍：上面那次只看到 0001 之后的树。
-  echo "--- 0001–0004 全序列的静态检查 ---"
+  echo "--- 0001–0005 全序列的静态检查 ---"
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_cross_package_imports.py" ]]; then
     python3 "$ROOT/tools/check_cross_package_imports.py" --repo "$REPO" || {
-      echo "FAIL 跨包 import 检查（0001–0004 全序列）" >&2; fail=1; }
+      echo "FAIL 跨包 import 检查（0001–0005 全序列）" >&2; fail=1; }
   fi
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_trailing_lambda.py" ]]; then
     python3 "$ROOT/tools/check_trailing_lambda.py" --repo "$REPO" || {
-      echo "FAIL 尾随 lambda 检查（0001–0004 全序列）" >&2; fail=1; }
+      echo "FAIL 尾随 lambda 检查（0001–0005 全序列）" >&2; fail=1; }
   fi
 
   # ---- 0004：字段整理（ConfigTidy）----
@@ -584,6 +565,161 @@ PY3
     'finished lanes are recorded so the 400ms loading hint cannot re-light them'
   assert_contains 'val loading = nodes.filter { name ->' "$VM" \
     'the 400ms hint lights only the still-unanswered testable members (reference hintTimer)'
+
+  # ---- 0005：面板 / Web 界面（custom/panel，jieluojun/mihomo_box 同源的 box.app 移植）----
+  PE="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt"
+  PST="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelStore.kt"
+  PSC="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt"
+  PSH="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt"
+  PW="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt"
+  assert_contains 'internal const val PANEL_ID_LOCAL = "local"' "$PE" \
+    'built-in local panel id matches box.app'
+  assert_contains 'internal const val PANEL_URL_ZASHBOARD = "http://board.zash.run.place"' "$PE" \
+    'Zashboard built-in url matches box.app'
+  assert_contains 'internal const val PANEL_URL_METACUBEXD = "https://metacubex.github.io/metacubexd"' "$PE" \
+    'MetaCubeXD built-in url matches box.app'
+  assert_contains 'val url: String?' "$PE" \
+    'the local panel has no compile-time url (it is derived from the running core)'
+  assert_contains 'private const val PREFS_NAME = "panel_cache"' "$PST" \
+    'panel prefs file matches box.app (panel_cache)'
+  assert_contains 'private const val KEY_LIST = "panel_list_v1"' "$PST" \
+    'custom panel list key matches box.app'
+  assert_contains 'private const val KEY_SELECTED = "panel_selected_id_v1"' "$PST" \
+    'selected panel key matches box.app'
+  assert_contains 'private const val KEY_LOCAL_URL = "panel_url_v1"' "$PST" \
+    'cached local url key matches box.app (no blank first screen after a cold start)'
+  assert_contains 'fun cachedLocalUrl(context: Context): String?' "$PST" \
+    'the last resolved local url is cached for the stopped-core case'
+  assert_contains '"http://${status.externalController}/ui"' "$PSC" \
+    'the local panel is the core external-controller at /ui (box.app getPanelUrl equivalent)'
+  assert_contains 'status.state == ProxyState.Running' "$PSC" \
+    'the live controller address is only trusted while the core is really running'
+  assert_contains 'PanelStore.cacheLocalUrl(context, it)' "$PSC" \
+    'a freshly resolved local url is cached'
+  assert_contains 'PanelStore.cachedLocalUrl(context)' "$PSC" \
+    'a stopped core falls back to the cached local url'
+  assert_contains 'PanelStore.saveSelectedId(context, panel.id)' "$PSC" \
+    'switching panels persists the selection'
+  assert_contains 'sessionKey += 1' "$PSC" \
+    'switching panels rebuilds the WebView session (no leaked login state)'
+  assert_contains 'hideUntilCommitVisible = true' "$PSC" \
+    'the web area hides until the content is committed (box.app anti white-flash)'
+  assert_contains 'resetHistoryOnUrlChange = true' "$PSC" \
+    'switching panels clears web history (back does not walk the previous panel)'
+  assert_contains 'isBackEnabled = canGoBack' "$PSC" \
+    'system back walks web history first, then leaves the screen'
+  assert_contains 'clearWebViewAppData(context)' "$PSC" \
+    'the top bar clear-data action is wired to the webview wipe'
+  assert_contains 'if (!panel.isBuiltIn)' "$PSH" \
+    'built-in panels cannot be deleted, custom ones can'
+  assert_contains 'addError = urlInvalid' "$PSH" \
+    'custom panel urls are validated before they are stored'
+  assert_contains 'addJavascriptInterface(jsBridge, "MishkaAndroid")' "$PW" \
+    'blob:/data: exports are handed to the JS bridge (DownloadListener cannot see them)'
+  assert_contains 'blob:' "$PW" \
+    'the download hook intercepts blob:/data: anchors'
+  assert_contains 'clearWebViewAppData' "$PW" \
+    'the wipe helper is declared next to the webview it wipes'
+  assert_contains 'mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW' "$PW" \
+    'mixed content is allowed (https panels talking to an http controller)'
+  assert_contains 'isAlgorithmicDarkeningAllowed = isDark' "$PW" \
+    'web page dark mode follows the app theme'
+  assert_contains 'requestDisallowInterceptTouchEvent(true)' "$PW" \
+    'the webview keeps vertical scroll gestures'
+  assert_contains 'override fun onShowFileChooser(' "$PW" \
+    'file uploads inside a panel open the system picker'
+  assert_contains 'Intent.ACTION_CREATE_DOCUMENT' "$PW" \
+    'panel downloads go through SAF save-as'
+  assert_contains 'internal object WebViewPreloader {' "$PW" \
+    'two-phase webview prewarm (box.app same) keeps re-entry instant'
+  assert_contains 'WebViewPreloader.take() ?: WebView(ctx)' "$PW" \
+    'every entry builds a fresh webview, taking the prewarmed instance when ready'
+
+  RT="app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt"
+  NAV="app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt"
+  QE="app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt"
+  HS="app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt"
+  MA="app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt"
+  assert_contains 'data object Panel : Route' "$RT" \
+    'the panel is a @Serializable route (back stack survives process death)'
+  assert_contains 'import top.yukonga.mishka.custom.panel.PanelScreen' "$NAV" \
+    'AppNavigation imports the panel screen (missing import = Unresolved reference)'
+  assert_contains 'entry<Route.Panel>(swipeDismiss = NavSwipeDirection.None) {' "$NAV" \
+    'the route is registered with swipe-dismiss off (web history owns the edge gesture)'
+  assert_contains 'onNavigatePanel = { navigator.push(Route.Panel) },' "$NAV" \
+    'the home entry pushes the panel route'
+  assert_contains 'onNavigatePanel: () -> Unit = {},' "$QE" \
+    'the tools section exposes the panel callback'
+  assert_contains 'title = stringResource(R.string.home_panel)' "$QE" \
+    'the entry card is titled 面板 (box.app home_quick_panel_title)'
+  assert_contains 'subtitle = stringResource(R.string.home_panel_subtitle)' "$QE" \
+    'the entry card subtitle is Web 界面 (box.app home_quick_panel_subtitle)'
+  assert_contains 'onNavigatePanel = onNavigatePanel,' "$HS" \
+    'HomeScreen passes the callback into the tools section'
+  assert_contains 'WebViewPreloader.preload(this)' "$MA" \
+    'the webview prewarm is kicked off from MainActivity.onCreate'
+  for loc in values values-zh-rCN values-zh-rTW values-ru; do
+    assert_contains 'name="home_panel"' "app/src/main/res/$loc/strings.xml" \
+      "panel home entry strings present ($loc)"
+    assert_contains 'name="panel_local_name"' "app/src/main/res/$loc/strings.xml" \
+      "panel screen strings present ($loc)"
+  done
+  # 入口必须排在「工具」分组的网格之后（用户要求：工具下方）
+  python3 - "$REPO/$QE" <<'PY5' || { echo "FAIL 面板入口不在「工具」网格下方" >&2; fail=1; }
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+sys.exit(0 if s.index("R.string.home_dns") < s.index("R.string.home_panel") else 1)
+PY5
+  echo "ok  面板入口排在「工具」网格下方"
+  # 面板是纯前端页面，代理没起也能进（不跟其它入口一起受 isRunning 门控）
+  python3 - "$REPO/$QE" <<'PY8' || { echo "FAIL 面板入口被 isRunning 门控了" >&2; fail=1; }
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+i = s.index("R.string.home_panel")
+sys.exit(0 if "isRunning = true," in s[i - 200:i + 400] else 1)
+PY8
+  echo "ok  面板入口不受「代理运行中」门控"
+  # 面板文件不许 import 纯逻辑文件之外的东西混进来（tools/panel 的静态检查要能独立跑）
+  if command -v python3 >/dev/null 2>&1; then
+    python3 "$ROOT/tools/panel/check_panel_refs.py" --repo "$REPO" || {
+      echo "FAIL 面板字符串 / 图标引用检查（0005）" >&2; fail=1; }
+  fi
+
+  # ---- 0005：路由规则匹配值过长用省略号 ----
+  CFP="app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt"
+  FFP="app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt"
+  assert_contains 'titleMaxLines: Int = Int.MAX_VALUE,' "$CFP" \
+    'RowCard gained an opt-in title line cap (default unchanged)'
+  assert_contains 'summaryMaxLines: Int = Int.MAX_VALUE,' "$CFP" \
+    'RowCard gained an opt-in summary line cap (default unchanged)'
+  assert_contains 'overflow = TextOverflow.Ellipsis,' "$CFP" \
+    'the capped RowCard renders with a trailing ellipsis'
+  assert_contains 'fontSize = MiuixTheme.textStyles.headline1.fontSize,' "$CFP" \
+    'the content-overload title keeps the BasicComponent title metrics'
+  assert_contains 'val summaryColor = BasicComponentDefaults.summaryColor()' "$CFP" \
+    'the content-overload summary keeps the BasicComponent colours'
+  assert_contains 'rowMaxLines: Int = Int.MAX_VALUE,' "$FFP" \
+    'sequence lists can opt into single-line rows (sub-rule lists keep wrapping)'
+  assert_contains 'rowMaxLines = 1,' "$FFP" \
+    'the rules list caps its rows to one line'
+  assert_contains 'titleMaxLines = rowMaxLines,' "$FFP" \
+    'the row cap is forwarded to RowCard'
+  # endActions 必须是最后一个参数，否则调用点的尾随 lambda 会落到别的参数上
+  python3 - "$REPO/$CFP" <<'PY6' || { echo "FAIL RowCard 的 endActions 不再是最后一个参数" >&2; fail=1; }
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+i = s.index("internal fun RowCard(")
+body = s[i:s.index(") {", i)]
+sys.exit(0 if body.rstrip().endswith("endActions: @Composable () -> Unit = {},") else 1)
+PY6
+  echo "ok  RowCard 的 endActions 仍排在最后（尾随 lambda 语义不变）"
+  # 省略号只加在规则页：其它列表（provider / rulesets / 各种 maplist）保持原样
+  python3 - "$REPO/$FFP" <<'PY7' || { echo "FAIL rowMaxLines = 1 只应出现在规则列表调用点" >&2; fail=1; }
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+sys.exit(0 if s.count("rowMaxLines = 1,") == 1 else 1)
+PY7
+  echo "ok  省略号只开在规则列表这一处调用点"
 
   echo "--- 后续补丁 apply -R（逆序还原） ---"
   for ((i = ${#EXTRA_PATCHES[@]} - 1; i >= 0; i--)); do
