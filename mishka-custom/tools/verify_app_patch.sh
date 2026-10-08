@@ -77,9 +77,9 @@ else
   fail=1
 fi
 
-assert_contains 'ExtraSafePathFunc = isProcessingProvidersPath' \
+assert_contains 'ExtraSafePathFunc = isValidationProvidersPath' \
   app/src/main/native/mishka_core/safe_paths.go \
-  'processing/providers sandbox is accepted by the kernel safe-path check'
+  'validation providers dirs (processing/ and imported/<uuid>/) pass the kernel safe-path check'
 
 assert_contains 'RuntimeConfigValues.selectSecret(profileSecret, userOverride.secret)' \
   app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt \

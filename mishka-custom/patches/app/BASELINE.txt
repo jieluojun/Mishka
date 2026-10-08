@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=dd21ee45c48901b14b7f13e7573c63e1f12abaf2
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=e39d522c3a9f60a747749accfcdc623345e94e2f0428ffb1cdd73a19463269ec
+patch_sha256=cd7986aa738729834bf607593c8b4631d0c8d32b50ab4c22b708e2876703d383
 blob_after=6ecc565923a55fbb53b694964b2c321707ffc0e5 app/build.gradle.kts
 blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
 blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -29,7 +29,7 @@ blob_new=0d66444bfc6d5883e58448db01484653cf42c351 app/src/main/kotlin/top/yukong
 blob_new=1796296a18858516030ff9bbe5fbe596a2a46e5e app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 blob_new=0434c16bf9738c5e408ae3d00bde1e953ddeec65 app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
-blob_new=ecac771cbc6a86b9a4455398cf21ce22847c6757 app/src/main/native/mishka_core/safe_paths.go
+blob_new=1dab4a417e4819d51f82eadee967a669619c3f8f app/src/main/native/mishka_core/safe_paths.go
 blob_after=9274894e957f4c74597c13892228c4d1e2afb811 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 blob_after=14ebcdc0fde29fd9aae21d9d09e9186b95ef527c app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 blob_after=9132be8bb1f3fd20208a814c6805e68b500d920c app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
