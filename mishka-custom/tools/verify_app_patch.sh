@@ -9,7 +9,7 @@
 # --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 → 0006 → 0007 的顺序叠加，
 #           逐条跑 0004 专属断言（字段整理 / DNS maplist 拖动 / 规则序号 / 批量测速），
 #           0005 面板 / 规则省略号断言，再检查 0006 编辑间距 / 连接代理类型 / WebView 缓存，
-#           以及 0007 WebView 经 mihomo mixed-port 出站与 AndroidX proxy override，最后逆序还原。
+#           0007 字段整理按钮位置与面板缓存页重进黑屏修复，最后逆序还原。
 #           0005 还会顺带跑 tools/panel/check_panel_refs.py（面板字符串键 × 4 locale、图标名对表）。
 #           不加 --series 只验 0001（与原行为一致）。
 set -euo pipefail
@@ -746,8 +746,8 @@ PY7
   echo "--- 0006–0007 修复断言 ---"
   FFP="app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt"
   CONN="app/src/main/kotlin/top/yukonga/mishka/ui/screen/connection/ConnectionScreen.kt"
-  PSC="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt"
   PW="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt"
+  EDITOR="app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt"
   assert_contains 'Spacer(Modifier.height(8.dp))' "$FFP" \
     'raw rule editor toggle has the requested vertical gap'
   assert_contains 'val proxyType = meta.type.trim().uppercase()' "$CONN" \
@@ -756,26 +756,42 @@ PY7
     'same-session WebView is cached and reused across re-entry'
   assert_contains 'webView.visibility = WebView.VISIBLE' "$PW" \
     'the WebView stays VISIBLE so Chromium does not pause SPA rendering'
-  assert_contains 'internal object PanelWebViewProxy' "$PW" \
-    'the panel has a dedicated WebView proxy override manager'
-  assert_contains 'ProxyController.getInstance()' "$PW" \
-    'AndroidX ProxyController is used to route WebView requests'
-  assert_contains 'addBypassRule("127.*")' "$PW" \
-    'loopback controller requests bypass the mihomo proxy'
-  assert_contains 'implementation(libs.androidx.webkit)' app/build.gradle.kts \
-    'AndroidX WebKit dependency is wired into the app'
-  assert_contains 'androidx-webkit = "1.16.0"' gradle/libs.versions.toml \
-    'the AndroidX WebKit dependency is pinned in the version catalog'
-  assert_contains 'config.mixedPort in 1..65535' "$PSC" \
-    'the active mihomo mixed-port is preferred for WebView'
-  assert_contains 'config.port in 1..65535' "$PSC" \
-    'HTTP-only mihomo proxy port is used as a fallback'
-  assert_contains 'config.socksPort in 1..65535' "$PSC" \
-    'SOCKS-only mihomo proxy port is used as a final fallback'
-  assert_contains 'val routeChanged = PanelWebViewProxy.apply(resolution.proxyAddress, status.externalController)' "$PSC" \
-    'a changed proxy route triggers a reload of the active panel'
-  assert_contains 'webViewProxyReady = true' "$PSC" \
-    'the panel waits until proxy configuration has been applied before loading'
+  assert_contains 'fun tidyConfig()' "$EDITOR" \
+    'field tidy behavior is extracted and remains available to the toolbar button'
+  assert_contains '与文件名同处导航区' "$EDITOR" \
+    'the field-tidy button is intentionally placed beside the config filename'
+  assert_contains 'val contentCommitted: Boolean = false' "$PW" \
+    'WebView tag remembers content commit across Compose screen disposal'
+  assert_contains 'markContentCommitted(view)' "$PW" \
+    'page commit and page finish persist the committed state on the WebView'
+  assert_contains 'val reusableCommittedPage = reusedTag?.let {' "$PW" \
+    'same URL/reloadKey committed cache page is eligible for immediate display'
+  assert_contains 'val reusablePendingPage = reusedTag?.let {' "$PW" \
+    'an uncommitted cached page is detected separately from a ready cache page'
+  assert_contains 'needsCanGoBackSync = true' "$PW" \
+    'a reattached cached view requests a one-time host canGoBack resync'
+  assert_contains 'else if (last?.needsCanGoBackSync == true)' "$PW" \
+    'cached-view back state is synchronized without requiring a navigation event'
+  assert_not_contains 'androidx.webkit' "$PW" \
+    'WebView re-entry fix uses only platform android.webkit APIs'
+  assert_not_contains 'androidx.webkit' app/build.gradle.kts \
+    'the patch series does not add an AndroidX WebKit dependency'
+  assert_not_contains 'androidx.webkit' gradle/libs.versions.toml \
+    'the version catalog remains unchanged by the WebView fix'
+  if python3 - "$REPO/$EDITOR" <<'PY8'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+nav_start = s.index("navigationIcon = {")
+actions_start = s.index("actions = {", nav_start)
+nav = s[nav_start:actions_start]
+actions = s[actions_start:s.index("val canSave =", actions_start)]
+sys.exit(0 if "MiuixIcons.Back" in nav and "MiuixIcons.Sort" in nav and "MiuixIcons.Sort" not in actions else 1)
+PY8
+  then
+    echo "ok  字段整理 Sort 按钮在返回键之后、标题之前，不再占用右侧 actions"
+  else
+    echo "FAIL 字段整理 Sort 按钮未放进 navigationIcon，或仍留在 actions" >&2; fail=1
+  fi
 
   echo "--- 0006–0007 静态检查 ---"
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_cross_package_imports.py" ]]; then
@@ -812,4 +828,4 @@ else
   echo "ok  工作区已回到干净状态"
 fi
 
-[[ $fail -eq 0 ]] && echo "PASS: app 侧补丁双向可逆、结果与基线逐文件一致" || exit 1
+[[ $fail -eq 0 ]] && echo "PASS: app 侧补丁双向可逆、结果与基线逐文件一致（已校验到 0007）" || exit 1

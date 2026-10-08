@@ -15,7 +15,7 @@
 #      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐、
 #      0005 主页面板 / Web 界面（box.app 同款）+ 路由规则匹配值省略号、
 #      0006 规则编辑按钮间距 + 连接页代理类型标签 + Web 面板不闪/不缺内容，
-#      0007 WebView 外网检测通过 mihomo mixed-port 出站
+#      0007 字段整理按钮移到标题左侧 + 面板缓存页重进黑屏修复（沿用平台 WebView API，不加依赖）
 #
 # 回滚：scripts/revert-patches.sh --all
 set -euo pipefail
@@ -248,7 +248,7 @@ EOF
 fi
 
 # ---------------------------------------------------------------- 5. app 侧补丁
-step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理 + Web 面板 / WebView 代理）"
+step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理 + Web 面板修复）"
 if app_patch_applied "$REPO"; then
   ok "已应用（$CUSTOM_REL/anchor 与编辑器入口都在）"
 else
@@ -353,22 +353,19 @@ else
   die "修复补丁（0006）打不上：规则编辑 / 连接列表 / PanelWebView 与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0006\" 看详细原因"
 fi
 
-# 0007：WebView 默认运行在 Mishka 自己的 UID 下，VpnService 会排除自身避免流量环；
-# 因此内嵌外部面板原本绕过了 mihomo，IP 检测落到直连出口、YouTube 延迟探测失败。
-# 通过 AndroidX WebKit ProxyController 把 WebView 请求定向到运行中 mihomo 的 mixed-port
-#（并 bypass 本地 external-controller），只影响 WebView，不把 Mishka 其它流量拉进 TUN。
-PATCH_0007="$DELIVER/patches/app/0007-panel-webview-mihomo-proxy.patch"
-if grep -q "internal object PanelWebViewProxy" "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt" 2>/dev/null \
-    && grep -q "implementation(libs.androidx.webkit)" "$REPO/app/build.gradle.kts" 2>/dev/null; then
-  ok "WebView 按 mihomo mixed-port 代理出站（0007）已应用"
+# 0007：把字段整理按钮放到「config.yaml」标题左侧；修复返回/重进后缓存 WebView 仍透明的问题。
+PATCH_0007="$DELIVER/patches/app/0007-config-tidy-toolbar-and-panel-reentry.patch"
+if grep -q 'val contentCommitted: Boolean = false' "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt" 2>/dev/null \
+    && grep -q 'fun tidyConfig()' "$REPO/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt" 2>/dev/null; then
+  ok "字段整理工具栏位置 / 面板缓存页重进黑屏修复（0007）已应用"
 elif git -C "$REPO" apply --check "$PATCH_0007" 2>/dev/null; then
   git -C "$REPO" apply "$PATCH_0007"
-  ok "已应用 patches/app/0007-panel-webview-mihomo-proxy.patch（内嵌面板跟随 mihomo 出站）"
+  ok "已应用 patches/app/0007-config-tidy-toolbar-and-panel-reentry.patch"
 elif git -C "$REPO" apply --check --3way "$PATCH_0007" 2>/dev/null; then
   git -C "$REPO" apply --3way "$PATCH_0007"
-  ok "已应用（3way 合并，注意确认 PanelScreen / PanelWebView / WebKit 依赖）"
+  ok "已应用（3way 合并，注意确认 FileManagerEditorScreen / PanelWebView）"
 else
-  die "修复补丁（0007）打不上：PanelScreen / PanelWebView 或 Gradle 依赖与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0007\" 看详细原因"
+  die "补丁（0007）打不上：FileManagerEditorScreen / PanelWebView 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0007\" 看详细原因"
 fi
 
 # ---------------------------------------------------------------- 6. 总结
