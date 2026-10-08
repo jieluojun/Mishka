@@ -6,10 +6,10 @@
 # 要求仓库处在补丁基线 commit（BASELINE.txt 的 upstream_commit）且工作区干净；
 # 脚本跑完不会留下任何改动（成功与失败都还原）。
 #
-# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 → 0006 → 0007 → 0008 的顺序叠加，
+# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 → 0006 → 0007 → 0008 → 0009 的顺序叠加，
 #           逐条跑 0004 专属断言（字段整理 / DNS maplist 拖动 / 规则序号 / 批量测速），
-#           0005 面板 / 规则省略号断言，再检查 0006 编辑间距 / 连接代理类型 / WebView 缓存，
-#           0007 字段整理按钮位置与缓存页透明黑屏修复，0008 重进恢复所选面板入口页，最后逆序还原。
+#           0005 面板 / 规则省略号断言；0006–0008 编辑、连接、面板入口页与重进断言；
+#           0009 验证页面完成及 visual-state callback 后才显露，最后逆序还原。
 #           0005 还会顺带跑 tools/panel/check_panel_refs.py（面板字符串键 × 4 locale、图标名对表）。
 #           不加 --series 只验 0001（与原行为一致）。
 set -euo pipefail
@@ -721,9 +721,9 @@ sys.exit(0 if s.count("rowMaxLines = 1,") == 1 else 1)
 PY7
   echo "ok  省略号只开在规则列表这一处调用点"
 
-  # ---- 0006–0008：编辑 / 连接 / WebView 修复系列 ----
+  # ---- 0006–0009：编辑 / 连接 / WebView 修复系列 ----
   LATEST_PATCHES=()
-  for n in 0006 0007 0008; do
+  for n in 0006 0007 0008 0009; do
     p="$(find "$ROOT/patches/app" -maxdepth 1 -name "$n-*.patch" | sort | head -1)"
     if [[ -z "$p" ]]; then
       echo "FAIL 缺少 $n 补丁文件" >&2; fail=1; continue
@@ -743,7 +743,7 @@ PY7
     fi
   done
 
-  echo "--- 0006–0008 修复断言 ---"
+  echo "--- 0006–0009 修复断言 ---"
   FFP="app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt"
   CONN="app/src/main/kotlin/top/yukonga/mishka/ui/screen/connection/ConnectionScreen.kt"
   PW="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt"
@@ -762,8 +762,16 @@ PY7
     'the field-tidy button is intentionally placed beside the config filename'
   assert_contains 'val contentCommitted: Boolean = false' "$PW" \
     'WebView tag remembers content commit across Compose screen disposal'
-  assert_contains 'markContentCommitted(view)' "$PW" \
-    'page commit and page finish persist the committed state on the WebView'
+  assert_contains 'fun revealAfterVisualState(' "$PW" \
+    'the WebView is revealed only after the renderer confirms a visual frame'
+  assert_contains 'webView.postVisualStateCallback(' "$PW" \
+    'modern Android waits for Chromium visual-state completion before showing the page'
+  assert_contains 'panelVisualRequestSequence.incrementAndGet()' "$PW" \
+    'visual-state callback request IDs remain unique even when page finish/error races'
+  assert_contains 'loadId = nextPanelLoadId()' "$PW" \
+    'each fresh/reloaded page gets a unique token for stale callback rejection'
+  assert_contains 'if (current?.loadId == expectedLoadId)' "$PW" \
+    'late visual callbacks cannot reveal a superseded page'
   assert_contains 'Every cached re-entry starts at the configured entry URL' "$PW" \
     'every re-entry resets the cached WebView to its configured start page'
   assert_contains 'contentCommitted = false' "$PW" \
@@ -811,6 +819,25 @@ PY9
     'a reattached cached view requests a one-time host canGoBack resync'
   assert_contains 'else if (last?.needsCanGoBackSync == true)' "$PW" \
     'cached-view back state is synchronized without requiring a navigation event'
+  if python3 - "$REPO/$PW" <<'PY10'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+start = s.index("override fun onPageCommitVisible")
+end = s.index("override fun doUpdateVisitedHistory", start)
+commit = s[start:end]
+assert "alpha = 1f" not in commit, "onPageCommitVisible must not expose the SPA shell"
+assert "revealAfterVisualState" not in commit
+start = s.index("override fun onPageFinished")
+end = s.index("override fun onReceivedError", start)
+finished = s[start:end]
+assert "revealAfterVisualState(view, loadId)" in finished
+assert "postVisualStateCallback" not in finished, "the helper owns the API-level visual callback"
+PY10
+  then
+    echo "ok  onPageCommitVisible 不提前显露，onPageFinished 经 visual-state helper 再显示"
+  else
+    echo "FAIL WebView 仍在 SPA 首次布局完成前提前显露" >&2; fail=1
+  fi
   assert_not_contains 'androidx.webkit' "$PW" \
     'WebView re-entry fix uses only platform android.webkit APIs'
   assert_not_contains 'androidx.webkit' app/build.gradle.kts \
@@ -832,17 +859,17 @@ PY8
     echo "FAIL 字段整理 Sort 按钮未放进 navigationIcon，或仍留在 actions" >&2; fail=1
   fi
 
-  echo "--- 0006–0008 静态检查 ---"
+  echo "--- 0006–0009 静态检查 ---"
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_cross_package_imports.py" ]]; then
     python3 "$ROOT/tools/check_cross_package_imports.py" --repo "$REPO" || {
-      echo "FAIL 跨包 import 检查（0001–0008 全序列）" >&2; fail=1; }
+      echo "FAIL 跨包 import 检查（0001–0009 全序列）" >&2; fail=1; }
   fi
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_trailing_lambda.py" ]]; then
     python3 "$ROOT/tools/check_trailing_lambda.py" --repo "$REPO" || {
-      echo "FAIL 尾随 lambda 检查（0001–0008 全序列）" >&2; fail=1; }
+      echo "FAIL 尾随 lambda 检查（0001–0009 全序列）" >&2; fail=1; }
   fi
 
-  echo "--- 0006–0008 apply -R（逆序还原） ---"
+  echo "--- 0006–0009 apply -R（逆序还原） ---"
   for ((i = ${#LATEST_PATCHES[@]} - 1; i >= 0; i--)); do
     git -C "$REPO" apply -R "${LATEST_PATCHES[$i]}" && echo "ok  已反向应用 $(basename "${LATEST_PATCHES[$i]}")"
   done
@@ -867,4 +894,4 @@ else
   echo "ok  工作区已回到干净状态"
 fi
 
-[[ $fail -eq 0 ]] && echo "PASS: app 侧补丁双向可逆、结果与基线逐文件一致（已校验到 0008）" || exit 1
+[[ $fail -eq 0 ]] && echo "PASS: app 侧补丁双向可逆、结果与基线逐文件一致（已校验到 0009）" || exit 1

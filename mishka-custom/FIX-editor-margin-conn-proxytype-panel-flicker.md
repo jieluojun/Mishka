@@ -67,7 +67,7 @@
 
 ---
 
-> **后续行为更新（0008）**：上述 0006 的缓存命中最初会保留 DOM / JS 当前页；现在完整补丁序列再叠加 0008，缓存只用于复用 WebView 实例，每次重进都从所选面板入口 URL 重载，并在内容提交前保持透明、但始终 `VISIBLE`。因此既不保留上次 tab，也继续避免白闪 / SPA 合成暂停。详见 `FIX-panel-default-page-reentry.md`。
+> **后续行为更新（0008 / 0009）**：缓存只用于复用 WebView 实例，每次重进都从所选面板入口 URL 重载并清 history；页面加载期间始终 `VISIBLE`、只用 alpha 遮罩，等 `onPageFinished` + Chromium visual-state callback 后再显示。既不保留上次 tab，也避免 SPA 空壳或半帧闪现。详见 `FIX-panel-default-page-reentry.md` 与 `FIX-panel-visual-state-loading.md`。
 
 ## 验证
 

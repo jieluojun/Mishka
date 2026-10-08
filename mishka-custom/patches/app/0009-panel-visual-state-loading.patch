@@ -1,0 +1,188 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+index 2c416a2ee50be1f0739b1e6138783d6249672025..1e68ad345a6227f8538302a4a1a6d1bbe39ed0be 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+@@ -84,7 +84,7 @@ import top.yukonga.miuix.kmp.window.WindowDialog
+  *
+  * **返回进入逻辑**：相同 `sessionKey` 复用缓存 WebView 实例以减少构造开销，但每次进入都会重新
+  * 加载所选面板的入口 URL，并清空上次页内 history；不会保留上次停留的 SPA tab / 子页。
+- * 新页面 commit 前仅用 alpha 露底色，WebView 始终保持 VISIBLE，避免白闪及 Chromium 暂停渲染导致的内容缺失。
++ * 新页面加载期间仅用 alpha 露底色，待页面完成并通过 visual-state callback 后再显示；WebView 始终保持 VISIBLE，避免白闪及 Chromium 暂停渲染导致的内容缺失。
+  * 切换面板时增 `sessionKey` 隔离旧实例；无缓存时由 [WebViewPreloader] 提供预热实例。
+  *
+  * @param isDark 跟随 App 主题，交给 WebView 的算法深色
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+index 95bd0a16b6c7b0b639e3a3dd61d4375340103892..8689a2d7b51aa278e720757eee8ebf570ae9f8ac 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+@@ -51,6 +51,7 @@ import top.yukonga.mishka.R
+ import java.net.HttpURLConnection
+ import java.net.URL
+ import java.util.concurrent.atomic.AtomicBoolean
++import java.util.concurrent.atomic.AtomicLong
+ 
+ /**
+  * 两阶段 WebView 预热器（box.app 同款）：
+@@ -223,16 +224,58 @@ private data class TagState(
+     val backRequestKey: Int,
+     val contentCommitted: Boolean = false,
+     val needsCanGoBackSync: Boolean = false,
++    val loadId: Long = 0L,
+ )
+ 
++private val panelLoadSequence = AtomicLong(0L)
++private val panelVisualRequestSequence = AtomicLong(0L)
++
++private fun nextPanelLoadId(): Long = panelLoadSequence.incrementAndGet()
++
++/**
++ * Reveal only after the renderer reports a frame for the completed document. `onPageCommitVisible`
++ * can arrive before a SPA has finished its first layout, so it is not a safe point to expose the view.
++ */
++private fun revealAfterVisualState(
++    view: WebView?,
++    expectedLoadId: Long,
++    onReady: (() -> Unit)? = null,
++) {
++    val webView = view ?: return
++    val reveal = {
++        val current = webView.tag as? TagState
++        if (current?.loadId == expectedLoadId) {
++            if (!current.contentCommitted) {
++                webView.tag = current.copy(contentCommitted = true)
++            }
++            webView.alpha = 1f
++            onReady?.invoke()
++        }
++    }
++
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++        webView.postVisualStateCallback(
++            panelVisualRequestSequence.incrementAndGet(),
++            object : WebView.VisualStateCallback() {
++                override fun onComplete(requestId: Long) {
++                    reveal()
++                }
++            },
++        )
++    } else {
++        // Legacy fallback: let the new document pass through the next UI draw cycle before showing it.
++        webView.post { reveal() }
++    }
++}
++
+ /**
+  * 外部面板用的 WebView——基于 box.app `ThemedWebView` 移植，并补上 WebView 实例缓存：
+  *
+  *  - **同一 [sessionKey] 可复用 WebView 实例，但每次进入都从配置的入口 [url] 重新加载**；
+  *    不保留上次停留的 SPA 子页 / tab，也不保留上次 WebView history；站点 Cookie / localStorage 不清除；
+  *  - **返回先退当前这次进入后的页内历史**（[backRequestKey] → `goBack`），退无可退由宿主退出页面；
+- *  - **防闪 / 防缺内容**：新页面 commit 前只将 WebView 的 alpha 设为 0，始终保持 `VISIBLE`，
+- *    Chromium 渲染不会暂停；commit 后显露真实页面；
++ *  - **防闪 / 防缺内容**：新页面加载期间只将 WebView 的 alpha 设为 0，始终保持 `VISIBLE`；
++ *    等 `onPageFinished` 与 WebView visual-state callback 确认页面可绘制后才显露，避免露出半帧 SPA；
+  *  - **[resetHistoryOnUrlChange]**：切换 [url] 或缓存实例重进时，加载后清 history，避免回到上一面板 / 上次访问页；
+  *  - `key(isDark, sessionKey)` 重建：换面板 / 换深浅色都重新配置 WebView。
+  *
+@@ -415,16 +458,9 @@ fun PanelWebView(
+                 }.getOrDefault(false)
+             }
+ 
+-            private fun markContentCommitted(view: WebView?) {
+-                val state = view?.tag as? TagState ?: return
+-                if (!state.contentCommitted) view.tag = state.copy(contentCommitted = true)
+-            }
+-
+             override fun onPageCommitVisible(view: WebView?, url: String?) {
+-                // 首屏真实内容已提交：把标记写入 WebView.tag 并显露；在此之前保持 alpha=0，
+-                // 但 WebView 一直为 VISIBLE，避免暂停 Chromium 合成造成 SPA 内容缺失。
+-                markContentCommitted(view)
+-                view?.alpha = 1f
++                // 这里只代表主文档已提交；SPA 的 JS / 首次布局可能还没完成，因此不要在此显露。
++                // 实际显示时机延后到 onPageFinished + postVisualStateCallback。
+             }
+ 
+             override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+@@ -433,24 +469,37 @@ fun PanelWebView(
+             }
+ 
+             override fun onPageFinished(view: WebView?, url: String?) {
+-                // 兼容没有 onPageCommitVisible 回调的路径，结束加载后也允许显示页面。
+-                markContentCommitted(view)
+-                view?.alpha = 1f
+-                // 换 URL 的那次加载完成后清 history：canGoBack 回报的是清完后的值
++                // 页面加载完成后先清 history，再等 Chromium 确认当前 DOM 已绘制到一帧；
++                // 不在 onPageCommitVisible 直接显示，避免先露出空壳后再跳变成完整面板。
+                 if (clearHistoryAfterNextPageFinished.getAndSet(false)) {
+                     runCatching { view?.clearHistory() }
+                 }
+                 // 加载成功即清掉上一次的错误横幅：否则一个 404 会一直挂在页面上
+                 currentOnWebError.value?.invoke(null)
+-                currentOnPageFinished.value?.invoke(url)
+                 currentOnCanGoBack.value?.invoke(view?.canGoBack() == true)
+                 runCatching { cookieManager.flush() }
+                 view?.evaluateJavascript(DOWNLOAD_HOOK_JS, null)
++
++                val loadId = (view?.tag as? TagState)?.loadId
++                if (loadId != null) {
++                    revealAfterVisualState(view, loadId) {
++                        currentOnPageFinished.value?.invoke(url)
++                    }
++                } else {
++                    currentOnPageFinished.value?.invoke(url)
++                }
+             }
+ 
+             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                 if (request?.isForMainFrame == true) {
+                     currentOnWebError.value?.invoke(error?.description?.toString()?.ifBlank { null })
++                    // 网络错误也可能不再收到常规完成回调；将错误页稳定绘制后露出，避免永久空白。
++                    val loadId = (view?.tag as? TagState)?.loadId
++                    if (loadId != null) {
++                        revealAfterVisualState(view, loadId) {
++                            currentOnPageFinished.value?.invoke(request?.url?.toString())
++                        }
++                    }
+                 }
+             }
+ 
+@@ -632,6 +681,7 @@ fun PanelWebView(
+                             backRequestKey = backRequestKey,
+                             contentCommitted = false,
+                             needsCanGoBackSync = isReused,
++                            loadId = nextPanelLoadId(),
+                         )
+                         loadUrl(entryUrl)
+                     }
+@@ -674,11 +724,21 @@ fun PanelWebView(
+                             clearHistoryAfterNextPageFinished.set(true)
+                             currentOnCanGoBack.value?.invoke(false)
+                         }
+-                        webView.tag = TagState(reloadKey, url, backRequestKey)
++                        webView.tag = TagState(
++                            reloadKey = reloadKey,
++                            url = url,
++                            backRequestKey = backRequestKey,
++                            loadId = nextPanelLoadId(),
++                        )
+                         webView.loadUrl(url)
+                     } else if (needsReload) {
+                         webView.alpha = if (hideUntilCommitVisible) 0f else 1f
+-                        webView.tag = TagState(reloadKey, url, backRequestKey)
++                        webView.tag = TagState(
++                            reloadKey = reloadKey,
++                            url = url,
++                            backRequestKey = backRequestKey,
++                            loadId = nextPanelLoadId(),
++                        )
+                         webView.reload()
+                     } else if (backRequested) {
+                         if (webView.canGoBack()) webView.goBack()
+@@ -688,6 +748,7 @@ fun PanelWebView(
+                             url = url,
+                             backRequestKey = backRequestKey,
+                             contentCommitted = last?.contentCommitted == true,
++                            loadId = last?.loadId ?: nextPanelLoadId(),
+                         )
+                     } else if (last?.needsCanGoBackSync == true) {
+                         // cached WebView 重进时同步宿主的返回状态；remember 状态已在新屏上重置。

@@ -119,3 +119,8 @@ patch0007_sha256=5a55cf1d214e606f8851b17a242002f7f52d4c7886a7c5e8f2685f4078e80ed
 # 复用缓存 WebView 以避开冷构造，但每次挂载重载入口并清 history；alpha 等待 commit，且始终 VISIBLE。
 patch0008_prereq=0001,0002,0003,0004,0005,0006,0007
 patch0008_sha256=250c65ae95c8402878cfffd8a59485f1338d75652f00b79e40def44035ddd7e3
+
+# --- 0009：等主文档完成并通过 Chromium visual-state callback 后再显示（在 0001–0008 之上应用）---
+# 不在 onPageCommitVisible 暴露 SPA 空壳；loadId 防止过期回调把旧导航画面显露。
+patch0009_prereq=0001,0002,0003,0004,0005,0006,0007,0008
+patch0009_sha256=b374ff743b056fa335b7aec241e2a35ddadae1e32d47f953a9f358b841be4d0c

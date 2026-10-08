@@ -4,7 +4,7 @@
 
 手动应用（仓库已应用 0001–0004）：在仓库根目录执行 `git apply <本包路径>/patches/app/0005-home-web-panel-and-rule-ellipsis.patch`。
 
-自检：`bash <本包路径>/tools/verify_app_patch.sh --repo <仓库> --series`（目前会校验 0001–0008 完整补丁序列的 sha256、断言与可逆性）。
+自检：`bash <本包路径>/tools/verify_app_patch.sh --repo <仓库> --series`（目前会校验 0001–0009 完整补丁序列的 sha256、断言与可逆性）。
 
 ---
 
@@ -30,10 +30,11 @@
 - **本地面板 = 内核 `/ui`**：`PanelScreen` 只在 `ProxyState.Running` 时用 `status.externalController` 现算 `http://<控制器>/ui`，并把结果写进 `panel_url_v1`；内核停止时退回这个缓存地址（否则点是死端口，首屏空白）；
 - **三个内置面板 + 自定义**：Zashboard（`http://board.zash.run.place`）、MetaCubeXD（`https://metacubex.github.io/metacubexd`）、本地；自定义面板可增可删，内置项不可删；
 - **换面板即换会话**：`sessionKey` 自增触发 WebView 重建，不跨面板串页内 history；登录 Cookie / 站点数据仍按原设计保留；
-- **重进总是默认入口页（0008）**：缓存 WebView 仅避免冷构造；从主页再次进入时无条件 `loadUrl(所选面板入口 URL)`、清空上次 history，并等待本次页面 commit 后显露，因此不保留上次 SPA tab / 子页；
+- **重进总是默认入口页（0008）**：缓存 WebView 仅避免冷构造；从主页再次进入时无条件 `loadUrl(所选面板入口 URL)`、清空上次 history，因此不保留上次 SPA tab / 子页；
+- **稳定首帧（0009）**：不在 `onPageCommitVisible` 提前显示 SPA 空壳；等 `onPageFinished` 与 Chromium `postVisualStateCallback` 确认首帧可绘制后再移除 alpha 遮罩，并以唯一 loadId 忽略过期回调；
 - **防白闪**：内容提交（`onPageCommitVisible`）前 WebView 保持隐藏、只露底色（`hideUntilCommitVisible`）；换 URL 加载完清 history（`resetHistoryOnUrlChange`）；
 - **返回语义**：`NavigationBackHandler(isBackEnabled = canGoBack)`——页内能后退就先退网页，退无可退才退出本页；这一屏的横滑返回关掉（`entry<Route.Panel>(swipeDismiss = NavSwipeDirection.None)`），否则边缘手势会被子级返回处理器截成「网页后退」，看着像卡住；
-- **WebView 能力**：JS / DOM storage / Cookie（第三方 Cookie 也接受，面板登录态可持久）、混合内容放行（https 面板拉 http 控制器接口）、`textZoom = 100`（系统字体缩放不撑爆桌面端面板布局）、深色跟随 App（API 33+ `isAlgorithmicDarkeningAllowed`，29–32 `forceDark`）、`<a download>` 的 `blob:` / `data:` 走 JS 桥 → SAF 存盘、`http(s)` 下载走 `ACTION_CREATE_DOCUMENT`、`<input type=file>` 打开系统选择器、`onPageCommitVisible` 前不露白帧、触摸事件不被外层容器抢走（`requestDisallowInterceptTouchEvent`）、`WebViewPreloader` 两阶段预热（`MainActivity.onCreate` 触发：后台加载 Chromium provider + 主线程空闲预建实例），缓存命中时复用 WebView、未命中时取预热实例；每次进入都重载所选面板入口 URL；
+- **WebView 能力**：JS / DOM storage / Cookie（第三方 Cookie 也接受，面板登录态可持久）、混合内容放行（https 面板拉 http 控制器接口）、`textZoom = 100`（系统字体缩放不撑爆桌面端面板布局）、深色跟随 App（API 33+ `isAlgorithmicDarkeningAllowed`，29–32 `forceDark`）、`<a download>` 的 `blob:` / `data:` 走 JS 桥 → SAF 存盘、`http(s)` 下载走 `ACTION_CREATE_DOCUMENT`、`<input type=file>` 打开系统选择器、`onPageFinished` + WebView visual-state callback 后才显露内容、触摸事件不被外层容器抢走（`requestDisallowInterceptTouchEvent`）、`WebViewPreloader` 两阶段预热（`MainActivity.onCreate` 触发：后台加载 Chromium provider + 主线程空闲预建实例），缓存命中时复用 WebView、未命中时取预热实例；每次进入都重载所选面板入口 URL；
 - **清除数据**：顶栏 → 确认弹窗 → `clearWebViewAppData()`（缓存 / Cookie / Storage / 历史 / 表单 / SSL 偏好）→ toast 提示并重载。
 
 **为什么是「恢复」**：这套面板在 `patches/app/0001` 的那一版里被下线过（`tools/verify_app_patch.sh` 原先有一组「web 界面已完全移除」的否定断言守着）。0005 按这次需求把它加回来，那组否定断言同步换成了肯定断言（见 `tools/verify_app_patch.sh` 的 0005 段）。
@@ -61,7 +62,7 @@
 ## 验证
 
 ```bash
-# 整序列（干净仓库 → 0001 → 0002 → 0003 → 0004 → 0005 → 0006 → 0007 → 0008 → 逆序还原）
+# 整序列（干净仓库 → 0001 → 0002 → 0003 → 0004 → 0005 → 0006 → 0007 → 0008 → 0009 → 逆序还原）
 bash <本包路径>/tools/verify_app_patch.sh --repo <干净仓库> --series
 
 # 面板资源引用静态检查（字符串键 × 4 locale、图标名对 0.9.4 清单）
