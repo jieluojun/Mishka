@@ -14,7 +14,8 @@
 #      随后依次叠加 0002 内置「免流」配置、0003 可视化编辑器修复、
 #      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐、
 #      0005 主页面板 / Web 界面（box.app 同款）+ 路由规则匹配值省略号、
-#      0006 规则编辑按钮间距 + 连接页代理类型标签 + Web 面板不闪/不缺内容
+#      0006 规则编辑按钮间距 + 连接页代理类型标签 + Web 面板不闪/不缺内容，
+#      0007 WebView 外网检测通过 mihomo mixed-port 出站
 #
 # 回滚：scripts/revert-patches.sh --all
 set -euo pipefail
@@ -247,7 +248,7 @@ EOF
 fi
 
 # ---------------------------------------------------------------- 5. app 侧补丁
-step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理 + 面板 / Web 界面）"
+step "5/6 app 侧补丁（锚点面板 + 内置免流 + 可视化修复 + 字段整理 + Web 面板 / WebView 代理）"
 if app_patch_applied "$REPO"; then
   ok "已应用（$CUSTOM_REL/anchor 与编辑器入口都在）"
 else
@@ -352,6 +353,24 @@ else
   die "修复补丁（0006）打不上：规则编辑 / 连接列表 / PanelWebView 与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0006\" 看详细原因"
 fi
 
+# 0007：WebView 默认运行在 Mishka 自己的 UID 下，VpnService 会排除自身避免流量环；
+# 因此内嵌外部面板原本绕过了 mihomo，IP 检测落到直连出口、YouTube 延迟探测失败。
+# 通过 AndroidX WebKit ProxyController 把 WebView 请求定向到运行中 mihomo 的 mixed-port
+#（并 bypass 本地 external-controller），只影响 WebView，不把 Mishka 其它流量拉进 TUN。
+PATCH_0007="$DELIVER/patches/app/0007-panel-webview-mihomo-proxy.patch"
+if grep -q "internal object PanelWebViewProxy" "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt" 2>/dev/null \
+    && grep -q "implementation(libs.androidx.webkit)" "$REPO/app/build.gradle.kts" 2>/dev/null; then
+  ok "WebView 按 mihomo mixed-port 代理出站（0007）已应用"
+elif git -C "$REPO" apply --check "$PATCH_0007" 2>/dev/null; then
+  git -C "$REPO" apply "$PATCH_0007"
+  ok "已应用 patches/app/0007-panel-webview-mihomo-proxy.patch（内嵌面板跟随 mihomo 出站）"
+elif git -C "$REPO" apply --check --3way "$PATCH_0007" 2>/dev/null; then
+  git -C "$REPO" apply --3way "$PATCH_0007"
+  ok "已应用（3way 合并，注意确认 PanelScreen / PanelWebView / WebKit 依赖）"
+else
+  die "修复补丁（0007）打不上：PanelScreen / PanelWebView 或 Gradle 依赖与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0007\" 看详细原因"
+fi
+
 # ---------------------------------------------------------------- 6. 总结
 step "6/6 完成"
 say "  仓库状态："
@@ -361,7 +380,7 @@ cat <<EOF
   下一步：
     bash $DELIVER/scripts/build-release.sh --repo "$REPO"      # 本地出 release APK（只出 release）
     bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO"     # 校验 app 补丁可逆（只验 0001）
-    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0006 整套校验
+    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0007 整套校验
     bash $DELIVER/tools/verify_mihomo_patches.sh --kernel-dir "$KERNEL_DIR"
   回滚：
     bash $DELIVER/scripts/revert-patches.sh --repo "$REPO" --all

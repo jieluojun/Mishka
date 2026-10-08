@@ -1,0 +1,344 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 6ecc565..65bc5f6 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -26,6 +26,7 @@ dependencies {
+     implementation(libs.androidx.activity)
+     implementation(libs.androidx.core.splashscreen)
+     implementation(libs.androidx.profileinstaller)
++    implementation(libs.androidx.webkit)
+     implementation(libs.material.icons.extended)
+     implementation(libs.hiddenapibypass)
+     implementation(libs.quickie.bundled)
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
+index 9bdb76c..087cb3b 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
+@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
+         super.onCreate(savedInstanceState)
+         splashScreen.setKeepOnScreenCondition { !contentReady }
+         // 面板 WebView 预热（box.app 同款）：后台加载 Chromium provider + 空闲时预建实例，
+-        // 面板每次进入都新建 WebView，预热把 new WebView() 的 ~500ms 冷启压掉
++        // 首次进入或切换面板时缓存未命中，就拿预热实例减少 new WebView() 的冷启耗时
+         WebViewPreloader.preload(this)
+ 
+         consumedDeepLinkNonce = savedInstanceState?.getString(STATE_DEEPLINK_NONCE)
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+index 7d462ca..29cbcbe 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+@@ -42,9 +42,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+ import androidx.navigationevent.NavigationEventInfo
+ import androidx.navigationevent.compose.NavigationBackHandler
+ import androidx.navigationevent.compose.rememberNavigationEventState
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.data.api.MihomoApiClient
+ import top.yukonga.mishka.platform.ProxyServiceBridge
++import top.yukonga.mishka.platform.ProxyServiceStatus
+ import top.yukonga.mishka.platform.ProxyState
+ import top.yukonga.mishka.platform.showToast
+ import top.yukonga.mishka.ui.theme.StatusColors
+@@ -82,10 +87,10 @@ import top.yukonga.miuix.kmp.window.WindowDialog
+  * 、标题与图标用 `onSurface`，和 App 其它顶栏同色系、随深浅色主题走。顶栏铺到状态栏后面，
+  * 状态栏图标外观交给 MainActivity 的主题化 enforce，不再强制。
+  *
+- * **返回进入逻辑整套照搬 box.app `ThemedWebView`**：每次进入都是新 WebView + 加载入口
+- * （重进总是面板首页），返回先退页内历史、退无可退退出页面；防白闪靠组件的
++ * **返回进入逻辑**：相同 `sessionKey` 复用已缓存的 WebView，保留 DOM/JS 状态减少闪烁；切换面板
++ * 时增 `sessionKey` 重建，返回先退页内历史、退无可退退出页面。防白闪靠组件的
+  * `hideUntilCommitVisible`（内容提交前隐藏 WebView、只露底色），换面板加载完清 history。
+- * 新实例由 [WebViewPreloader] 秒建。
++ * WebView 的外网请求在代理运行时通过 mihomo 本机 mixed-port 发出；本地 controller 地址走直连 bypass。
+  *
+  * @param isDark 跟随 App 主题，交给 WebView 的算法深色
+  */
+@@ -97,6 +102,7 @@ fun PanelScreen(
+     val context = LocalContext.current
+     val scope = rememberCoroutineScope()
+     val status by ProxyServiceBridge.state.collectAsStateWithLifecycle()
++    var webViewProxyReady by remember { mutableStateOf(false) }
+ 
+     val localName = stringResource(R.string.panel_local_name)
+     val localPanel = remember(localName) { PanelEntry(PANEL_ID_LOCAL, localName, null, isBuiltIn = true) }
+@@ -117,9 +123,8 @@ fun PanelScreen(
+     var sessionKey by rememberSaveable { mutableIntStateOf(0) }
+     var backRequestKey by rememberSaveable { mutableIntStateOf(0) }
+     var pageTitle by rememberSaveable { mutableStateOf<String?>(null) }
+-    // 瞬态状态不跨「返回 / 重进」保存（box.app openSubpage 进入即清零的等价语义）：
+-    // 每次进入都是新实例重新加载，恢复一个 true 的 refreshing 会让顶栏转圈永远
+-    // 停不下来；canGoBack 从「不能返回」起步，等加载 / 历史变化回报真实值
++    // 瞬态 UI 状态不跨「返回 / 重进」保存：refreshing 不能恢复成 true，否则缓存页没有新的
++    // onPageFinished 时顶栏会一直转圈；canGoBack 从「不能返回」起步，等 WebView 首次 update 同步。
+     var webError by remember { mutableStateOf<String?>(null) }
+     var refreshing by remember { mutableStateOf(false) }
+     var canGoBack by remember { mutableStateOf(false) }
+@@ -127,6 +132,22 @@ fun PanelScreen(
+     var showClearDialog by rememberSaveable { mutableStateOf(false) }
+     var clearing by remember { mutableStateOf(false) }
+ 
++    // WebView 运行在 Mishka 自己的 UID 下，VpnService 会排除自身以免形成流量环；
++    // 所以先向本地 controller 读取实际 mixed-port，等待 AndroidX WebView proxy override 生效，
++    // 再创建/加载外部面板。这样 ipip.net / ip.sb / YouTube 检测会按 mihomo 规则出站。
++    LaunchedEffect(status.state, status.externalController, status.secret) {
++        // 代理正在启停时保留上一次已生效的路由；首次进入则继续显示等待态，等状态收敛后再加载。
++        if (status.state in setOf(ProxyState.Starting, ProxyState.Stopping)) return@LaunchedEffect
++        val resolution = resolvePanelProxy(status)
++        if (resolution.known) {
++            val routeChanged = PanelWebViewProxy.apply(resolution.proxyAddress, status.externalController)
++            if (routeChanged) reloadKey += 1
++        }
++        // controller 查询失败时不覆盖上次成功的代理配置；首次失败则仍允许 WebView 直接打开，
++        // 以免把外部面板整个挡住。成功时，上面的 apply 已等待 Chromium 应用完代理再返回。
++        webViewProxyReady = true
++    }
++
+     /**
+      * 本地面板地址。控制器端口只在 [ProxyState.Running] 时才是「正在监听的那个」——
+      * 停止态下 [top.yukonga.mishka.platform.ProxyServiceStatus.externalController] 是默认值，
+@@ -190,7 +211,7 @@ fun PanelScreen(
+         },
+     ) { innerPadding ->
+         Box(modifier = Modifier.fillMaxSize()) {
+-            if (panelUrl != null) {
++            if (panelUrl != null && webViewProxyReady) {
+                 PanelWebView(
+                     url = panelUrl,
+                     isDark = isDark,
+@@ -207,6 +228,15 @@ fun PanelScreen(
+                     onWebError = { webError = it },
+                     onCanGoBackChange = { canGoBack = it },
+                 )
++            } else if (panelUrl != null) {
++                Box(
++                    modifier = Modifier
++                        .fillMaxSize()
++                        .padding(top = innerPadding.calculateTopPadding()),
++                    contentAlignment = Alignment.Center,
++                ) {
++                    CircularProgressIndicator()
++                }
+             } else {
+                 Column(
+                     modifier = Modifier
+@@ -322,6 +352,39 @@ fun PanelScreen(
+     }
+ }
+ 
++private data class PanelProxyResolution(
++    val known: Boolean,
++    val proxyAddress: String? = null,
++)
++
++/** 从实际运行中的 mihomo /configs 读取 WebView 可用的本机 HTTP 代理端口。 */
++private suspend fun resolvePanelProxy(status: ProxyServiceStatus): PanelProxyResolution {
++    if (status.state != ProxyState.Running) return PanelProxyResolution(known = true)
++
++    return withContext(Dispatchers.IO) {
++        val client = MihomoApiClient(
++            baseUrl = "http://${status.externalController}",
++            secret = status.secret,
++        )
++        try {
++            val config = client.getConfig()
++            val proxyAddress = when {
++                config.mixedPort in 1..65535 -> "127.0.0.1:${config.mixedPort}"
++                config.port in 1..65535 -> "127.0.0.1:${config.port}"
++                config.socksPort in 1..65535 -> "socks://127.0.0.1:${config.socksPort}"
++                else -> null
++            }
++            PanelProxyResolution(known = true, proxyAddress = proxyAddress)
++        } catch (cancelled: CancellationException) {
++            throw cancelled
++        } catch (_: Exception) {
++            PanelProxyResolution(known = false)
++        } finally {
++            client.close()
++        }
++    }
++}
++
+ /** 标题行高（不含状态栏），与 box.app 顶栏一致。 */
+ private val PanelBarHeight = 56.dp
+ 
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+index 11479c0..9d85ec8 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+@@ -25,6 +25,9 @@ import android.webkit.WebSettings
+ import android.webkit.WebStorage
+ import android.webkit.WebView
+ import android.webkit.WebViewClient
++import androidx.webkit.ProxyConfig
++import androidx.webkit.ProxyController
++import androidx.webkit.WebViewFeature
+ import androidx.activity.compose.rememberLauncherForActivityResult
+ import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.compose.foundation.background
+@@ -46,12 +49,110 @@ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.viewinterop.AndroidView
+ import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.suspendCancellableCoroutine
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.withContext
+ import top.yukonga.mishka.R
+ import java.net.HttpURLConnection
+ import java.net.URL
++import java.util.concurrent.Executor
+ import java.util.concurrent.atomic.AtomicBoolean
++import kotlin.coroutines.resume
++
++/**
++ * WebView 的网络栈属于 Mishka 进程，而 VpnService 会把 Mishka 自己排除在 TUN 之外。
++ * 因此只给面板 WebView 显式设置 mihomo 本机代理；不改 app 其它请求，也不把 app UID 拉回 TUN。
++ * AndroidX 的 override 是进程内所有 WebView 共用的，面板是本 app 唯一的联网 WebView。
++ */
++internal object PanelWebViewProxy {
++    private data class AppliedConfig(
++        val proxyAddress: String?,
++        val controllerHost: String?,
++    )
++
++    @Volatile
++    private var appliedConfig: AppliedConfig? = null
++
++    @Volatile
++    private var hasAppliedConfig = false
++
++    /**
++     * 将 WebView 的 HTTP(S) 流量指向 mihomo mixed-port（无 mixed-port 时由调用方传 HTTP/SOCKS 端口）。
++     * 返回 true 表示代理路径确实发生变化，调用方需要 reload 现有面板，使页面的检测请求重发。
++     */
++    suspend fun apply(proxyAddress: String?, externalController: String): Boolean =
++        withContext(Dispatchers.Main.immediate) {
++            if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return@withContext false
++
++            val controllerHost = proxyAddress?.let { parseHost(externalController) }
++            val requested = AppliedConfig(proxyAddress, controllerHost)
++            if (hasAppliedConfig && appliedConfig == requested) return@withContext false
++
++            val previous = appliedConfig
++            val wasConfigured = hasAppliedConfig
++            val routeChanged = wasConfigured && previous != requested
++
++            // 本进程刚启动且无需代理：AndroidX override 尚未设置，保持 WebView 系统默认行为即可。
++            if (proxyAddress == null && !wasConfigured) {
++                appliedConfig = requested
++                hasAppliedConfig = true
++                return@withContext false
++            }
++
++            suspendCancellableCoroutine<Boolean> { continuation ->
++                val executor = Executor { command ->
++                    Handler(Looper.getMainLooper()).post(command)
++                }
++                val controller = ProxyController.getInstance()
++                val complete = Runnable {
++                    appliedConfig = requested
++                    hasAppliedConfig = true
++                    if (continuation.isActive) continuation.resume(routeChanged)
++                }
++                try {
++                    if (proxyAddress == null) {
++                        controller.clearProxyOverride(executor, complete)
++                    } else {
++                        val proxyConfig = ProxyConfig.Builder()
++                            .addProxyRule(proxyAddress)
++                            // mihomo 控制器必须直连；loopback 默认也由 WebView 隐式绕过，显式列出
++                            // 是为了兼容厂商 WebView 对隐式 bypass 列表的差异。
++                            .addBypassRule("localhost")
++                            .addBypassRule("*.localhost")
++                            .addBypassRule("127.*")
++                            .addBypassRule("[::1]")
++                            .apply {
++                                controllerHost
++                                    ?.takeUnless { it == "localhost" || it == "[::1]" || it.startsWith("127.") }
++                                    ?.let { addBypassRule(it) }
++                            }
++                            .build()
++                        controller.setProxyOverride(proxyConfig, executor, complete)
++                    }
++                } catch (_: Exception) {
++                    // 设置失败时尽量清掉旧代理，避免端口变更后 WebView 仍指向已失效的监听端口。
++                    val direct = AppliedConfig(proxyAddress = null, controllerHost = null)
++                    val fallback = Runnable {
++                        appliedConfig = direct
++                        hasAppliedConfig = true
++                        if (continuation.isActive) continuation.resume(wasConfigured && previous?.proxyAddress != null)
++                    }
++                    runCatching { controller.clearProxyOverride(executor, fallback) }
++                        .onFailure {
++                            appliedConfig = direct
++                            hasAppliedConfig = true
++                            if (continuation.isActive) continuation.resume(wasConfigured && previous?.proxyAddress != null)
++                        }
++                }
++            }
++        }
++
++    private fun parseHost(address: String): String? {
++        val host = Uri.parse("http://$address").host?.trim().orEmpty()
++        if (host.isBlank()) return null
++        return if (':' in host && !host.startsWith("[")) "[$host]" else host
++    }
++}
+ 
+ /**
+  * 两阶段 WebView 预热器（box.app 同款）：
+@@ -59,9 +160,8 @@ import java.util.concurrent.atomic.AtomicBoolean
+  * 阶段 1（后台线程，立即）：`CookieManager.getInstance()` 触发 Chromium native library 加载；
+  * 阶段 2（主线程，空闲时）：预创建 WebView 实例并暂存，不加载任何 URL、零历史。
+  *
+- * 面板每次**进入**都是新 WebView + `loadUrl(入口)`（box.app 的返回进入逻辑），
+- * `new WebView()` 的 ~500ms 冷启是这套逻辑唯一的构造开销，预热后取用近乎 0ms。
+- * 用 WeakReference 暂存，避免静态持有 WebView 造成泄漏。
++ * 面板缓存未命中（首次进入 / 切换面板）时取用预热的空 WebView，再 `loadUrl(入口)`；
++ * `new WebView()` 的 ~500ms 冷启由预热隐藏掉。用 WeakReference 暂存，避免静态持有 WebView 造成泄漏。
+  */
+ internal object WebViewPreloader {
+     @Volatile
+@@ -225,9 +325,9 @@ private data class TagState(
+ )
+ 
+ /**
+- * 外部面板用的 WebView——box.app `ThemedWebView` 的忠实移植（返回进入逻辑整套照搬）：
++ * 外部面板用的 WebView——基于 box.app `ThemedWebView` 移植，并补上会话缓存与代理路由：
+  *
+- *  - **每次进入都是新实例 + `loadUrl(入口 URL)`**（box.app 的进入逻辑：重进总是面板首页）；
++ *  - **相同 [sessionKey] 优先复用缓存实例**（DOM/JS 状态保留）；无缓存时取预热实例或新建并加载入口；
+  *  - **返回先退页内历史**（[backRequestKey] → `goBack`），退无可退由宿主退出页面；
+  *  - **防白闪 = [hideUntilCommitVisible]**：内容提交（`onPageCommitVisible`）前 WebView
+  *    保持隐藏，只露底色——加载期永远不露出白帧，这是 box.app 组件自带的防闪机制；
+@@ -240,7 +340,7 @@ private data class TagState(
+  *     没有它「返回先退页内历史」在面板子页里永远不生效（box.app 漏了这个回调）；
+  *  2. http(s) 导航交回 WebView（`return false`，保留 POST 语义），其余 scheme 交系统
+  *     （box.app 是一律 `loadUrl` 重放，POST 会丢）；
+- *  3. `onRelease` 里 `destroy()`（box.app 丢给 GC，顺手防泄漏，对外行为一致）。
++ *  3. `onRelease` 只停止加载并交给 [WebViewPreloader] 缓存；同一面板下次进入复用，不再反复冷启动。
+  *
+  * @param reloadKey 自增即触发一次 `reload()`
+  * @param sessionKey 自增即销毁重建 WebView（切面板时用）
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+index 9dbaea8..13527a2 100644
+--- a/gradle/libs.versions.toml
++++ b/gradle/libs.versions.toml
+@@ -5,6 +5,7 @@ androidx-benchmark = "1.5.0"
+ androidx-lifecycle = "2.11.0"
+ androidx-navigationevent = "1.1.2"
+ androidx-profileinstaller = "1.4.1"
++androidx-webkit = "1.16.0"
+ androidx-splashscreen = "1.2.0"
+ androidx-test-junit = "1.3.0"
+ androidx-uiautomator = "2.4.0"
+@@ -31,6 +32,7 @@ androidx-lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-co
+ androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle" }
+ androidx-navigationevent = { module = "androidx.navigationevent:navigationevent-compose", version.ref = "androidx-navigationevent" }
+ androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "androidx-profileinstaller" }
++androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "androidx-webkit" }
+ androidx-room3-compiler = { module = "androidx.room3:room3-compiler", version.ref = "room3" }
+ androidx-room3-runtime = { module = "androidx.room3:room3-runtime", version.ref = "room3" }
+ androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }

@@ -4,7 +4,7 @@
 
 手动应用（仓库已应用 0001–0004）：在仓库根目录执行 `git apply <本包路径>/patches/app/0005-home-web-panel-and-rule-ellipsis.patch`。
 
-自检：`bash <本包路径>/tools/verify_app_patch.sh --repo <仓库> --series`（0001–0005 整序列的 sha256、断言、可逆性）。
+自检：`bash <本包路径>/tools/verify_app_patch.sh --repo <仓库> --series`（目前会校验 0001–0007 完整补丁序列的 sha256、断言与可逆性）。
 
 ---
 

@@ -6,10 +6,10 @@
 # 要求仓库处在补丁基线 commit（BASELINE.txt 的 upstream_commit）且工作区干净；
 # 脚本跑完不会留下任何改动（成功与失败都还原）。
 #
-# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 的顺序把后续补丁也叠上，
-#           逐条跑 0004 的专属断言（字段整理按钮与四类提示 / DNS maplist 拖动排序 /
-#           路由规则序号 / 批量测速与 testGroupAll 对齐），再跑 0005 的
-#           （主页「工具」下方的面板 / Web 界面 + 路由规则匹配值省略号），最后按逆序还原。
+# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 → 0006 → 0007 的顺序叠加，
+#           逐条跑 0004 专属断言（字段整理 / DNS maplist 拖动 / 规则序号 / 批量测速），
+#           0005 面板 / 规则省略号断言，再检查 0006 编辑间距 / 连接代理类型 / WebView 缓存，
+#           以及 0007 WebView 经 mihomo mixed-port 出站与 AndroidX proxy override，最后逆序还原。
 #           0005 还会顺带跑 tools/panel/check_panel_refs.py（面板字符串键 × 4 locale、图标名对表）。
 #           不加 --series 只验 0001（与原行为一致）。
 set -euo pipefail
@@ -720,6 +720,77 @@ s = open(sys.argv[1], encoding="utf-8").read()
 sys.exit(0 if s.count("rowMaxLines = 1,") == 1 else 1)
 PY7
   echo "ok  省略号只开在规则列表这一处调用点"
+
+  # ---- 0006–0007：编辑 / 连接 / WebView 修复系列 ----
+  LATEST_PATCHES=()
+  for n in 0006 0007; do
+    p="$(find "$ROOT/patches/app" -maxdepth 1 -name "$n-*.patch" | sort | head -1)"
+    if [[ -z "$p" ]]; then
+      echo "FAIL 缺少 $n 补丁文件" >&2; fail=1; continue
+    fi
+    LATEST_PATCHES+=("$p")
+    expected="$(sed -n "s/^patch${n}_sha256=//p" "$BASELINE" | head -1)"
+    actual="$(sha256sum "$p" | cut -d' ' -f1)"
+    if [[ "$actual" == "$expected" && -n "$expected" ]]; then
+      echo "ok  $(basename "$p") sha256 与基线一致"
+    else
+      echo "FAIL $(basename "$p") sha256 不一致：$actual != $expected" >&2; fail=1
+    fi
+    if git -C "$REPO" apply --check "$p"; then
+      git -C "$REPO" apply "$p" && echo "ok  已应用 $(basename "$p")"
+    else
+      echo "FAIL $(basename "$p") 无法应用" >&2; fail=1; break
+    fi
+  done
+
+  echo "--- 0006–0007 修复断言 ---"
+  FFP="app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt"
+  CONN="app/src/main/kotlin/top/yukonga/mishka/ui/screen/connection/ConnectionScreen.kt"
+  PSC="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt"
+  PW="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt"
+  assert_contains 'Spacer(Modifier.height(8.dp))' "$FFP" \
+    'raw rule editor toggle has the requested vertical gap'
+  assert_contains 'val proxyType = meta.type.trim().uppercase()' "$CONN" \
+    'connection rows read the inbound proxy type from metadata.type'
+  assert_contains 'fun takeCached(sessionKey: Int): WebView?' "$PW" \
+    'same-session WebView is cached and reused across re-entry'
+  assert_contains 'webView.visibility = WebView.VISIBLE' "$PW" \
+    'the WebView stays VISIBLE so Chromium does not pause SPA rendering'
+  assert_contains 'internal object PanelWebViewProxy' "$PW" \
+    'the panel has a dedicated WebView proxy override manager'
+  assert_contains 'ProxyController.getInstance()' "$PW" \
+    'AndroidX ProxyController is used to route WebView requests'
+  assert_contains 'addBypassRule("127.*")' "$PW" \
+    'loopback controller requests bypass the mihomo proxy'
+  assert_contains 'implementation(libs.androidx.webkit)' app/build.gradle.kts \
+    'AndroidX WebKit dependency is wired into the app'
+  assert_contains 'androidx-webkit = "1.16.0"' gradle/libs.versions.toml \
+    'the AndroidX WebKit dependency is pinned in the version catalog'
+  assert_contains 'config.mixedPort in 1..65535' "$PSC" \
+    'the active mihomo mixed-port is preferred for WebView'
+  assert_contains 'config.port in 1..65535' "$PSC" \
+    'HTTP-only mihomo proxy port is used as a fallback'
+  assert_contains 'config.socksPort in 1..65535' "$PSC" \
+    'SOCKS-only mihomo proxy port is used as a final fallback'
+  assert_contains 'val routeChanged = PanelWebViewProxy.apply(resolution.proxyAddress, status.externalController)' "$PSC" \
+    'a changed proxy route triggers a reload of the active panel'
+  assert_contains 'webViewProxyReady = true' "$PSC" \
+    'the panel waits until proxy configuration has been applied before loading'
+
+  echo "--- 0006–0007 静态检查 ---"
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_cross_package_imports.py" ]]; then
+    python3 "$ROOT/tools/check_cross_package_imports.py" --repo "$REPO" || {
+      echo "FAIL 跨包 import 检查（0001–0007 全序列）" >&2; fail=1; }
+  fi
+  if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_trailing_lambda.py" ]]; then
+    python3 "$ROOT/tools/check_trailing_lambda.py" --repo "$REPO" || {
+      echo "FAIL 尾随 lambda 检查（0001–0007 全序列）" >&2; fail=1; }
+  fi
+
+  echo "--- 0006–0007 apply -R（逆序还原） ---"
+  for ((i = ${#LATEST_PATCHES[@]} - 1; i >= 0; i--)); do
+    git -C "$REPO" apply -R "${LATEST_PATCHES[$i]}" && echo "ok  已反向应用 $(basename "${LATEST_PATCHES[$i]}")"
+  done
 
   echo "--- 后续补丁 apply -R（逆序还原） ---"
   for ((i = ${#EXTRA_PATCHES[@]} - 1; i >= 0; i--)); do

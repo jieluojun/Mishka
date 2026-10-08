@@ -109,3 +109,9 @@ patch0005_blob_new=1769d75b488fc4fa4085445501b85783959af1e6 app/src/main/kotlin/
 #      不再每次 destroy→new→loadUrl；切面板（sessionKey 变化）时旧实例自动销毁，同时补一个预热空位。
 patch0006_prereq=0001,0002,0003,0004,0005
 patch0006_sha256=d0dee8edabb0df0f19ec14124d70d69ea5caa08b1637bc164ff4bcb254f893cf
+# --- 0007：WebView 外网请求经 mihomo 本机代理出站（在 0001–0006 之上应用）---
+# WebView UID 被 VpnService 排除时，内嵌面板的 IP / YouTube 延迟检测会直连；
+# 读取当前 /configs 的 mixed-port（其次 HTTP port / SOCKS port），用 AndroidX ProxyController
+# 定向 WebView 流量，并 bypass loopback / external-controller，保持本地面板 API 直连。
+patch0007_prereq=0001,0002,0003,0004,0005,0006
+patch0007_sha256=23acc283b014d123b682cd4396f30da24ef7976cf36691963e9fcc9f802e8893
