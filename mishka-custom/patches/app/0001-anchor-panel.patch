@@ -2429,10 +2429,10 @@ index 0000000..44c2097
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 new file mode 100644
-index 0000000..8860864
+index 0000000..128e33a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
-@@ -0,0 +1,751 @@
+@@ -0,0 +1,748 @@
 +package top.yukonga.mishka.custom.anchor
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -2533,17 +2533,14 @@ index 0000000..8860864
 +     * 有悬空引用时提示会带上名字——这类错误 mihomo 会直接拒绝加载，必须在写盘前就被看见。
 +     */
 +    fun apply(newText: String, toast: String, revealLine1: Int? = null) {
-+        // 整篇替换的范围必须按编辑器**当前**内容算（与 ConfigFormPanel.apply 同一根因）：
-+        // 结束位置按 newText 算时，新末行更短则旧末行尾巴残留、新文本行数更少则旧尾部整段残留。
-+        val current = controller.getText()
-+        if (newText == current) {
++        if (newText == text) {
 +            showToast(toast)
 +            return
 +        }
-+        val oldLines = current.split('\n')
++        val lines = newText.split('\n')
 +        controller.replaceRange(
 +            TextPosition(0, 0),
-+            TextPosition(oldLines.lastIndex, oldLines[oldLines.lastIndex].length),
++            TextPosition(lines.lastIndex, lines[lines.lastIndex].length),
 +            newText,
 +        )
 +        // 同一事件回调里紧接着跳转：keep-in-view 只对最终位置露出一次，不会先滚到文末
@@ -4414,10 +4411,10 @@ index 0000000..d4c6508
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..fb345ab
+index 0000000..1a05e5a
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1537 @@
+@@ -0,0 +1,1497 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4506,29 +4503,21 @@ index 0000000..fb345ab
 +    val nav = remember(visible) { FormNav() }
 +
 +    fun apply(newText: String, toast: String, revealLine1: Int?) {
-+        // 整篇替换的范围必须按编辑器**当前**内容算：结束位置按 newText 算时，
-+        // 只要新末行比旧末行短（拖动排序/改短末行），旧末行多出的尾巴就残留在新文本后面
-+        // （路由规则拖动后 “REJECT” 的 “CT” 残留）；新文本行数更少（删除项）时，
-+        // 旧文档尾部整段残留、末行重复。两种都是这一个根因。
-+        // 用 fresh 的 getText() 而不是 remember 住的 text：组合与编辑器内容之间
-+        // 若有未重组的时间窗，按旧快照算范围同样会算错。
-+        val current = controller.getText()
-+        if (newText == current) {
++        if (newText == text) {
 +            showToast(toast)
 +            return
 +        }
-+        val oldLines = current.split('\n')
++        val lines = newText.split('\n')
 +        controller.replaceRange(
 +            TextPosition(0, 0),
-+            TextPosition(oldLines.lastIndex, oldLines[oldLines.lastIndex].length),
++            TextPosition(lines.lastIndex, lines[lines.lastIndex].length),
 +            newText,
 +        )
 +        if (revealLine1 != null) controller.jumpToLine((revealLine1 - 1).coerceAtLeast(0))
 +        showToast(toast)
 +    }
 +
-+    // bug-2：写回基准取编辑器当前文本（freshDoc），两次点按落在同一重组窗口时也不丢写回
-+    val host = remember(doc, fileBaseDir) { FormHost(doc, ::apply, fileBaseDir) { YamlDoc.parse(controller.getText()) } }
++    val host = remember(doc, fileBaseDir) { FormHost(doc, ::apply, fileBaseDir) }
 +    val route = nav.current
 +
 +    WindowBottomSheet(
@@ -4624,13 +4613,6 @@ index 0000000..fb345ab
 +    private val applyText: (newText: String, toast: String, revealLine1: Int?) -> Unit,
 +    /** 当前编辑文件所属订阅的 imported/ 目录；file 类型合集的源文件上传 / 编辑靠它落盘。null = 无文件能力。 */
 +    val fileBaseDir: String? = null,
-+    /**
-+     * 写回基准：编辑器**当前**文本实时解析出的文档。读路径用组合快照 [doc] 即可，
-+     * 但写路径必须以 fresh 为准——两次点按若落在同一个重组窗口里，`doc` 已旧，
-+     * 用旧基准算整篇 dump 再全量替换，会静默吞掉前一次的改动（bug-2：连点丢写回）。
-+     * 点按处理在 UI 线程同步执行，fresh→算 dump→替换是原子的，天然关闭竞态。
-+     */
-+    private val freshDoc: () -> YamlDoc = { doc },
 +) {
 +    /** 行级手术（锚点继承等）的落地通道：整篇替换，与 set / batch 同一套「无变化」提示。 */
 +    fun applyRawText(newText: String, label: String, revealLine1: Int? = null): Boolean {
@@ -4647,13 +4629,13 @@ index 0000000..fb345ab
 +        showToast("$label 未改动：这个位置不能这样写，请在编辑器里直接改这一段", long = true)
 +    }
 +
-+    private fun commit(base: YamlDoc, out: YamlDoc, label: String, verb: String, reveal: YPath?): Boolean {
-+        if (out === base) {
++    private fun commit(out: YamlDoc, label: String, verb: String, reveal: YPath?): Boolean {
++        if (out === doc) {
 +            refuse(label)
 +            return false
 +        }
 +        val dumped = out.dump()
-+        if (dumped == base.dump()) {
++        if (dumped == doc.dump()) {
 +            showToast("$label 没有变化")
 +            return false
 +        }
@@ -4662,57 +4644,45 @@ index 0000000..fb345ab
 +    }
 +
 +    fun set(path: YPath, value: Any?, label: String): Boolean {
-+        // bug-2：可写性检查、写穿/物化、commit 对比全程用 fresh 基准（见 freshDoc 注释）
-+        val base = freshDoc()
-+        if (!base.canSet(path)) {
++        if (!doc.canSet(path)) {
 +            showToast("$label 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
 +            return false
 +        }
 +        // 继承感知：值来自 `<<:` 继承时按参考实现写穿锚点 / 物化整块，绝不建半块本地映射顶掉继承内容
-+        val w = AnchorInheritance.applySetAware(base, path, value)
++        val w = AnchorInheritance.applySetAware(doc, path, value)
 +        val named = if (w.anchor != null) "$label（已同步到锚点 &${w.anchor}，继承它的所有条目一起生效）" else label
-+        return commit(base, w.doc, named, "已写入", w.path)
++        return commit(w.doc, named, "已写入", w.path)
 +    }
 +
 +    fun clear(path: YPath, label: String): Boolean {
-+        val base = freshDoc()
-+        if (base.get(path) == null) {
-+            if (FormValues.hasEffective(base, path)) {
++        if (doc.get(path) == null) {
++            if (FormValues.hasEffective(doc, path)) {
 +                showToast("$label 来自锚点继承，本地没有可删的行：直接填入新值即可覆盖，或在「锚点与继承」里解除继承", long = true)
 +            } else showToast("$label 本来就没有设置")
 +            return false
 +        }
-+        return commit(base, YamlPatch.removeKey(base, path), label, "已清空", null)
++        return commit(YamlPatch.removeKey(doc, path), label, "已清空", null)
 +    }
 +
-+    fun insertItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean {
-+        val base = freshDoc()
-+        return commit(base, YamlPatch.insertItem(base, seqPath, index, value), label, "已新增", seqPath + index)
-+    }
++    fun insertItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean =
++        commit(YamlPatch.insertItem(doc, seqPath, index, value), label, "已新增", seqPath + index)
 +
-+    fun setItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean {
-+        val base = freshDoc()
-+        return commit(base, YamlPatch.setItem(base, seqPath, index, value), label, "已写入", seqPath + index)
-+    }
++    fun setItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean =
++        commit(YamlPatch.setItem(doc, seqPath, index, value), label, "已写入", seqPath + index)
 +
-+    fun removeItem(seqPath: YPath, index: Int, label: String): Boolean {
-+        val base = freshDoc()
-+        return commit(base, YamlPatch.removeItem(base, seqPath, index), label, "已删除", null)
-+    }
++    fun removeItem(seqPath: YPath, index: Int, label: String): Boolean =
++        commit(YamlPatch.removeItem(doc, seqPath, index), label, "已删除", null)
 +
-+    fun moveItem(seqPath: YPath, from: Int, to: Int, label: String): Boolean {
-+        val base = freshDoc()
-+        return commit(base, YamlPatch.moveItem(base, seqPath, from, to), label, "已移动", seqPath + to)
-+    }
++    fun moveItem(seqPath: YPath, from: Int, to: Int, label: String): Boolean =
++        commit(YamlPatch.moveItem(doc, seqPath, from, to), label, "已移动", seqPath + to)
 +
 +    fun rename(path: YPath, newKey: String, label: String): Boolean {
-+        val base = freshDoc()
-+        val parent = base.get(path.dropLast(1))
-+        if (parent != null && base.findEntry(parent, newKey) != null) {
++        val parent = doc.get(path.dropLast(1))
++        if (parent != null && doc.findEntry(parent, newKey) != null) {
 +            showToast("已经有叫「$newKey」的了，换个名字", long = true)
 +            return false
 +        }
-+        return commit(base, YamlPatch.renameKey(base, path, newKey), label, "已改名", path.dropLast(1) + newKey)
++        return commit(YamlPatch.renameKey(doc, path, newKey), label, "已改名", path.dropLast(1) + newKey)
 +    }
 +
 +    /**
@@ -4721,9 +4691,7 @@ index 0000000..fb345ab
 +     * [BatchOp.Remove] 对不存在的键是空操作。
 +     */
 +    fun batch(ops: List<BatchOp>, label: String, verb: String = "已写入", reveal: YPath? = null): Boolean {
-+        // bug-2：与 set() 同理，整批从 fresh 基准起算（commit 的无变化对比也以它为准）
-+        val base = freshDoc()
-+        var cur = base
++        var cur = doc
 +        var touched = false
 +        val syncedAnchors = LinkedHashSet<String>()
 +        for (op in ops) {
@@ -4765,7 +4733,7 @@ index 0000000..fb345ab
 +            val names = syncedAnchors.joinToString("、") { "&$it" }
 +            "$label（已同步到锚点 $names，继承它的所有条目一起生效）"
 +        }
-+        return commit(base, cur, named, verb, reveal)
++        return commit(cur, named, verb, reveal)
 +    }
 +
 +    // ---- 动态候选（下拉 / 多选里的节点名、代理组名、集合名）
@@ -4869,7 +4837,7 @@ index 0000000..fb345ab
 +                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
 +            )
 +        }
-+        items(HUB, key = { it.title }) { entry ->
++        items(HUB) { entry ->
 +            val count = entry.countPath?.let { countOf(doc, it) }
 +            val key = (entry.route as? FormRoute.Section)?.key
 +            val sub = buildString {
@@ -5433,7 +5401,7 @@ index 0000000..fb345ab
 +        verticalArrangement = Arrangement.spacedBy(8.dp),
 +    ) {
 +        if (header != null) item(key = "header") { header() }
-+        for ((sIndex, section) in sections.withIndex()) {
++        for (section in sections) {
 +            val rows = section.fields.filter { row ->
 +                when (row) {
 +                    is FormCustomRow -> true
@@ -5444,19 +5412,8 @@ index 0000000..fb345ab
 +                }
 +            }
 +            if (rows.isEmpty()) continue
-+            item(key = "h-$sIndex-${section.title}") { SectionHeader(section.title) }
-+            // 行必须带稳定 key：only/hide 过滤会让行出现/消失（P2 详情页切类型时最常见），
-+            // 无 key 时 Lazy 按位置复用组合，行内 remember 的状态（弹窗、开关过渡等）
-+            // 会错位挂到别的行上——“动一个开关影响另一个”的经典成因。
-+            items(
-+                rows,
-+                key = { row ->
-+                    "$sIndex:" + when (row) {
-+                        is FormCustomRow -> "c:${row.kind}"
-+                        is FormField -> "f:${row.path}"
-+                    }
-+                },
-+            ) { row ->
++            item(key = "h-${section.title}") { SectionHeader(section.title) }
++            items(rows) { row ->
 +                when (row) {
 +                    is FormCustomRow -> if (customRow != null) customRow(row) else CustomRow(row)
 +                    is FormField -> FieldRow(row, base, host, dynamicOptions, intercept)
@@ -6514,10 +6471,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..c3bee29
+index 0000000..8d0139c
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,576 @@
+@@ -0,0 +1,531 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6531,7 +6488,6 @@ index 0000000..c3bee29
 +import androidx.compose.foundation.lazy.LazyItemScope
 +import androidx.compose.foundation.shape.RoundedCornerShape
 +import androidx.compose.runtime.Composable
-+import androidx.compose.runtime.DisposableEffect
 +import androidx.compose.runtime.LaunchedEffect
 +import androidx.compose.runtime.Stable
 +import androidx.compose.runtime.getValue
@@ -6669,15 +6625,6 @@ index 0000000..c3bee29
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
 +    private var scrollBy: ((Float) -> Float)? = null
-+    /**
-+     * 边缘自动翻滚的卡住记忆：某方向滚到头（上一帧实际消耗≈0）后就不再喂 delta。
-+     * 到头还每帧喂，Lazy 的 stretch overscroll 会被反复触发，内容在边界上持续回弹抖动，
-+     * 行身段也被拉伸带偏（拖到底部条目到顶部不松手时的回弹 + 虚线框闪烁即此机制）。
-+     * 第一帧照旧喂一次（天然的"到头"反馈），之后跳过；手指离开该边缘 / 换向 /
-+     * 本次拖动结束即清零。step() 不受影响（照旧每帧跑，冻在半路的行照样追上来）。
-+     */
-+    private var stuckUp = false
-+    private var stuckDown = false
 +    private val tops = HashMap<Int, Float>()
 +    private val heights = HashMap<Int, Float>()
 +    private val handleCoords = HashMap<Int, LayoutCoordinates>()
@@ -6797,17 +6744,6 @@ index 0000000..c3bee29
 +            .zIndex(if (index == dragging) 1f else 0f)
 +
 +    /**
-+     * 行被 lazy 列表回收时清掉它的身段与把手登记（[DragSortRow] 在 dispose 里调）。
-+     * 不清的话滚出视口的行留下过期坐标，命中判定会测到“幽灵行”：长列表快速拖动 +
-+     * 自动滚动时手指档位算错，行被瞬移到莫名其妙的位置（冲过头 / 落点错位）。
-+     */
-+    fun forgetRow(index: Int) {
-+        tops.remove(index)
-+        heights.remove(index)
-+        handleCoords.remove(index)
-+    }
-+
-+    /**
 +     * 把手：只负责**量出自己的窗口矩形**（[handleCoords]），供容器级手势在 DOWN 时命中判定。
 +     *
 +     * v7 起把手不再自带 `pointerInput` 手势——手势统一挂在 [containerModifier]（容器节点）上。
@@ -6849,8 +6785,6 @@ index 0000000..c3bee29
 +        dragging = -1
 +        fingerY = 0f
 +        draggingHeight = 0f
-+        stuckUp = false
-+        stuckDown = false
 +        val moved = reordered && to >= 0 && to != from
 +        flipSuppressed = true   // 提交帧：键位随数据整体重排，这一帧不做位移动画（下一帧恢复）
 +        resetOrder()            // 视觉顺序已由宿主接住（或本次没换过位）：恢复恒等序，行不会跳
@@ -6910,27 +6844,10 @@ index 0000000..c3bee29
 +        val edge = (span * 0.15f).coerceIn(edgeMin, edgeMax)
 +        val up = (containerTop + edge) - fingerY
 +        val down = fingerY - (containerBottom - edge)
-+        if (up <= 0f && down <= 0f) {
-+            stuckUp = false
-+            stuckDown = false
-+            return
-+        }
-+        if (up <= 0f) stuckUp = false
-+        if (down <= 0f) stuckDown = false
++        if (up <= 0f && down <= 0f) return
 +        val depth = maxOf(up, down).coerceIn(0f, edge)
 +        val v = velMin + (depth / edge) * velRange
-+        val goUp = up > down
-+        if (!(goUp && stuckUp) && !(!goUp && stuckDown)) {
-+            val consumed = scroller(if (goUp) -v else v)
-+            // 滚到头后不再喂 delta（见 stuckUp/stuckDown 注释）；第一帧照旧喂一次。
-+            if (abs(consumed) < 0.5f) {
-+                if (goUp) stuckUp = true else stuckDown = true
-+            }
-+        }
-+        // 即使已到滚动尽头（scroller 返回 0）也要 step：手指静止 + 列表到头时，
-+        // 跳过 step 会让还没追上手指的行永远冻在半路（松手落点与手指位置对不上，
-+        // 被拖行还可能停在视口外“看不见”）。step 是幂等的（已在手指档位就是空操作），
-+        // 每帧多调一次没有行为代价。
++        if (scroller(if (up > down) -v else v) == 0f) return   // 已到尽头：不空转
 +        step()
 +    }
 +}
@@ -6989,11 +6906,6 @@ index 0000000..c3bee29
 +    modifier: Modifier = Modifier,
 +    content: @Composable () -> Unit,
 +) {
-+    // 行滚出视口被回收时清掉身段登记（幽灵坐标会带偏命中判定）；换位只是同 key
-+    // 组合移槽不触发 dispose，滚回视口时 rowModifier 会重新登记。见 forgetRow。
-+    DisposableEffect(state, index) {
-+        onDispose { state.forgetRow(index) }
-+    }
 +    val active = state.dragging == index
 +    val accent = MiuixTheme.colorScheme.primary
 +    Box(
@@ -7158,7 +7070,7 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..0bffc01
+index 0000000..8de1116
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 @@ -0,0 +1,2300 @@
@@ -7391,7 +7303,7 @@ index 0000000..0bffc01
 +                )
 +            }
 +        }
-+        itemsIndexed(entries, key = { _, e -> e.key }) { _, e ->
++        itemsIndexed(entries) { _, e ->
 +            RowCard(
 +                title = e.key,
 +                summary = rowSummary(e.key, e.node),
@@ -16546,10 +16458,10 @@ index 0000000..1796296
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 new file mode 100644
-index 0000000..0fd1cc0
+index 0000000..8e92a0f
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
-@@ -0,0 +1,1169 @@
+@@ -0,0 +1,1164 @@
 +package top.yukonga.mishka.custom.forms
 +
 +// 配置表单用的 YAML 引擎（Kotlin 侧实现）。
@@ -17362,12 +17274,7 @@ index 0000000..0fd1cc0
 +                    val line = lines[n.start]
 +                    val before = line.substring(0, n.valueStart.coerceAtMost(line.length))
 +                    val after = line.substring(n.valueEnd.coerceAtMost(line.length))
-+                    // 行内锚点只补一次：解析时 valueStart 已经越过 `&名`（before 尾巴自带它），
-+                    // 无条件再拼会写成 `&x &x false`（非法 YAML，mihomo 拒绝加载）。
-+                    // 只有 `key: &x` 这种锚点后无值的空位，before 才不含锚点，需要补。
-+                    val anchorTag = n.anchor?.let { "&$it" }
-+                    val prefix =
-+                        if (anchorTag != null && !before.trimEnd().endsWith(anchorTag)) "$anchorTag " else ""
++                    val prefix = if (n.anchor != null) "&${n.anchor} " else ""
 +                    lines[n.start] = before + prefix + leaf + after
 +                    return reparse(doc, lines)
 +                }
@@ -18034,10 +17941,10 @@ index 0000000..0434c16
 +    private fun leadingIndent(value: String): Int = value.takeWhile { it == ' ' }.length
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-index c982b6d..038716c 100644
+index 33aa9cc..eec239e 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-@@ -20,6 +20,9 @@ import io.ktor.http.encodeURLPath
+@@ -19,6 +19,9 @@ import io.ktor.http.contentType
  import io.ktor.http.isSuccess
  import io.ktor.serialization.kotlinx.json.json
  import kotlinx.serialization.json.Json
@@ -18047,12 +17954,20 @@ index c982b6d..038716c 100644
  import top.yukonga.mishka.domain.model.ConnectionsResponse
  import top.yukonga.mishka.domain.model.DelayResult
  import top.yukonga.mishka.domain.model.DnsQueryResponse
-@@ -91,13 +94,16 @@ class MihomoApiClient(
+@@ -29,6 +32,7 @@ import top.yukonga.mishka.domain.model.ProvidersResponse
+ import top.yukonga.mishka.domain.model.ProxiesResponse
+ import top.yukonga.mishka.domain.model.RuleProvidersResponse
+ import top.yukonga.mishka.domain.model.RulesResponse
++import java.net.URLEncoder
+ 
+ class MihomoApiClient(
+     private val baseUrl: String = "http://127.0.0.1:9090",
+@@ -90,13 +94,16 @@ class MihomoApiClient(
          ensureSuccess(response, "proxy group '$group'")
      }
  
 -    suspend fun getProxyDelay(name: String, testUrl: String = "http://www.gstatic.com/generate_204", timeout: Int = 5000): DelayResult =
--        client.get("$baseUrl/proxies/${pathSegment(name)}/delay") {
+-        client.get("$baseUrl/proxies/$name/delay") {
 -            url {
 -                parameters.append("url", testUrl)
 -                parameters.append("timeout", timeout.toString())
@@ -18060,7 +17975,7 @@ index c982b6d..038716c 100644
 -        }.body()
 +    suspend fun getProxyDelay(name: String, testUrl: String = DEFAULT_DELAY_TEST_URL, timeout: Int = 8000): DelayResult =
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/proxies/${pathSegment(name)}/delay") {
++            client.get("$baseUrl/proxies/${pathSeg(name)}/delay") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -18071,7 +17986,7 @@ index c982b6d..038716c 100644
  
      /**
       * 测试 proxy-provider 内单节点延迟。provider 节点不在 /proxies 命名空间，
-@@ -106,15 +112,80 @@ class MihomoApiClient(
+@@ -105,15 +112,88 @@ class MihomoApiClient(
      suspend fun getProviderProxyDelay(
          provider: String,
          name: String,
@@ -18079,9 +17994,9 @@ index c982b6d..038716c 100644
 +        testUrl: String = DEFAULT_DELAY_TEST_URL,
          timeout: Int = 5000,
      ): DelayResult =
--        client.get("$baseUrl/providers/proxies/${pathSegment(provider)}/${pathSegment(name)}/healthcheck") {
+-        client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/providers/proxies/${pathSegment(provider)}/${pathSegment(name)}/healthcheck") {
++            client.get("$baseUrl/providers/proxies/${pathSeg(provider)}/${pathSeg(name)}/healthcheck") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -18108,7 +18023,7 @@ index c982b6d..038716c 100644
 +        testUrl: String = DEFAULT_DELAY_TEST_URL,
 +        timeout: Int = GROUP_DELAY_TIMEOUT_MILLIS,
 +    ): Map<String, Int> {
-+        val response: HttpResponse = client.get("$baseUrl/group/${pathSegment(group)}/delay") {
++        val response: HttpResponse = client.get("$baseUrl/group/${pathSeg(group)}/delay") {
              url {
                  parameters.append("url", testUrl)
                  parameters.append("timeout", timeout.toString())
@@ -18142,6 +18057,14 @@ index c982b6d..038716c 100644
 +        return response.body()
 +    }
 +
++    /**
++     * 路径段 URL 编码：节点名 / provider 名会含 `/`、空格与 emoji（如 `免流订阅/🇺🇸 美国-17`），
++     * 裸拼进 URL 会被 chi 路由拆成多层路径直接 404（整组测速全失败的根因）。
++     * URLEncoder 是表单编码：`+` 要还原成 `%20`；`/` 编成 `%2F` 正是路径段需要的，
++     * 内核侧 `getEscapeParam` 会解码回原名。
++     */
++    private fun pathSeg(raw: String): String = URLEncoder.encode(raw, "UTF-8").replace("+", "%20")
++
 +    companion object {
 +        /** 测速地址与 mihomo_box 参考实现对齐（https：免流/直连节点上 http 明文探测更易被重置）。 */
 +        const val DEFAULT_DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
@@ -18155,7 +18078,7 @@ index c982b6d..038716c 100644
  
      suspend fun getRules(): RulesResponse =
          client.get("$baseUrl/rules").body()
-@@ -228,4 +299,8 @@ class MihomoApiClient(
+@@ -219,4 +299,8 @@ class MihomoApiClient(
      }
  }
  
@@ -18166,7 +18089,7 @@ index c982b6d..038716c 100644
 +class DelayTestFailedException(val node: String, val status: Int, val reason: String) :
 +    MihomoApiException("delay test for '$node' failed: HTTP $status $reason")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
-index 76eb0a2..c7b8dcf 100644
+index 76eb0a2..14ebcdc 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 @@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
@@ -18177,7 +18100,7 @@ index 76eb0a2..c7b8dcf 100644
  import java.util.concurrent.atomic.AtomicBoolean
  import java.util.concurrent.atomic.AtomicInteger
  
-@@ -37,6 +38,21 @@ data class CoreFetchResult(
+@@ -37,6 +38,19 @@ data class CoreFetchResult(
  @Serializable
  private data class TransformCheck(val valid: Boolean = false)
  
@@ -18187,8 +18110,6 @@ index 76eb0a2..c7b8dcf 100644
 +    val secret: String? = null,
 +    val tunDevice: String? = null,
 +    val tproxyPort: Int? = null,
-+    /** Effective top-level `find-process-mode` (null when the profile doesn't set it). */
-+    val findProcessMode: String? = null,
 +    val hasTun: Boolean = false,
 +    /** Full effective `tun` mapping after age decryption and subscription transforms. */
 +    val tun: JsonElement? = null,
@@ -18199,7 +18120,7 @@ index 76eb0a2..c7b8dcf 100644
  
  class MishkaCoreError(message: String) : RuntimeException(message)
  
-@@ -44,6 +60,7 @@ object MishkaCoreBridge {
+@@ -44,6 +58,7 @@ object MishkaCoreBridge {
  
      private val tokenSeq = AtomicInteger(1)
      private val json = Json { ignoreUnknownKeys = true }
@@ -18207,7 +18128,7 @@ index 76eb0a2..c7b8dcf 100644
  
      init {
          // mishka_jni 链接依赖 libmihomo.so 的导出符号，必须先加载。
-@@ -79,13 +96,15 @@ object MishkaCoreBridge {
+@@ -79,13 +94,15 @@ object MishkaCoreBridge {
          val pollerJob = launchProgressPoller(this, token, onProgress)
          try {
              val raw = withContext(Dispatchers.IO) {
@@ -18230,7 +18151,7 @@ index 76eb0a2..c7b8dcf 100644
                  }
              }
              interpretResult(raw)
-@@ -122,9 +141,26 @@ object MishkaCoreBridge {
+@@ -122,9 +139,26 @@ object MishkaCoreBridge {
              .getOrElse { throw MishkaCoreError("invalid native payload: $raw") }
      }
  
@@ -18258,7 +18179,7 @@ index 76eb0a2..c7b8dcf 100644
          val result = interpretTransformResult(raw)
          check(result.valid) { "native transform validation returned invalid result" }
      }
-@@ -136,6 +172,13 @@ object MishkaCoreBridge {
+@@ -136,6 +170,13 @@ object MishkaCoreBridge {
              .getOrElse { throw MishkaCoreError("invalid native payload: $raw") }
      }
  
@@ -18827,7 +18748,7 @@ index 0000000..934edb3
 +        source.trimStart().startsWith("-----BEGIN AGE ENCRYPTED FILE-----")
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
-index 9652c8e..662f7f7 100644
+index 9652c8e..bc4e1d9 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
 @@ -1,30 +1,100 @@
@@ -18968,19 +18889,6 @@ index 9652c8e..662f7f7 100644
 +    fun readSubscriptionTunDevice(context: Context, subscriptionId: String?): String? {
 +        val file = configFile(context, subscriptionId)
 +        if (!file.isFile) return null
-+        return try {
-+            RuntimeConfigValues.nestedScalar(file.readText(Charsets.UTF_8), "tun", "device")
-+                ?.trim()
-+                ?.takeIf { it.isNotEmpty() }
-+        } catch (_: Exception) {
-+            null
-+        }
-+    }
-+
-+    /** Read simple tun values from plain YAML as a fallback when native effective-config inspection is unavailable. */
-+    fun readSubscriptionTunConfig(context: Context, subscriptionId: String?): TunOverride? {
-+        val file = configFile(context, subscriptionId)
-+        if (!file.isFile) return null
          return try {
 -            file.useLines { lines ->
 -                for (line in lines) {
@@ -18993,6 +18901,19 @@ index 9652c8e..662f7f7 100644
 -                    return@useLines unquoted.takeIf { it.isNotEmpty() }
 -                }
 -                null
++            RuntimeConfigValues.nestedScalar(file.readText(Charsets.UTF_8), "tun", "device")
++                ?.trim()
++                ?.takeIf { it.isNotEmpty() }
++        } catch (_: Exception) {
++            null
++        }
++    }
++
++    /** Read simple tun values from plain YAML as a fallback when native effective-config inspection is unavailable. */
++    fun readSubscriptionTunConfig(context: Context, subscriptionId: String?): TunOverride? {
++        val file = configFile(context, subscriptionId)
++        if (!file.isFile) return null
++        return try {
 +            val source = file.readText(Charsets.UTF_8)
 +            if (source.trimStart().startsWith("-----BEGIN AGE ENCRYPTED FILE-----")) return null
 +            fun scalar(key: String): String? = RuntimeConfigValues.nestedScalar(source, "tun", key)
@@ -19015,7 +18936,7 @@ index 9652c8e..662f7f7 100644
              }
          } catch (_: Exception) {
              null
-@@ -62,27 +154,45 @@ object ConfigGenerator {
+@@ -62,27 +154,33 @@ object ConfigGenerator {
      }
  
      /**
@@ -19065,18 +18986,6 @@ index 9652c8e..662f7f7 100644
 +            ?.trim()
 +            ?.toIntOrNull()
 +            ?.takeIf { it in 1..65535 }
-+
-+    /**
-+     * Read the active profile's top-level `find-process-mode`, if it is plain YAML.
-+     * Only the three kernel-accepted values pass through (case-insensitive); anything else
-+     * is treated as unset so the runtime keeps its historical `off` default instead of
-+     * forwarding a value mihomo would reject at Parse.
-+     */
-+    fun readSubscriptionFindProcessMode(context: Context, subscriptionId: String?): String? =
-+        readProfileScalar(context, subscriptionId, "find-process-mode")
-+            ?.trim()
-+            ?.lowercase()
-+            ?.takeIf { it == "off" || it == "strict" || it == "always" }
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt b/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
 index ecdcdb5..44da071 100644
@@ -19226,7 +19135,7 @@ index 7529653..e551d93 100644
              conn.disconnect()
              code in 200..299
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 6cf8283..85dafdb 100644
+index 6cf8283..1659c72 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 @@ -18,10 +18,10 @@ import kotlinx.coroutines.withContext
@@ -19410,7 +19319,7 @@ index 6cf8283..85dafdb 100644
              // 仅 TUN submode 且用户选 PROXY 时才探测 xt_TPROXY 为 RootTetherHijacker 开 tproxy-port 入站；
              // 探测结果同步写入 StorageKeys.ROOT_TPROXY_KERNEL_CAPABLE，UI 据此决定是否显示降级告警
              val userWantsProxy = submode == Submode.Tun &&
-@@ -385,6 +441,65 @@ class MishkaRootService : Service() {
+@@ -385,6 +441,59 @@ class MishkaRootService : Service() {
                  stopSelf()
                  return@launch
              }
@@ -19451,12 +19360,6 @@ index 6cf8283..85dafdb 100644
 +                ?: if (profileParameters == null) subscriptionId?.let {
 +                    ConfigGenerator.readSubscriptionExternalController(this@MishkaRootService, it)
 +                } else null
-+            // 订阅显式写的 find-process-mode（native 已处理 age 解密 + 变换；plain 回退读原文）。
-+            // 不读这一份的话，构建器里的 off 默认会把用户写的 always 盖掉，PROCESS 类规则全灭。
-+            val profileFindProcessMode = profileParameters?.findProcessMode
-+                ?: if (profileParameters == null) {
-+                    ConfigGenerator.readSubscriptionFindProcessMode(this@MishkaRootService, subscriptionId)
-+                } else null
 +            val secret = ConfigGenerator.resolveSecret(userOverride, profileSecret)
 +            val controllerBindAddress = ConfigGenerator.resolveExternalController(userOverride, profileController)
 +            val controllerApiAddress = ConfigGenerator.apiClientAddress(controllerBindAddress)
@@ -19476,7 +19379,7 @@ index 6cf8283..85dafdb 100644
              val overrideFile = RuntimeOverrideBuilder.buildAndWriteForRun(
                  context = this@MishkaRootService,
                  userOverride = userOverride,
-@@ -392,7 +507,15 @@ class MishkaRootService : Service() {
+@@ -392,7 +501,14 @@ class MishkaRootService : Service() {
                  tunMode = submode.tunMode,
                  subscriptionUpdateViaProxy = viaProxy,
                  subscriptionMixedPort = transformPlan.mixedPort,
@@ -19488,11 +19391,10 @@ index 6cf8283..85dafdb 100644
 +                useProfileTunDefaults = useProfileTunDefaults,
 +                effectiveProfileTun = profileParameters?.tun,
 +                preferUserTunOverrides = profileModeConfig.encrypted || transformPlan.transformPath != null,
-+                profileFindProcessMode = profileFindProcessMode,
              )
  
              // 5. 以 root 启动 mihomo
-@@ -402,7 +525,8 @@ class MishkaRootService : Service() {
+@@ -402,7 +518,8 @@ class MishkaRootService : Service() {
                  useRoot = true,
                  overrideJsonPath = overrideFile.absolutePath,
                  secret = secret,
@@ -19502,7 +19404,7 @@ index 6cf8283..85dafdb 100644
                  ageSecretKey = transformPlan.ageSecretKey,
                  transformPath = transformPlan.transformPath,
                  preferTransformMixedPort = transformPlan.transformPath != null && viaProxy && userOverride.mixedPort == null,
-@@ -419,7 +543,8 @@ class MishkaRootService : Service() {
+@@ -419,7 +536,8 @@ class MishkaRootService : Service() {
  
              // 6. 持久化 PID、secret、启动时间、订阅 ID（用于 app 重启后重连 + 订阅一致性校验）
              val startTime = Clock.System.now().toEpochMilliseconds()
@@ -19512,7 +19414,7 @@ index 6cf8283..85dafdb 100644
              // 保存本次启动时生效的 tether mode / submode 快照；attach 路径据此判断用户是否改过设置
              storage.putString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, tetherModeRequested)
              storage.putString(StorageKeys.ROOT_SUBMODE_ACTIVE, submode.storageValue)
-@@ -428,6 +553,8 @@ class MishkaRootService : Service() {
+@@ -428,6 +546,8 @@ class MishkaRootService : Service() {
              when (submode) {
                  Submode.Tun -> applyTetherRules(storage, tproxyForTether)
                  Submode.Tproxy -> applyTproxyRules(storage)
@@ -19521,7 +19423,7 @@ index 6cf8283..85dafdb 100644
              }
  
              // 7. 更新状态和通知
-@@ -435,7 +562,7 @@ class MishkaRootService : Service() {
+@@ -435,7 +555,7 @@ class MishkaRootService : Service() {
                  ProxyServiceStatus(
                      ProxyState.Running,
                      secret = runner.secret,
@@ -19530,7 +19432,7 @@ index 6cf8283..85dafdb 100644
                      tunMode = tunMode,
                      startTime = startTime,
                      mihomoPid = runner.pid
-@@ -474,7 +601,14 @@ class MishkaRootService : Service() {
+@@ -474,7 +594,14 @@ class MishkaRootService : Service() {
              AppListProvider(this@MishkaRootService).resolveUids(packages)
          }
          val ipv6Enabled = storage.getString(StorageKeys.VPN_ALLOW_IPV6, "false") == "true"
@@ -19546,7 +19448,7 @@ index 6cf8283..85dafdb 100644
      }
  
      /**
-@@ -542,11 +676,20 @@ class MishkaRootService : Service() {
+@@ -542,11 +669,20 @@ class MishkaRootService : Service() {
          }
      }
  
@@ -19568,7 +19470,7 @@ index 6cf8283..85dafdb 100644
          // reopen 时据此识别设备是否重启过
          BootSession.mark(this, storage)
      }
-@@ -556,6 +699,9 @@ class MishkaRootService : Service() {
+@@ -556,6 +692,9 @@ class MishkaRootService : Service() {
          storage.putString(StorageKeys.ROOT_MIHOMO_SECRET, "")
          storage.putString(StorageKeys.ROOT_START_TIME, "")
          storage.putString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "")
@@ -19578,7 +19480,7 @@ index 6cf8283..85dafdb 100644
          BootSession.clear(storage)
          storage.putString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, "")
          storage.putString(StorageKeys.ROOT_SUBMODE_ACTIVE, "")
-@@ -569,7 +715,7 @@ class MishkaRootService : Service() {
+@@ -569,7 +708,7 @@ class MishkaRootService : Service() {
          val ifaces = RootTetherHijacker.parseInterfaces(
              storage.getString(StorageKeys.ROOT_TETHER_IFACES, RootTetherHijacker.DEFAULT_IFACES)
          )
@@ -19587,7 +19489,7 @@ index 6cf8283..85dafdb 100644
      }
  
      /** Attach 路径：用上次启动时持久化的 active mode（与 mihomo 实际监听状态对齐）。 */
-@@ -580,9 +726,15 @@ class MishkaRootService : Service() {
+@@ -580,9 +719,15 @@ class MishkaRootService : Service() {
          val ifaces = RootTetherHijacker.parseInterfaces(
              storage.getString(StorageKeys.ROOT_TETHER_IFACES, RootTetherHijacker.DEFAULT_IFACES)
          )
@@ -19605,7 +19507,7 @@ index 6cf8283..85dafdb 100644
          Log.i(TAG, "Restarting proxy (ROOT)...")
          monitorJob?.cancel()
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
-index fa04d69..b4e8b43 100644
+index fa04d69..26386b4 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 @@ -19,10 +19,10 @@ import kotlinx.coroutines.withContext
@@ -19678,7 +19580,7 @@ index fa04d69..b4e8b43 100644
              val viaProxy = storage.getString(StorageKeys.SUBSCRIPTION_UPDATE_VIA_PROXY, "true") == "true"
              val transformPlan = try {
                  prepareRuntimeTransform(this@MishkaTunService, subscriptionId, subscriptionRepository, transformWriter)
-@@ -325,6 +347,49 @@ class MishkaTunService : VpnService() {
+@@ -325,6 +347,43 @@ class MishkaTunService : VpnService() {
                  stopSelf()
                  return@launch
              }
@@ -19715,12 +19617,6 @@ index fa04d69..b4e8b43 100644
 +                ?: if (profileParameters == null) subscriptionId?.let {
 +                    ConfigGenerator.readSubscriptionExternalController(this@MishkaTunService, it)
 +                } else null
-+            // 订阅显式写的 find-process-mode（native 已处理 age 解密 + 变换；plain 回退读原文）。
-+            // 不读这一份的话，构建器里的 off 默认会把用户写的 always 盖掉，PROCESS 类规则全灭。
-+            val profileFindProcessMode = profileParameters?.findProcessMode
-+                ?: if (profileParameters == null) {
-+                    ConfigGenerator.readSubscriptionFindProcessMode(this@MishkaTunService, subscriptionId)
-+                } else null
 +            val secret = ConfigGenerator.resolveSecret(userOverride, profileSecret)
 +            val controllerBindAddress = ConfigGenerator.resolveExternalController(userOverride, profileController)
 +            val controllerApiAddress = ConfigGenerator.apiClientAddress(controllerBindAddress)
@@ -19728,18 +19624,17 @@ index fa04d69..b4e8b43 100644
              val overrideFile = RuntimeOverrideBuilder.buildAndWriteForRun(
                  context = this@MishkaTunService,
                  userOverride = userOverride,
-@@ -332,6 +397,10 @@ class MishkaTunService : VpnService() {
+@@ -332,6 +391,9 @@ class MishkaTunService : VpnService() {
                  tunMode = TunMode.Vpn,
                  subscriptionUpdateViaProxy = viaProxy,
                  subscriptionMixedPort = transformPlan.mixedPort,
 +                subscriptionId = subscriptionId,
 +                effectiveProfileListeners = effectiveProfileListeners,
 +                useProfileTunDefaults = useProfileTunDefaults,
-+                profileFindProcessMode = profileFindProcessMode,
              )
  
              // 3. 启动 mihomo 核心
-@@ -341,7 +410,7 @@ class MishkaTunService : VpnService() {
+@@ -341,7 +403,7 @@ class MishkaTunService : VpnService() {
                  useRoot = false,
                  overrideJsonPath = overrideFile.absolutePath,
                  secret = secret,
@@ -19748,7 +19643,7 @@ index fa04d69..b4e8b43 100644
                  ageSecretKey = transformPlan.ageSecretKey,
                  transformPath = transformPlan.transformPath,
                  preferTransformMixedPort = transformPlan.transformPath != null && viaProxy && userOverride.mixedPort == null,
-@@ -362,7 +431,7 @@ class MishkaTunService : VpnService() {
+@@ -362,7 +424,7 @@ class MishkaTunService : VpnService() {
                  ProxyServiceStatus(
                      ProxyState.Running,
                      secret = runner.secret,
@@ -19976,7 +19871,7 @@ index 2a8f11d..948ec25 100644
                                  "pre-tproxy-tether-$proto-v6"
                              )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
-index b57d687..eed88d4 100644
+index b57d687..b3ca808 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 @@ -2,6 +2,8 @@ package top.yukonga.mishka.service
@@ -20004,7 +19899,7 @@ index b57d687..eed88d4 100644
       *
       * mixed-port 决策（决定 mihomo 是否监听 HTTP 代理端口，[SubscriptionProxyResolver] 据此走代理）：
       * 1. 用户 override 显式设置 → 用用户值（覆盖订阅 yaml）
-@@ -69,7 +73,16 @@ object RuntimeOverrideBuilder {
+@@ -69,7 +73,14 @@ object RuntimeOverrideBuilder {
          tunMode: TunMode,
          subscriptionUpdateViaProxy: Boolean,
          subscriptionMixedPort: Int?,
@@ -20016,12 +19911,10 @@ index b57d687..eed88d4 100644
 +        useProfileTunDefaults: Boolean = false,
 +        effectiveProfileTun: JsonElement? = null,
 +        preferUserTunOverrides: Boolean = false,
-+        /** Active profile's explicit `find-process-mode` (null when unset). */
-+        profileFindProcessMode: String? = null,
      ): File {
          val storage = PlatformStorage(context)
          val wifiRuntimeMode = storage.getString(StorageKeys.WIFI_POLICY_RUNTIME_MODE, "")
-@@ -85,12 +98,14 @@ object RuntimeOverrideBuilder {
+@@ -85,12 +96,14 @@ object RuntimeOverrideBuilder {
                  else -> null
              },
              tproxyPort = when (tunMode) {
@@ -20042,23 +19935,9 @@ index b57d687..eed88d4 100644
              },
              // RootTproxy 下**不**注入 routing-mark：Android Netd 用 fwmark 低 16 位编码 netId，
              // mihomo 若带 SO_MARK 会被解释为不存在的 netId，命中 legacy_system 表（无默认路由）
-@@ -98,13 +113,30 @@ object RuntimeOverrideBuilder {
-             // 放行 mihomo（它以 root 运行），副作用是所有 root 进程都不经 TPROXY，但用户 app 正常代理
-             routingMark = userOverride.routingMark,
-             // tcp-concurrent：代理侧并发拨号，显著降低首包延迟，多客户端并发场景尤其有效；
--            // find-process-mode=off：ROOT TUN 分应用已由 sing-tun include/exclude-package 的 uidrange
-+            // find-process-mode 三级优先级：应用覆写显式值 > 订阅原文显式值 > off 默认。
-+            // off 默认的理由：ROOT TUN 分应用已由 sing-tun include/exclude-package 的 uidrange
-             // 处理，mihomo 运行期遍历 /proc 查进程纯属冗余；VPN 模式 AppProxy 走 VpnService 同理。
--            // 用户显式设置优先：仅在未设置时注入默认值
-+            // 但订阅里显式写的 always/strict 必须尊重：直落 off 会把 PROCESS-NAME/PROCESS-PATH
-+            // 类规则整体灭掉（off 下内核不解析进程名）。非法值按未设置处理（落 off），
-+            // 避免把 mihomo 在 Parse 阶段就会拒绝的值透传进去。
+@@ -104,7 +117,19 @@ object RuntimeOverrideBuilder {
              tcpConcurrent = userOverride.tcpConcurrent ?: true,
--            findProcessMode = userOverride.findProcessMode ?: "off",
-+            findProcessMode = userOverride.findProcessMode
-+                ?: profileFindProcessMode?.trim()?.lowercase()?.takeIf { it == "off" || it == "strict" || it == "always" }
-+                ?: "off",
+             findProcessMode = userOverride.findProcessMode ?: "off",
              dns = buildDnsOverride(tunMode, userOverride.dns),
 -            tun = buildTunOverride(context, tunMode, tunFd, userOverride.tun),
 +            tun = buildTunOverride(
@@ -20077,7 +19956,7 @@ index b57d687..eed88d4 100644
              profile = ProfileOverride(storeSelected = false, storeFakeIp = true),
          )
          // 原子写：mihomo 紧接着就以 --override-json 读它，半个 JSON 会让启动失败且难以定位
-@@ -132,14 +164,40 @@ object RuntimeOverrideBuilder {
+@@ -132,14 +157,40 @@ object RuntimeOverrideBuilder {
          tunMode: TunMode,
          tunFd: Int,
          userTun: TunOverride?,
@@ -20121,7 +20000,7 @@ index b57d687..eed88d4 100644
  
          // 分应用代理：仅 RootTun 通过 mihomo include/exclude-package 实现；
          // VPN 由 VpnService.Builder.addAllowed/DisallowedApplication 管；
-@@ -186,15 +244,19 @@ object RuntimeOverrideBuilder {
+@@ -186,15 +237,19 @@ object RuntimeOverrideBuilder {
          // 破坏同 LAN 设备发现 / P2P 直连（如妙享桌面）。注入私网 + 组播 route-exclude 留在物理网卡，
          // 与 VPN / TPROXY 的 LAN 放行对齐；仅 ROOT TUN 需要，用户显式设置优先。
          val routeExclude: List<String>? = when {
@@ -20145,7 +20024,7 @@ index b57d687..eed88d4 100644
  
          // sing-tun userspace TUN 性能：mtu=9000 + gso + gso-max-size=65535 让大包聚合，
          // 减少每包 read syscall；仅 ROOT TUN 注入 GSO（VPN fd 由 VpnService 创建无 vnet header）。
-@@ -209,20 +271,148 @@ object RuntimeOverrideBuilder {
+@@ -209,20 +264,148 @@ object RuntimeOverrideBuilder {
          return TunOverride(
              enable = true,
              device = device,
@@ -21248,7 +21127,7 @@ index d3f9631..91c33aa 100644
              )
              .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
-index b1b2479..7a79eb3 100644
+index b1b2479..7da18ac 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 @@ -31,6 +31,8 @@ import top.yukonga.mishka.platform.ProfileFileManager
@@ -21322,17 +21201,7 @@ index b1b2479..7a79eb3 100644
                          val canSave = controller.isModified && !isSaving && fileManager != null
                          IconButton(
                              enabled = canSave,
-@@ -127,6 +157,9 @@ fun FileManagerEditorScreen(
-                                         if (errMsg == null) {
-                                             controller.markSaved(version)
-                                             showToast(context.getString(R.string.file_manager_saved))
-+                                            // 手动保存后请求生效：mihomo 只在启动时读一次配置，
-+                                            // 不重启的话改动静默不生效（active 才动，没跑就不拉起）。
-+                                            subscriptionViewModel?.notifyProfileEdited(uuid)
-                                         } else {
-                                             showToast(context.getString(R.string.file_manager_save_failed, errMsg), long = true)
-                                         }
-@@ -192,6 +225,25 @@ fun FileManagerEditorScreen(
+@@ -192,6 +222,25 @@ fun FileManagerEditorScreen(
                          .weight(1f),
                  )
              }
@@ -22239,7 +22108,7 @@ index f684c37..4896268 100644
          const val GLOBAL_GROUP = "GLOBAL"
          const val MODE_GLOBAL = "global"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-index ef9b641..7dd36e8 100644
+index ef9b641..91a7411 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 @@ -2,27 +2,40 @@ package top.yukonga.mishka.viewmodel
@@ -22429,26 +22298,8 @@ index ef9b641..7dd36e8 100644
      /**
       * 取消当前正在进行的订阅 Pipeline（导入 / 更新 / 编辑 / 复制）。
       *
-@@ -157,6 +297,17 @@ class SubscriptionViewModel(
-         }
-     }
- 
-+    /**
-+     * 手动编辑订阅文件保存成功后请求生效。与覆写编辑同一口径：手动保存是显式意图，
-+     * 不走「更新后重启」设置（那是给后台自动更新准备的）；只要求改的是 active 订阅——
-+     * 改没在跑的订阅时不动正在跑的代理（下次切过去自然读到新内容），代理没跑时也不拉起来
-+     * （[ProxyServiceController.restartWhenReady] 负责收敛判断）。
-+     */
-+    fun notifyProfileEdited(id: String) {
-+        if (repository.getActiveId() != id) return
-+        serviceController.restartWhenReady(id)
-+    }
-+
-     /**
-      * 删除订阅。删的若是 active，[onActiveChanged] 要等 DB 与文件都落定后才回调——
-      * `repository.delete` 会静默把 active 挪到剩余第一条，提前回调会让重启拿到刚删掉的 uuid。
 diff --git a/app/src/main/native/mishka_core/runtime_test.go b/app/src/main/native/mishka_core/runtime_test.go
-index df86317..fbb6aa5 100644
+index df86317..987a093 100644
 --- a/app/src/main/native/mishka_core/runtime_test.go
 +++ b/app/src/main/native/mishka_core/runtime_test.go
 @@ -1,6 +1,7 @@
@@ -22459,7 +22310,7 @@ index df86317..fbb6aa5 100644
  	"os"
  	"path/filepath"
  	"testing"
-@@ -54,3 +55,235 @@ func TestShouldDefaultTunStackWithEncryptedSubscription(t *testing.T) {
+@@ -54,3 +55,209 @@ func TestShouldDefaultTunStackWithEncryptedSubscription(t *testing.T) {
  		t.Fatal("encrypted subscription's explicit stack was ignored")
  	}
  }
@@ -22576,32 +22427,6 @@ index df86317..fbb6aa5 100644
 +	}
 +}
 +
-+func TestExtractRuntimeConfigValuesFindProcessMode(t *testing.T) {
-+	got, err := extractRuntimeConfigValues([]byte("find-process-mode: always\n"))
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	if got.FindProcessMode == nil || *got.FindProcessMode != "always" {
-+		t.Fatalf("find process mode = %v, want always", got.FindProcessMode)
-+	}
-+
-+	got, err = extractRuntimeConfigValues([]byte("mode: rule\n"))
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	if got.FindProcessMode != nil {
-+		t.Fatalf("missing find process mode = %v, want nil", got.FindProcessMode)
-+	}
-+
-+	got, err = extractRuntimeConfigValues([]byte("find-process-mode: ''\n"))
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	if got.FindProcessMode != nil {
-+		t.Fatalf("blank find process mode = %v, want nil (falls back to the off default)", got.FindProcessMode)
-+	}
-+}
-+
 +func TestExtractRuntimeConfigValuesPreservesExplicitEmptySecret(t *testing.T) {
 +	got, err := extractRuntimeConfigValues([]byte("secret: ''\n"))
 +	if err != nil {
@@ -22696,7 +22521,7 @@ index df86317..fbb6aa5 100644
 +	}
 +}
 diff --git a/app/src/main/native/mishka_core/transform_bridge.go b/app/src/main/native/mishka_core/transform_bridge.go
-index faef989..9c8dc37 100644
+index faef989..2c11db7 100644
 --- a/app/src/main/native/mishka_core/transform_bridge.go
 +++ b/app/src/main/native/mishka_core/transform_bridge.go
 @@ -10,10 +10,12 @@ import (
@@ -22712,7 +22537,7 @@ index faef989..9c8dc37 100644
  
  	"mishka_core/overrides"
  )
-@@ -59,6 +61,110 @@ type transformCheck struct {
+@@ -59,6 +61,101 @@ type transformCheck struct {
  	Valid bool `json:"valid"`
  }
  
@@ -22721,7 +22546,6 @@ index faef989..9c8dc37 100644
 +	Secret             *string         `json:"secret"`
 +	TunDevice          *string         `json:"tunDevice"`
 +	TproxyPort         *int            `json:"tproxyPort,omitempty"`
-+	FindProcessMode    *string         `json:"findProcessMode,omitempty"`
 +	HasTun             bool            `json:"hasTun"`
 +	Tun                json.RawMessage `json:"tun,omitempty"`
 +	Listeners          json.RawMessage `json:"listeners,omitempty"`
@@ -22757,14 +22581,6 @@ index faef989..9c8dc37 100644
 +	if raw, ok := root["tproxy-port"]; ok {
 +		if port, err := strconv.Atoi(strings.TrimSpace(yamlScalarString(raw))); err == nil {
 +			values.TproxyPort = &port
-+		}
-+	}
-+	// 订阅显式写的 find-process-mode（解密 + 变换后的生效值）：运行时 override 默认注入 off，
-+	// 必须先读到这一份，缺了它（nil）才落 off，否则用户的 always/strict 会被静默盖掉，
-+	// PROCESS-NAME/PROCESS-PATH 类规则永远匹配不上。
-+	if raw, ok := root["find-process-mode"]; ok {
-+		if value := strings.TrimSpace(yamlScalarString(raw)); value != "" {
-+			values.FindProcessMode = &value
 +		}
 +	}
 +	if raw, ok := root["listeners"]; ok && raw != nil {

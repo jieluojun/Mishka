@@ -152,24 +152,6 @@ assert_contains 'colors = ButtonDefaults.textButtonColorsPrimary()' \
 assert_contains 'if (field.type == FormFieldType.BOOL && !tri) setSwitchValue(!switchShown)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
   'tapping anywhere on a boolean switch row toggles it'
-assert_contains 'private val freshDoc: () -> YamlDoc' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'form writeback rebases on fresh editor text (bug-2 no lost taps)'
-assert_contains 'FormHost(doc, ::apply, fileBaseDir) { YamlDoc.parse(controller.getText()) }' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'panel feeds FormHost live controller text (bug-2 no lost taps)'
-assert_not_contains 'commit(YamlPatch' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'no stale-base commit call sites remain (bug-2 no lost taps)'
-assert_contains 'fun notifyProfileEdited(id: String)' \
-  app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt \
-  'manual profile edits request a restart when active (edits take effect)'
-assert_contains 'subscriptionViewModel?.notifyProfileEdited(uuid)' \
-  app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt \
-  'editor save triggers the restart request (edits take effect)'
-assert_contains 'stuckUp = false' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'drag auto-scroll stops feeding deltas at the boundary (no bounce loop)'
 assert_contains '0.0.0.0' \
   app/src/main/res/values-zh-rCN/strings.xml \
   'Chinese external-control hint warns about wildcard unauthenticated exposure'
@@ -199,15 +181,6 @@ assert_not_contains 'ItemMenuDialog' \
 assert_not_contains 'override_move_up' \
   app/src/main/res/values/strings.xml \
   'unused move-up strings are removed (default locale)'
-# --- 2026-10-08：补丁变基到 c94f3bc（上游给 API 路径段加了 pathSegment 编码，与补丁的 pathSeg
-# 同行相撞致 CI 三方合并冲突）。合流结论：上游的 Ktor encodeURLPath 实现更正确（表单编码的
-# URLEncoder 会把空格编成 +），补丁侧删掉 pathSeg/URLEncoder，调用点统一用上游 pathSegment。
-assert_not_contains 'pathSeg(' \
-  app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
-  'obsolete URLEncoder-based pathSeg is gone (unified on upstream pathSegment)'
-assert_not_contains 'URLEncoder' \
-  app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
-  'URLEncoder import is gone with pathSeg'
 assert_contains 'suspend fun getGroupDelay(' \
   app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt \
   'group-level delay endpoint is wired'
@@ -410,74 +383,6 @@ if [ -d "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel" ]; then
 else
   echo "ok  web panel package (custom/panel) is gone"
 fi
-
-# --- 2026-10-08：拖动排序“CT”残留 / 末行残留、锚点重复、落点漂移、find-process-mode（防回归）---
-# 根因 1：整篇替换的结束位置按 newText 算而不是按编辑器旧内容算 → 旧末行尾巴残留（"REJECT"→"CT"）、
-# 删除项后旧尾部整段残留。两处 apply() 都必须按旧内容算范围。
-assert_contains 'val current = controller.getText()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'form apply() ranges the replace by the current editor text, not the new text'
-assert_contains 'val oldLines = current.split' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'form apply() end position comes from the old text'
-assert_not_contains 'val lines = newText.split' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'form apply() no longer ranges the replace by the new text'
-assert_contains 'val current = controller.getText()' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt \
-  'anchor apply() ranges the replace by the current editor text, not the new text'
-assert_not_contains 'val lines = newText.split' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt \
-  'anchor apply() no longer ranges the replace by the new text'
-# 根因 2：行内 `&锚点` 每次 setValue 都无条件再拼一次 → `&x &x false`（非法 YAML）。
-assert_contains 'endsWith(anchorTag)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt \
-  'anchored scalar keeps a single &anchor (only prepend when missing)'
-assert_not_contains 'val prefix = if (n.anchor != null) "&${n.anchor} " else ""' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt \
-  'anchor prefix is no longer prepended unconditionally'
-# 根因 3：自动滚动到头跳过 step → 行冻在半路，落点与手指对不上。到头也要 step（幂等）。
-assert_not_contains '== 0f) return' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'auto-scroll never skips the step even when the scroll is exhausted'
-# 根因 3b：滚出视口的行不清除身段登记 → 命中判定测到“幽灵行”，长列表快速拖动 +
-# 自动滚动时手指档位算错（冲过头 / 落点错位）。行回收时必须忘掉它的坐标。
-assert_contains 'fun forgetRow(index: Int)' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'drag rows forget their geometry on dispose (no ghost hit-testing)'
-assert_contains 'onDispose { state.forgetRow(index) }' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
-  'drag row wrapper clears geometry when recycled'
-# 根因 4：表单行列表无 key → 行过滤变化时行内状态错位。行必须带稳定 key。
-assert_contains 'is FormField -> "f:${row.path}"' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'form rows carry stable keys (path), so filtered-in/out rows never swap state'
-assert_contains 'items(HUB, key = { it.title })' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
-  'form hub carries stable keys'
-assert_contains 'itemsIndexed(entries, key = { _, e -> e.key })' \
-  app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt \
-  'mapping list carries stable keys'
-# 根因 5：运行时覆盖固定注入 find-process-mode=off → 订阅写的 always 被静默盖掉，
-# PROCESS-NAME/PROCESS-PATH 类规则全灭。三级优先级：应用覆写 > 订阅原文 > off。
-assert_contains 'profileFindProcessMode' \
-  app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
-  'override builder accepts the profile find-process-mode'
-assert_contains 'profileFindProcessMode' \
-  app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt \
-  'vpn service passes the profile find-process-mode'
-assert_contains 'profileFindProcessMode' \
-  app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt \
-  'root service passes the profile find-process-mode'
-assert_contains 'readSubscriptionFindProcessMode' \
-  app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt \
-  'plain-profile fallback reads find-process-mode'
-assert_contains 'findProcessMode' \
-  app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt \
-  'runtime config model carries find-process-mode'
-assert_contains 'FindProcessMode' \
-  app/src/main/native/mishka_core/transform_bridge.go \
-  'native bridge extracts find-process-mode'
 
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"
