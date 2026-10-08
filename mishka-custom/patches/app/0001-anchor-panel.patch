@@ -23161,6 +23161,40 @@ index df86317213f3cb47e89f6d944969492e43f430da..987a093b9df3b34e3da6a3868c8d9ca1
 +		t.Fatalf("encrypted proxy provider source was not retained: %#v", providers["local-encrypted"])
 +	}
 +}
+diff --git a/app/src/main/native/mishka_core/safe_paths.go b/app/src/main/native/mishka_core/safe_paths.go
+new file mode 100644
+index 0000000..ecac771
+--- /dev/null
++++ b/app/src/main/native/mishka_core/safe_paths.go
+@@ -0,0 +1,28 @@
++package main
++
++import (
++	"path/filepath"
++
++	Const "github.com/metacubex/mihomo/constant"
++)
++
++// 订阅校验（fetch.go / transform_bridge.go 的 mishkaValidateTransform）会把 file / http 类 provider 的 path
++// 在内存里改写成 processing/providers/<文件名> 的绝对路径，让 ParseRawConfig 读到刚预取的文件。
++// 这个目录位于 geodata（mihomo 的 home dir）之外；上游构建带 cmfa tag 时 IsSafePath 直接放行，
++// 本定制去掉了 cmfa，就会报 "path is not subpath of home directory or SAFE_PATHS"。
++// 这里只放行这一个沙箱目录；写回磁盘的 config.yaml 仍是原始相对路径，运行时不受影响。
++func init() {
++	Const.ExtraSafePathFunc = isProcessingProvidersPath
++}
++
++func isProcessingProvidersPath(path string) bool {
++	home := Const.Path.HomeDir()
++	if home == "" {
++		return false
++	}
++	// home 是 files/mihomo/geodata，processing 与它同级：files/mihomo/processing/providers
++	root := filepath.Join(filepath.Dir(home), "processing", "providers")
++	rel, err := filepath.Rel(root, filepath.Clean(path))
++	// rel == "." 是目录本身，只放行其中的文件
++	return err == nil && rel != "." && filepath.IsLocal(rel)
++}
 diff --git a/app/src/main/native/mishka_core/transform_bridge.go b/app/src/main/native/mishka_core/transform_bridge.go
 index faef989d41aadcf668a6ecc173a1d9773c42673f..2c11db737a7c10e7b1a78f4d7206e3be97eecd16 100644
 --- a/app/src/main/native/mishka_core/transform_bridge.go
