@@ -72,3 +72,7 @@ blob_after=8e3fc15ff691275a2e804fe42b946eeb5caaa755 app/src/main/res/values-ru/s
 blob_after=138732bc29f484db572804f6d01eef5a8b09b138 app/src/main/res/values-zh-rCN/strings.xml
 blob_after=8f33921d8a0e784a1ab7a190fb322376976e65ee app/src/main/res/values-zh-rTW/strings.xml
 blob_after=1cb982cd341d13bda1c58af0c2a29669f8cf8890 app/src/main/res/values/strings.xml
+# --- 0002：内置「免流」配置（在 0001 之上应用；基于 upstream 09f9a80 生成）---
+patch0002_base_commit=09f9a80d161fd9cda8867b86acf61fc62f80783f
+patch0002_sha256=899afc43f835bb1788d691553bb74670217eddd6ad72a0af65f6fa02d8040432
+patch0002_blob_new=8ec35cfb03eed33b5172ea01957a699dec65bec4 app/src/main/res/raw/builtin_mianliu.yaml

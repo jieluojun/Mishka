@@ -257,6 +257,22 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------- 5b. 内置「免流」配置
+# 0002 在 0001 之上：订阅页自动出现一条「免流」文件订阅（res/raw/builtin_mianliu.yaml），首次启动后台导入一次。
+# 打不上时只警告、不中断：其余定制照常可用，内置条目需要手动补。
+VM_REL="app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt"
+if grep -q 'importBuiltinMianliuOnce' "$REPO/$VM_REL" 2>/dev/null; then
+  ok "内置「免流」配置已应用"
+elif git -C "$REPO" apply --check "$DELIVER/patches/app/0002-builtin-mianliu-profile.patch" 2>/dev/null; then
+  git -C "$REPO" apply "$DELIVER/patches/app/0002-builtin-mianliu-profile.patch"
+  ok "已应用 patches/app/0002-builtin-mianliu-profile.patch（内置「免流」配置）"
+elif git -C "$REPO" apply --check --3way "$DELIVER/patches/app/0002-builtin-mianliu-profile.patch" 2>/dev/null; then
+  git -C "$REPO" apply --3way "$DELIVER/patches/app/0002-builtin-mianliu-profile.patch"
+  ok "已应用（3way 合并，注意确认 SubscriptionViewModel.kt 的 init 改动）"
+else
+  warn "内置「免流」配置补丁打不上：SubscriptionViewModel.kt 可能已被上游改动。其余定制不受影响。"
+fi
+
 # ---------------------------------------------------------------- 6. 总结
 step "6/6 完成"
 say "  仓库状态："
