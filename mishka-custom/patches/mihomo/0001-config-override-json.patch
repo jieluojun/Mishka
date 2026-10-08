@@ -1,19 +1,24 @@
 From 63c809e9ac2db76f8d2dcc85989629e2236087d3 Mon Sep 17 00:00:00 2001
 From: Mishka Custom Build <custom@localhost>
 Date: Thu, 1 Oct 2026 09:39:55 +0000
-Subject: [PATCH] config: allow the host app to override RawConfig from a JSON
- file
+Subject: [PATCH] config: allow host overrides and safe import paths
 
 Mishka's mishka_core/runtime.go sets config.OverrideJSONPath from its
 --override-json option and expects config.Parse() to merge that file into
 the parsed RawConfig. YuKongA's mihomo fork carries this (ceafd04); the
-upstream Alpha branch does not, so port it here as a tiny standalone hunk.
+upstream Alpha branch does not, so port it here.
 
-A missing / malformed override file only logs a warning: it is a runtime
-input provided by the host and must not make the core fail to start.
+Mishka's importer also stages provider caches under its private processing/
+directory while Mihomo's HomeDir points at geodata/. Expose a runtime-safe
+path addition so the app can allow only that owned staging directory without
+disabling Mihomo's path check globally.
+
+A missing / malformed override file only logs a warning: the override is a
+host-provided runtime input and must not make the core fail to start.
 ---
  config/config.go | 30 ++++++++++++++++++++++++++++++
- 1 file changed, 30 insertions(+)
+ constant/path.go | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+)
 
 diff --git a/config/config.go b/config/config.go
 index 182bacc9..3a14bc59 100644
@@ -78,3 +83,66 @@ index 182bacc9..3a14bc59 100644
  func DefaultRawConfig() *RawConfig {
  	return &RawConfig{
  		AllowLan:          false,
+diff --git a/constant/path.go b/constant/path.go
+index fdc1a15a..bc729219 100644
+--- a/constant/path.go
++++ b/constant/path.go
+@@ -7,6 +7,7 @@ import (
+ 	"path/filepath"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 
+ 	"github.com/metacubex/mihomo/common/utils"
+ 	"github.com/metacubex/mihomo/constant/features"
+@@ -14,6 +15,9 @@ import (
+ 
+ const Name = "mihomo"
+ 
++// safePathsMu protects runtime additions made by embedded frontends such as Mishka.
++var safePathsMu sync.RWMutex
++
+ var (
+ 	GeositeName    = "GeoSite.dat"
+ 	GeoipName      = "GeoIP.dat"
+@@ -69,6 +73,31 @@ func SetConfig(file string) {
+ 	Path.configFile = file
+ }
+ 
++// AddSafePath adds an application-owned directory to the path allowlist.
++// SAFE_PATHS is read when this package initializes, so embedded callers need
++// this runtime API when they create a private staging directory later.
++func AddSafePath(root string) error {
++	root = strings.TrimSpace(root)
++	if root == "" {
++		return fmt.Errorf("safe path is empty")
++	}
++	root, err := filepath.Abs(root)
++	if err != nil {
++		return fmt.Errorf("resolve safe path: %w", err)
++	}
++	root = filepath.Clean(root)
++
++	safePathsMu.Lock()
++	defer safePathsMu.Unlock()
++	for _, existing := range Path.safePaths {
++		if filepath.Clean(existing) == root {
++			return nil
++		}
++	}
++	Path.safePaths = append(Path.safePaths, root)
++	return nil
++}
++
+ func (p *path) HomeDir() string {
+ 	return p.homeDir
+ }
+@@ -102,6 +131,8 @@ func (p *path) IsSafePath(path string) bool {
+ }
+ 
+ func (p *path) SafePaths() []string {
++	safePathsMu.RLock()
++	defer safePathsMu.RUnlock()
+ 	return append([]string{p.homeDir}, p.safePaths...) // add homedir to safePaths
+ }
+ 

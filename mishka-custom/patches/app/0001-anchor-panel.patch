@@ -23712,3 +23712,27 @@ index d1acc59731a685c89111fb1890ddfea19d2b9fa5..1cb982cd341d13bda1c58af0c2a29669
 +    <string name="subscription_visual_config">Visual config</string>
 +    <string name="subscription_visual_config_summary">Edit this subscription’s YAML config with structured forms</string>
  </resources>
+diff --git a/app/src/main/native/mishka_core/fetch.go b/app/src/main/native/mishka_core/fetch.go
+index 04ed042..c8b63b6 100644
+--- a/app/src/main/native/mishka_core/fetch.go
++++ b/app/src/main/native/mishka_core/fetch.go
+@@ -27,6 +27,7 @@ import (
+ 	"github.com/metacubex/mihomo/common/utils"
+ 	clashHttp "github.com/metacubex/mihomo/component/http"
+ 	"github.com/metacubex/mihomo/config"
++	"github.com/metacubex/mihomo/constant"
+ )
+ 
+ const fetchTimeout = 60 * time.Second
+@@ -94,6 +95,11 @@ func runFetchAndValid(
+ 	if err := os.MkdirAll(workDir, 0700); err != nil {
+ 		return nil, fmt.Errorf("create workDir: %w", err)
+ 	}
++	// The import sandbox is app-owned but outside Mihomo's geodata HomeDir.
++	// Permit only this workDir for temporary provider caches during validation.
++	if err := constant.AddSafePath(workDir); err != nil {
++		return nil, fmt.Errorf("allow processing path: %w", err)
++	}
+ 	// 空 UA 退回 mishkaCoreInit 设置的全局默认 —— 用户没显式覆写时仍走 ClashMetaForAndroid
+ 	effectiveUA := strings.TrimSpace(userAgent)
+ 	if effectiveUA == "" {
