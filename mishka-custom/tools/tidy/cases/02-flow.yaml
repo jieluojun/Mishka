@@ -1,0 +1,4 @@
+proxies: [{name: a, type: ss, server: 1.2.3.4, port: 443, cipher: aes-128-gcm, password: x}]
+dns: {enable: true, enhanced-mode: fake-ip, nameserver: [1.1.1.1], fallback-filter: {geoip: true, ipcidr: [240.0.0.0/4]}}
+tun: {enable: true, stack: gvisor, dns-hijack: [any:53], auto-route: true}
+rules: [DOMAIN-SUFFIX,example.com,DIRECT, MATCH,PROXY]
