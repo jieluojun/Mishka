@@ -1,0 +1,6 @@
+mode: rule
+dns:
+	enable: true
+	nameserver: [1.1.1.1]
+rules:
+	- MATCH,PROXY
