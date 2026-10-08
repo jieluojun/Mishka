@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 93a1f15..0ebf6af 100644
+index 93a1f15754748108e60c9a52bd5b8b156f2a79cb..0ebf6af7fb0238b52e41188f5bb8897f86dc07a4 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -217,7 +217,7 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
@@ -12,7 +12,7 @@ index 93a1f15..0ebf6af 100644
  val mihomoVersionPath = "github.com/metacubex/mihomo/constant.Version"
  val ndkDirectoryProvider = androidComponents.sdkComponents.ndkDirectory
 diff --git a/app/src/main/cpp/mishka_jni.c b/app/src/main/cpp/mishka_jni.c
-index 3a555eb..a059246 100644
+index 3a555ebbb5bc8618c425b73a00938cbf4b2c8e24..a059246942f5c9a4b1ccfbab1c850cd8963c3a34 100644
 --- a/app/src/main/cpp/mishka_jni.c
 +++ b/app/src/main/cpp/mishka_jni.c
 @@ -96,6 +96,22 @@ Java_top_yukonga_mishka_data_bridge_MishkaCoreBridge_nativeGenAgeHybridKeyPair(
@@ -39,7 +39,7 @@ index 3a555eb..a059246 100644
  Java_top_yukonga_mishka_data_bridge_MishkaCoreBridge_nativeValidateTransform(
          JNIEnv *env, jclass clazz, jstring jWorkDir, jstring jTransform, jstring jKey) {
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
-index 5c60eb7..7c76159 100644
+index 5c60eb77413fb8a29381f81bcd9bb90337d8c362..7c761594511d961a2262e84129ec620e37e2ad79 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 @@ -224,7 +224,7 @@ class MainActivity : ComponentActivity() {
@@ -53,7 +53,7 @@ index 5c60eb7..7c76159 100644
              }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 new file mode 100644
-index 0000000..a47ce98
+index 0000000000000000000000000000000000000000..a47ce9830e068e4b4576fd7d080e475903cef88c
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 @@ -0,0 +1,753 @@
@@ -812,7 +812,7 @@ index 0000000..a47ce98
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 new file mode 100644
-index 0000000..48b879f
+index 0000000000000000000000000000000000000000..48b879f20a3cb57945e783d12c8ec262f42a401b
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 @@ -0,0 +1,1179 @@
@@ -1997,7 +1997,7 @@ index 0000000..48b879f
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
 new file mode 100644
-index 0000000..44c2097
+index 0000000000000000000000000000000000000000..44c20972a2ecb1d97174a1979fef1df11f1f6a63
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
 @@ -0,0 +1,426 @@
@@ -2429,7 +2429,7 @@ index 0000000..44c2097
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 new file mode 100644
-index 0000000..128e33a
+index 0000000000000000000000000000000000000000..128e33a4c078a6946d41fbadaf86d7789b50243c
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
 @@ -0,0 +1,748 @@
@@ -3183,7 +3183,7 @@ index 0000000..128e33a
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
 new file mode 100644
-index 0000000..9fb5450
+index 0000000000000000000000000000000000000000..9fb5450f4beb2cf08f800cc43a184b4a10ad7375
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
 @@ -0,0 +1,258 @@
@@ -3447,7 +3447,7 @@ index 0000000..9fb5450
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
 new file mode 100644
-index 0000000..9d96e65
+index 0000000000000000000000000000000000000000..9d96e65767caa747687516dd449411ea759a969c
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
 @@ -0,0 +1,628 @@
@@ -4081,7 +4081,7 @@ index 0000000..9d96e65
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
 new file mode 100644
-index 0000000..d4c6508
+index 0000000000000000000000000000000000000000..d4c65088f0c20b3c08f6c75cfcfff8c926e37087
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
 @@ -0,0 +1,324 @@
@@ -4411,7 +4411,7 @@ index 0000000..d4c6508
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..1a05e5a
+index 0000000000000000000000000000000000000000..1a05e5ab64a6f113f0421702232588b1387959a8
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 @@ -0,0 +1,1497 @@
@@ -5914,7 +5914,7 @@ index 0000000..1a05e5a
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigRefs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigRefs.kt
 new file mode 100644
-index 0000000..537f72b
+index 0000000000000000000000000000000000000000..537f72b93dbf41bb2be1ff5df20f01dc2d85327d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigRefs.kt
 @@ -0,0 +1,551 @@
@@ -6471,7 +6471,7 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..8d0139c
+index 0000000000000000000000000000000000000000..8d0139ca28e61476321f17c44d4cc77fe33fe444
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 @@ -0,0 +1,531 @@
@@ -7008,7 +7008,7 @@ index 0000000..8d0139c
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt
 new file mode 100644
-index 0000000..a285419
+index 0000000000000000000000000000000000000000..a2854194c3ab363716f0636e2897cd312f9e83d4
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt
 @@ -0,0 +1,56 @@
@@ -7070,7 +7070,7 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..8de1116
+index 0000000000000000000000000000000000000000..8de111699964b192b11948c747750f6133934325
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 @@ -0,0 +1,2300 @@
@@ -9376,7 +9376,7 @@ index 0000000..8de1116
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt
 new file mode 100644
-index 0000000..033bcf3
+index 0000000000000000000000000000000000000000..033bcf3aa56cf2370827f72b3f642f7accff1f38
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt
 @@ -0,0 +1,120 @@
@@ -9502,7 +9502,7 @@ index 0000000..033bcf3
 +    (name.trim().ifEmpty { fallback }).replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 new file mode 100644
-index 0000000..7bb9254
+index 0000000000000000000000000000000000000000..7bb925407a60819668d99ddab3fc2bb35ed5ef85
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 @@ -0,0 +1,638 @@
@@ -10146,7 +10146,7 @@ index 0000000..7bb9254
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormMapListLogic.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormMapListLogic.kt
 new file mode 100644
-index 0000000..5e94204
+index 0000000000000000000000000000000000000000..5e9420498dfbb70fa0a01f7d21c0578bf52d2c6d
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormMapListLogic.kt
 @@ -0,0 +1,60 @@
@@ -10212,7 +10212,7 @@ index 0000000..5e94204
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt
 new file mode 100644
-index 0000000..a9121ae
+index 0000000000000000000000000000000000000000..a9121ae3c15048eb3b6a5777aea9b1e7bb05bcec
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt
 @@ -0,0 +1,1233 @@
@@ -11451,7 +11451,7 @@ index 0000000..a9121ae
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 new file mode 100644
-index 0000000..173d3b9
+index 0000000000000000000000000000000000000000..173d3b992059d961fca54613a7103424db34f7fc
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 @@ -0,0 +1,2190 @@
@@ -13647,7 +13647,7 @@ index 0000000..173d3b9
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
 new file mode 100644
-index 0000000..012dd13
+index 0000000000000000000000000000000000000000..012dd13f58231d9c0a63f6caefee9ed7d0c977e5
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
 @@ -0,0 +1,315 @@
@@ -13968,7 +13968,7 @@ index 0000000..012dd13
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt
 new file mode 100644
-index 0000000..1704d85
+index 0000000000000000000000000000000000000000..1704d85adc79661ad662f7bfb7499072dd65edd9
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt
 @@ -0,0 +1,342 @@
@@ -14316,7 +14316,7 @@ index 0000000..1704d85
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
 new file mode 100644
-index 0000000..b9d9cad
+index 0000000000000000000000000000000000000000..b9d9cadb3c2840acf3d7cbb4b33d3db2bc3f2702
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
 @@ -0,0 +1,1078 @@
@@ -15400,7 +15400,7 @@ index 0000000..b9d9cad
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
 new file mode 100644
-index 0000000..0d66444
+index 0000000000000000000000000000000000000000..0d66444bfc6d5883e58448db01484653cf42c351
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
 @@ -0,0 +1,251 @@
@@ -15657,7 +15657,7 @@ index 0000000..0d66444
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 new file mode 100644
-index 0000000..1796296
+index 0000000000000000000000000000000000000000..1796296a18858516030ff9bbe5fbe596a2a46e5e
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 @@ -0,0 +1,795 @@
@@ -16458,7 +16458,7 @@ index 0000000..1796296
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 new file mode 100644
-index 0000000..8e92a0f
+index 0000000000000000000000000000000000000000..8e92a0f3c47c18c93dbde9e7d8e12065694ea65f
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 @@ -0,0 +1,1164 @@
@@ -17628,7 +17628,7 @@ index 0000000..8e92a0f
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
 new file mode 100644
-index 0000000..0434c16
+index 0000000000000000000000000000000000000000..0434c16bf9738c5e408ae3d00bde1e953ddeec65
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
 @@ -0,0 +1,308 @@
@@ -17941,10 +17941,10 @@ index 0000000..0434c16
 +    private fun leadingIndent(value: String): Int = value.takeWhile { it == ' ' }.length
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-index 33aa9cc..eec239e 100644
+index c982b6d7e2fa9f1be471c3235fcdf1c2c05b7012..9274894e957f4c74597c13892228c4d1e2afb811 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-@@ -19,6 +19,9 @@ import io.ktor.http.contentType
+@@ -20,6 +20,9 @@ import io.ktor.http.encodeURLPath
  import io.ktor.http.isSuccess
  import io.ktor.serialization.kotlinx.json.json
  import kotlinx.serialization.json.Json
@@ -17954,20 +17954,12 @@ index 33aa9cc..eec239e 100644
  import top.yukonga.mishka.domain.model.ConnectionsResponse
  import top.yukonga.mishka.domain.model.DelayResult
  import top.yukonga.mishka.domain.model.DnsQueryResponse
-@@ -29,6 +32,7 @@ import top.yukonga.mishka.domain.model.ProvidersResponse
- import top.yukonga.mishka.domain.model.ProxiesResponse
- import top.yukonga.mishka.domain.model.RuleProvidersResponse
- import top.yukonga.mishka.domain.model.RulesResponse
-+import java.net.URLEncoder
- 
- class MihomoApiClient(
-     private val baseUrl: String = "http://127.0.0.1:9090",
-@@ -90,13 +94,16 @@ class MihomoApiClient(
+@@ -91,13 +94,16 @@ class MihomoApiClient(
          ensureSuccess(response, "proxy group '$group'")
      }
  
 -    suspend fun getProxyDelay(name: String, testUrl: String = "http://www.gstatic.com/generate_204", timeout: Int = 5000): DelayResult =
--        client.get("$baseUrl/proxies/$name/delay") {
+-        client.get("$baseUrl/proxies/${pathSegment(name)}/delay") {
 -            url {
 -                parameters.append("url", testUrl)
 -                parameters.append("timeout", timeout.toString())
@@ -17975,7 +17967,7 @@ index 33aa9cc..eec239e 100644
 -        }.body()
 +    suspend fun getProxyDelay(name: String, testUrl: String = DEFAULT_DELAY_TEST_URL, timeout: Int = 8000): DelayResult =
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/proxies/${pathSeg(name)}/delay") {
++            client.get("$baseUrl/proxies/${pathSegment(name)}/delay") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -17986,7 +17978,7 @@ index 33aa9cc..eec239e 100644
  
      /**
       * 测试 proxy-provider 内单节点延迟。provider 节点不在 /proxies 命名空间，
-@@ -105,15 +112,88 @@ class MihomoApiClient(
+@@ -106,15 +112,59 @@ class MihomoApiClient(
      suspend fun getProviderProxyDelay(
          provider: String,
          name: String,
@@ -17994,9 +17986,9 @@ index 33aa9cc..eec239e 100644
 +        testUrl: String = DEFAULT_DELAY_TEST_URL,
          timeout: Int = 5000,
      ): DelayResult =
--        client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
+-        client.get("$baseUrl/providers/proxies/${pathSegment(provider)}/${pathSegment(name)}/healthcheck") {
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/providers/proxies/${pathSeg(provider)}/${pathSeg(name)}/healthcheck") {
++            client.get("$baseUrl/providers/proxies/${pathSegment(provider)}/${pathSegment(name)}/healthcheck") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -18006,24 +17998,15 @@ index 33aa9cc..eec239e 100644
 +        )
 +
 +    /**
-+     * 整组测速（`GET /group/{name}/delay`）：**一次请求**让内核在内部并发测完整个组，
-+     * 返回 `{节点名: 延迟}`——与 mihomo_box 面板 `testGroupAll` 的第一优先路径一致。
-+     *
-+     * 内核语义（hub/route/groups.go + outboundgroup/groupbase.go）：
-+     *  - 只有**测通**的成员会进返回的 map（`URLTest` 里 `err != nil` 的直接不进）；
-+     *  - 一个成员都没通 → 504 `get delay: all proxies timeout`；
-+     *  - 不是代理组 → 404；参数不合法 → 400；`timeout` 是整组的墙钟预算（不是单节点）；
-+     *  - 对非 Selector 的可选组（URLTest / Fallback）会先 `ForceSet("")` 清掉固定选择，
-+     *    所以**固定了节点的组不要调这个端点**（调用方自己拦，见 ProxyViewModel.testGroupDelay）。
-+     *
-+     * 拿不到可信结果（404 / 400 / 504 / 网络错）时返回空表，交给调用方的并发补测。
++     * 整组测速：一次请求让内核并发测试完整个组。拿不到可信结果时返回空表，
++     * 交给调用方的并发补测。
 +     */
 +    suspend fun getGroupDelay(
 +        group: String,
 +        testUrl: String = DEFAULT_DELAY_TEST_URL,
 +        timeout: Int = GROUP_DELAY_TIMEOUT_MILLIS,
 +    ): Map<String, Int> {
-+        val response: HttpResponse = client.get("$baseUrl/group/${pathSeg(group)}/delay") {
++        val response: HttpResponse = client.get("$baseUrl/group/${pathSegment(group)}/delay") {
              url {
                  parameters.append("url", testUrl)
                  parameters.append("timeout", timeout.toString())
@@ -18042,12 +18025,6 @@ index 33aa9cc..eec239e 100644
 +        return delays
 +    }
 +
-+    /**
-+     * 延迟测试端点的响应处理：测速失败时 mihomo 返回 503 + `{"message":…}`，而 [DelayResult]
-+     * 的 delay 有默认值 0，直接 `.body()` 会把错误体反序列化成「delay=0 的成功」——上层于是
-+     * 完全看不出失败（单节点测速点了没反应的根因之一）。必须先验状态码，失败抛出带内核
-+     * message 的 [DelayTestFailedException]，让 ViewModel 能把原因提示给用户。
-+     */
 +    private suspend fun delayBodyOrThrow(response: HttpResponse, name: String): DelayResult {
 +        if (!response.status.isSuccess()) {
 +            val detail = runCatching { response.bodyAsText() }.getOrNull().orEmpty()
@@ -18057,39 +18034,24 @@ index 33aa9cc..eec239e 100644
 +        return response.body()
 +    }
 +
-+    /**
-+     * 路径段 URL 编码：节点名 / provider 名会含 `/`、空格与 emoji（如 `免流订阅/🇺🇸 美国-17`），
-+     * 裸拼进 URL 会被 chi 路由拆成多层路径直接 404（整组测速全失败的根因）。
-+     * URLEncoder 是表单编码：`+` 要还原成 `%20`；`/` 编成 `%2F` 正是路径段需要的，
-+     * 内核侧 `getEscapeParam` 会解码回原名。
-+     */
-+    private fun pathSeg(raw: String): String = URLEncoder.encode(raw, "UTF-8").replace("+", "%20")
-+
 +    companion object {
-+        /** 测速地址与 mihomo_box 参考实现对齐（https：免流/直连节点上 http 明文探测更易被重置）。 */
 +        const val DEFAULT_DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
-+
-+        /**
-+         * 组测速的 `timeout` 参数：mihomo 把它当整组的墙钟预算用。与 mihomo_box 的
-+         * `BATCH_TIMEOUT`（2s）对齐——组接口只是快路径，没测到的成员由并发补测接管。
-+         */
 +        const val GROUP_DELAY_TIMEOUT_MILLIS = 2000
 +    }
  
      suspend fun getRules(): RulesResponse =
          client.get("$baseUrl/rules").body()
-@@ -219,4 +299,8 @@ class MihomoApiClient(
+@@ -228,4 +278,7 @@ class MihomoApiClient(
      }
  }
  
 -class MihomoApiException(message: String) : Exception(message)
 +open class MihomoApiException(message: String) : Exception(message)
 +
-+/** 延迟测试失败（内核返回非 2xx，通常 503 = 节点连不通测速地址）。[status] 供上层分类提示。 */
 +class DelayTestFailedException(val node: String, val status: Int, val reason: String) :
 +    MihomoApiException("delay test for '$node' failed: HTTP $status $reason")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
-index 76eb0a2..14ebcdc 100644
+index 76eb0a20294033ba425c779c4ab000b16ba670b2..14ebcdc0fde29fd9aae21d9d09e9186b95ef527c 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 @@ -10,6 +10,7 @@ import kotlinx.coroutines.launch
@@ -18194,7 +18156,7 @@ index 76eb0a2..14ebcdc 100644
      private external fun nativeValidateTransform(
          workDir: String,
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt b/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
-index c961fd8..9132be8 100644
+index c961fd8f66ce2f5b06caf3a87258a3e16efc6fb9..9132be8bb1f3fd20208a814c6805e68b500d920c 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
 @@ -56,6 +56,13 @@ class MihomoRepositoryImpl(
@@ -18212,7 +18174,7 @@ index c961fd8..9132be8 100644
      override fun connectionsFlow(): Flow<ConnectionsResponse> = webSocket.connectionsFlow()
      override suspend fun getConnections(): Result<ConnectionsResponse> = runCatching { apiClient.getConnections() }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt b/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
-index af3418a..d3332ed 100644
+index af3418a7e5698bf3c7e6d1e3fa64a5abd8414084..d3332ed09e59f2e30b0beca9a6ccb8accd72e401 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
 @@ -28,12 +28,13 @@ val viewModelModule = module {
@@ -18231,7 +18193,7 @@ index af3418a..d3332ed 100644
      single {
          ProxyViewModel(
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt
-index 9a996f2..e9179c2 100644
+index 9a996f2502fbf1f820224d5f7bef97d2acbf69d8..e9179c22727ece600be3a5654bb903eeb8a05c81 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt
 @@ -2,6 +2,7 @@ package top.yukonga.mishka.domain.model
@@ -18284,7 +18246,7 @@ index 9a996f2..e9179c2 100644
  fun ConfigurationOverride.resolveSecretOrNull(): String? =
      secret?.trim()?.takeIf { it.isNotEmpty() }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
-index 1eaec7e..82cc70b 100644
+index 1eaec7ec42b6e6cf34e800879563b29006d2b3d8..82cc70beab268c30bc04d1cda40ee1c98993c25b 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
 @@ -36,17 +36,27 @@ interface MihomoRepository {
@@ -18318,7 +18280,7 @@ index 1eaec7e..82cc70b 100644
      suspend fun getConnections(): Result<ConnectionsResponse>
      suspend fun closeAllConnections(): Result<Unit>
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
-index bfb7c72..255efc2 100644
+index bfb7c72650c170540154ac3b685dfc3cdd41bb37..255efc2a63d16d2669331540cb66adced250a4df 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 @@ -19,6 +19,10 @@ object StorageKeys {
@@ -18349,7 +18311,7 @@ index bfb7c72..255efc2 100644
      const val DARK_MODE = "dark_mode"
      const val THEME_PURE_BLACK = "theme_pure_black"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
-index b4ccbf3..73d5050 100644
+index b4ccbf362c302d949f8c3fc93c51c3e9872d1b5e..73d50505c6fe47b9bdad694e8148b10889a99474 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
 @@ -25,7 +25,7 @@ enum class ProxyState {
@@ -18398,7 +18360,7 @@ index b4ccbf3..73d5050 100644
              if (hasPid && !rebooted) {
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt
 new file mode 100644
-index 0000000..934edb3
+index 0000000000000000000000000000000000000000..934edb341b90e1e1a3c9b37fcd1a8732d3c93fe7
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt
 @@ -0,0 +1,345 @@
@@ -18748,7 +18710,7 @@ index 0000000..934edb3
 +        source.trimStart().startsWith("-----BEGIN AGE ENCRYPTED FILE-----")
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
-index 9652c8e..bc4e1d9 100644
+index 9652c8ec515ef09cd762b6ab902e7fc440c58c76..bc4e1d9de5625bb5be5ff33d649b553a8564c918 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
 @@ -1,30 +1,100 @@
@@ -18988,7 +18950,7 @@ index 9652c8e..bc4e1d9 100644
 +            ?.takeIf { it in 1..65535 }
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt b/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
-index ecdcdb5..44da071 100644
+index ecdcdb58040002a9172ae323f743e4e6326b6028..44da07197b532d9bc67dbd5b1c5ac32cb44fbc0b 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
 @@ -57,7 +57,7 @@ class DynamicNotificationManager(
@@ -19009,7 +18971,7 @@ index ecdcdb5..44da071 100644
                  }
              )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
-index 7529653..e551d93 100644
+index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..e551d93350d44a5af8c536c81a00abe255b705af 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
 @@ -16,6 +16,7 @@ class MihomoRunner(private val context: Context) {
@@ -19135,7 +19097,7 @@ index 7529653..e551d93 100644
              conn.disconnect()
              code in 200..299
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 6cf8283..1659c72 100644
+index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..1659c7241b0d133d655f88ab829ed762beb28836 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 @@ -18,10 +18,10 @@ import kotlinx.coroutines.withContext
@@ -19507,7 +19469,7 @@ index 6cf8283..1659c72 100644
          Log.i(TAG, "Restarting proxy (ROOT)...")
          monitorJob?.cancel()
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
-index fa04d69..26386b4 100644
+index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302fd5be6149 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 @@ -19,10 +19,10 @@ import kotlinx.coroutines.withContext
@@ -19653,7 +19615,7 @@ index fa04d69..26386b4 100644
                      startTime = Clock.System.now().toEpochMilliseconds(),
                      mihomoPid = runner.pid
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
-index e86fc35..0a19898 100644
+index e86fc359b1c92bbcdac1630bc274497fcee58254..0a19898c71ce3b19d59a4241ea665bbcb768edc9 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
 @@ -47,6 +47,10 @@ object ProfileFileOps {
@@ -19684,7 +19646,7 @@ index e86fc35..0a19898 100644
  
      /**
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
-index 0a60c2e..80c2241 100644
+index 0a60c2efb1c64b81457ee54706fed3e23f93e421..80c22412e0642f1504734481d30d2f2502b92390 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 @@ -1,6 +1,7 @@
@@ -19723,7 +19685,7 @@ index 0a60c2e..80c2241 100644
       * 以 root 身份 rm -rf 指定路径。调用方自行保证路径语义（仅用于 app 自己的数据目录下）。
       * best-effort：无 su 设备或失败返回 false，不抛异常。
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
-index 0c3c8c3..75618b0 100644
+index 0c3c8c3abb07e743c460a8280bfc217a51163863..75618b0beeac3aabdf4256d39b72351deaafd6b7 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
 @@ -48,8 +48,8 @@ object RootTetherHijacker {
@@ -19799,7 +19761,7 @@ index 0c3c8c3..75618b0 100644
          }
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt
-index 2a8f11d..948ec25 100644
+index 2a8f11d4ffe8485775de9eba2cd5dcf5a92b1921..948ec257a69df036d0b72ccb86dc4c1ec180dbcd 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt
 @@ -8,7 +8,8 @@ import top.yukonga.mishka.viewmodel.AppProxyMode
@@ -19871,7 +19833,7 @@ index 2a8f11d..948ec25 100644
                                  "pre-tproxy-tether-$proto-v6"
                              )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
-index b57d687..b3ca808 100644
+index b57d68772dc1b9e1b643e151e7399b48555ec4f5..b3ca80838914b901b18b9ca69edb1d410f1684d3 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 @@ -2,6 +2,8 @@ package top.yukonga.mishka.service
@@ -20179,7 +20141,7 @@ index b57d687..b3ca808 100644
      }
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt
-index 7a0fb51..7e2415d 100644
+index 7a0fb5152385317745026ea0df273e5a6da16fc6..7e2415da58acbc121233ddf707fd84efffeabd8e 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt
 @@ -1,7 +1,5 @@
@@ -20275,7 +20237,7 @@ index 7a0fb51..7e2415d 100644
      }
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
-index 2341aa9..3e42813 100644
+index 2341aa96e827896441463a0735866db66c64c1a2..3e42813d7a8a731e7e9b32483b829016fa258748 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
 @@ -335,6 +335,9 @@ fun AppNavigation(
@@ -20317,7 +20279,7 @@ index 2341aa9..3e42813 100644
                  )
              }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
-index bdb96f7..c5f8970 100644
+index bdb96f71653c2ad22280ab2ec56d7153ab88e8df..c5f897059a3970523105e2b323cb757a2f641a09 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
 @@ -56,7 +56,11 @@ sealed interface Route : NavKey {
@@ -20334,7 +20296,7 @@ index bdb96f7..c5f8970 100644
      @Serializable
      data object AppProxy : Route
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
-index 018c54d..4623ff2 100644
+index 018c54d9fc5afa1c553e875fad47859faed6015a..4623ff2cbeab1396764a2ba10a02fe48b3d3da9a 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
 @@ -179,25 +179,34 @@ private fun StatusContent(
@@ -20416,7 +20378,7 @@ index 018c54d..4623ff2 100644
  private fun tunStackLabel(stack: String): String =
      TUN_STACK_OPTIONS.firstOrNull { it.first == stack.lowercase() }?.second ?: stack.ifEmpty { "--" }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
-index 119695c..993d9f9 100644
+index 119695c2ed6c6585cfb5f5db3d15c8ffdccbdfa6..993d9f9110ec36982a82611e3189d36a72aba0cb 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
 @@ -7,13 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
@@ -20593,7 +20555,7 @@ index 119695c..993d9f9 100644
 -private fun List<String>.swap(from: Int, to: Int): List<String> =
 -    toMutableList().also { it[from] = this[to]; it[to] = this[from] }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
-index 93088aa..3eeddd1 100644
+index 93088aa5afde73d5211efcbcf89d48ee3868a337..3eeddd12299063087a9a6a410e0f2458dd26facf 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
 @@ -1,5 +1,8 @@
@@ -20882,7 +20844,7 @@ index 93088aa..3eeddd1 100644
                          verticalAlignment = Alignment.CenterVertically,
                          horizontalArrangement = Arrangement.spacedBy(8.dp),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
-index d3f9631..91c33aa 100644
+index d3f96313e3c1c17a0a1671c56535cce86b9a8bda..91c33aa312162e29e21ae88ffafe8d90ed1b5469 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
 @@ -5,10 +5,12 @@ import androidx.compose.animation.core.animateDpAsState
@@ -21127,7 +21089,7 @@ index d3f9631..91c33aa 100644
              )
              .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
-index b1b2479..7da18ac 100644
+index b1b2479234cad3b9b9c467dc743ee0a9159cb937..7da18acdd4ed9794d6e6ce9ad5a858a4aba9a9fd 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 @@ -31,6 +31,8 @@ import top.yukonga.mishka.platform.ProfileFileManager
@@ -21228,7 +21190,7 @@ index b1b2479..7da18ac 100644
      }
  }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
-index 4084ef6..c67bbb6 100644
+index 4084ef6435095ce94b89bf613c9321a207ff32db..c67bbb63441fd88c1ff3ee30c2af04b544df6aeb 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
 @@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
@@ -21399,7 +21361,7 @@ index 4084ef6..c67bbb6 100644
                                  color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                  modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt
-index 4a1bb29..f4fe9ce 100644
+index 4a1bb29aea45d6349ab722ff2fdf35f734fdfa80..f4fe9ce13cce83f719a3116402a46055599717e3 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt
 @@ -84,6 +84,7 @@ fun SettingsScreen(
@@ -21444,7 +21406,7 @@ index 4a1bb29..f4fe9ce 100644
                                  ArrowPreference(
                                      title = stringResource(R.string.root_settings_title),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
-index cef7fbf..eeb582a 100644
+index cef7fbfb673306c06e85a7bb189f43af7b032302..eeb582a1cd60330ca660e31a25ee0ad2ef9ab6a9 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
 @@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
@@ -21499,7 +21461,7 @@ index cef7fbf..eeb582a 100644
                  TextButton(
                      text = stringResource(R.string.common_save),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
-index b112741..74194d3 100644
+index b112741da831dd40ce8bc297f646813d3394af60..74194d3fd23e8ed8bd9e70d06e8d08fcf4ecec22 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
 @@ -1,11 +1,13 @@
@@ -21639,7 +21601,7 @@ index b112741..74194d3 100644
  
      fun reloadConfig() {
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
-index 4b576a6..e0a0abe 100644
+index 4b576a625df5fc5bd0e8709ea02ed4a5fffd15bb..e0a0abe09c2df43d2af99b52b85f5fb31a1fd875 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
 @@ -22,8 +22,7 @@ import top.yukonga.mishka.util.describe
@@ -21696,7 +21658,7 @@ index 4b576a6..e0a0abe 100644
          if (_uiState.value.refresh != null) return
  
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
-index f684c37..4896268 100644
+index f684c37f745e67f9f1768c2f5b58327a8119d2aa..4896268fa110da54fd5f5f8aa75c2165f8da653e 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 @@ -4,6 +4,11 @@ import android.util.Log
@@ -22108,7 +22070,7 @@ index f684c37..4896268 100644
          const val GLOBAL_GROUP = "GLOBAL"
          const val MODE_GLOBAL = "global"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-index ef9b641..91a7411 100644
+index ef9b641bbd774b403bf03531c43932de623134a0..91a7411f1c2f09ae2c86ca25c789565ba10d0dfd 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 @@ -2,27 +2,40 @@ package top.yukonga.mishka.viewmodel
@@ -22299,7 +22261,7 @@ index ef9b641..91a7411 100644
       * 取消当前正在进行的订阅 Pipeline（导入 / 更新 / 编辑 / 复制）。
       *
 diff --git a/app/src/main/native/mishka_core/runtime_test.go b/app/src/main/native/mishka_core/runtime_test.go
-index df86317..987a093 100644
+index df86317213f3cb47e89f6d944969492e43f430da..987a093b9df3b34e3da6a3868c8d9ca1ef1defbd 100644
 --- a/app/src/main/native/mishka_core/runtime_test.go
 +++ b/app/src/main/native/mishka_core/runtime_test.go
 @@ -1,6 +1,7 @@
@@ -22521,7 +22483,7 @@ index df86317..987a093 100644
 +	}
 +}
 diff --git a/app/src/main/native/mishka_core/transform_bridge.go b/app/src/main/native/mishka_core/transform_bridge.go
-index faef989..2c11db7 100644
+index faef989d41aadcf668a6ecc173a1d9773c42673f..2c11db737a7c10e7b1a78f4d7206e3be97eecd16 100644
 --- a/app/src/main/native/mishka_core/transform_bridge.go
 +++ b/app/src/main/native/mishka_core/transform_bridge.go
 @@ -10,10 +10,12 @@ import (
@@ -22640,7 +22602,7 @@ index faef989..2c11db7 100644
  //
  //export mishkaValidateTransform
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 78fcd87..8e3fc15 100644
+index 78fcd87d11a0df886d8ba4d41313985835cefbdf..8e3fc15ff691275a2e804fe42b946eeb5caaa755 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
 @@ -105,6 +105,9 @@
@@ -22748,7 +22710,7 @@ index 78fcd87..8e3fc15 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..138732b 100644
+index cba1bbb9a85512f9e6591151dff58fa8031168ef..138732bc29f484db572804f6d01eef5a8b09b138 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -22856,7 +22818,7 @@ index cba1bbb..138732b 100644
 +    <string name="subscription_visual_config_summary">用结构化表单编辑此订阅的 YAML 配置</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index f6895e0..8f33921 100644
+index f6895e0c5552e038698d6fd6380735f408e7889a..8f33921d8a0e784a1ab7a190fb322376976e65ee 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
 @@ -103,6 +103,9 @@
@@ -22964,7 +22926,7 @@ index f6895e0..8f33921 100644
 +    <string name="subscription_visual_config_summary">使用結構化表單編輯此訂閱的 YAML 設定</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index d1acc59..1cb982c 100644
+index d1acc59731a685c89111fb1890ddfea19d2b9fa5..1cb982cd341d13bda1c58af0c2a29669f8cf8890 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -105,6 +105,9 @@
