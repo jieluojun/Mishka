@@ -1,7 +1,7 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=dd21ee45c48901b14b7f13e7573c63e1f12abaf2
 patch_file=patches/app/0001-anchor-panel.patch
-patch_sha256=9591706cd06cc667cfcec51d8a5d9f31c3247d6ed502f11650ff8fa004090c6d
+patch_sha256=6758a7b2f37853c976c9a4376cdb54c07062d6286ac43b09ab385e2f9263bb10
 blob_after=6ecc565923a55fbb53b694964b2c321707ffc0e5 app/build.gradle.kts
 blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
 blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -71,4 +71,3 @@ blob_after=8e3fc15ff691275a2e804fe42b946eeb5caaa755 app/src/main/res/values-ru/s
 blob_after=138732bc29f484db572804f6d01eef5a8b09b138 app/src/main/res/values-zh-rCN/strings.xml
 blob_after=8f33921d8a0e784a1ab7a190fb322376976e65ee app/src/main/res/values-zh-rTW/strings.xml
 blob_after=1cb982cd341d13bda1c58af0c2a29669f8cf8890 app/src/main/res/values/strings.xml
-blob_after=c8b63b68afe93dc948e7d7fafaea3bd3354b7741 app/src/main/native/mishka_core/fetch.go
