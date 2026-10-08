@@ -817,6 +817,10 @@ PY8
     'theme locals stay identical between the main app and the panel activity'
   assert_contains 'MishkaTheme(themeConfig = themeConfig) {' "$APP" \
     'the main app renders through the shared theme container'
+  # CI 教训：App.kt 在 top.yukonga.mishka 包，MishkaTheme 在 ui.theme 包，漏 import 会直接
+  # 挂 :app:compileReleaseKotlin（Unresolved reference 'MishkaTheme'）
+  assert_contains 'import top.yukonga.mishka.ui.theme.MishkaTheme' "$APP" \
+    'the app root imports the extracted theme container'
   assert_contains 'context.startActivity(PanelActivity.createIntent(context))' "$NAV" \
     'the home panel entry launches the panel activity instead of pushing a route'
   assert_contains 'val isDark = LocalAppDarkMode.current' "$PS" \

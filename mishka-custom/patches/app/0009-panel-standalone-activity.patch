@@ -17,10 +17,10 @@ index 9ba59f6..f857004 100644
          <activity
              android:name=".ExternalImportActivity"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/App.kt b/app/src/main/kotlin/top/yukonga/mishka/App.kt
-index 333338c..77870ac 100644
+index 333338c..f9babd6 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/App.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/App.kt
-@@ -1,25 +1,12 @@
+@@ -1,25 +1,13 @@
  package top.yukonga.mishka
  
 -import androidx.compose.foundation.isSystemInDarkTheme
@@ -41,12 +41,13 @@ index 333338c..77870ac 100644
 -import top.yukonga.mishka.ui.theme.LocalAppMonetEnabled
 -import top.yukonga.mishka.ui.theme.LocalPlatformDensity
 -import top.yukonga.mishka.ui.theme.ThemeAccentColor
++import top.yukonga.mishka.ui.theme.MishkaTheme
  import top.yukonga.mishka.ui.theme.ThemeConfig
 -import top.yukonga.mishka.ui.theme.resolveIsDark
  import top.yukonga.mishka.viewmodel.AppProxyViewModel
  import top.yukonga.mishka.viewmodel.BackupViewModel
  import top.yukonga.mishka.viewmodel.ConnectionViewModel
-@@ -33,12 +20,6 @@ import top.yukonga.mishka.viewmodel.ProviderViewModel
+@@ -33,12 +21,6 @@ import top.yukonga.mishka.viewmodel.ProviderViewModel
  import top.yukonga.mishka.viewmodel.ProxyViewModel
  import top.yukonga.mishka.viewmodel.OverrideProfileViewModel
  import top.yukonga.mishka.viewmodel.SubscriptionViewModel
@@ -59,7 +60,7 @@ index 333338c..77870ac 100644
  
  @Composable
  fun App(
-@@ -71,92 +52,36 @@ fun App(
+@@ -71,92 +53,36 @@ fun App(
      backupViewModel: BackupViewModel? = null,
      onRestartApp: () -> Unit = {},
  ) {

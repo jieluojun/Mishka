@@ -41,7 +41,7 @@
 | `app/src/main/AndroidManifest.xml` | 注册 `.PanelActivity` |
 | `app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt` | **新增**：面板宿主 Activity |
 | `app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt` | **新增**：抽出共用主题容器 |
-| `app/src/main/kotlin/top/yukonga/mishka/App.kt` | 改用 `MishkaTheme` 包住 `AppNavigation` |
+| `app/src/main/kotlin/top/yukonga/mishka/App.kt` | 改用 `MishkaTheme` 包住 `AppNavigation`（并补 `import top.yukonga.mishka.ui.theme.MishkaTheme`）|
 | `app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt` | 面板入口改起 intent；删 `entry<Route.Panel>` |
 | `app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt` | 删 `data object Panel` |
 | `app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt` | 去掉 `isDark` 入参（改读 `LocalAppDarkMode`），`onBack` 由宿主传 `finish()` |
@@ -60,6 +60,21 @@
 - 补丁在 0001–0008 之上 `git apply --check` 通过，且可 `git apply -R` 逆序还原；
 - `tools/check_cross_package_imports.py`、`tools/check_trailing_lambda.py`、
   `tools/panel/check_panel_refs.py` 在整个序列上继续通过。
+
+## 修订记录
+
+- **修 CI 编译失败**：初版把 `MishkaTheme` 从 `App.kt` 抽到 `ui/theme/MishkaTheme.kt` 后，忘了
+  在 `App.kt` 里补 `import top.yukonga.mishka.ui.theme.MishkaTheme`（两个包不同），CI 的
+  `:app:compileReleaseKotlin` 报 `Unresolved reference 'MishkaTheme'`，并连带一条
+  `@Composable invocations can only happen from the context of a @Composable function`。
+  已补 import 并重新生成补丁（sha 见 `BASELINE.txt`）。
+- **检查器补强**：`tools/check_cross_package_imports.py` 原来只扫 `top.yukonga.mishka.custom.**`
+  下的符号，正好漏掉这种「自定义包之外」的引用。现在扫整个 app 模块的顶层声明，判断
+  「调用了别处的顶层符号却没 import」（同包 / 同包同名 / 本文件声明过同名符号 /
+  已 import 同名第三方符号 都算合法），只查调用位置以避免类型位置的几十条误报。
+  实测：原始 dd21ee4、0001、0001–0008、0001–0009 四棵树均 0 误报；把这版补丁的 import 去掉后
+  立刻报出 `App.kt: 调用了 MishkaTheme( 但没有 import top.yukonga.mishka.ui.theme.MishkaTheme`，
+  与 CI 的错误一致。
 
 **未验证**：沙箱没有 Android SDK 与真机，未实际安装 APK；新文件只做了 kotlinc 的语法 /
 符号级前后对照（无新增错误类别），未做完整类型检查。真机验收建议按下面几条走：

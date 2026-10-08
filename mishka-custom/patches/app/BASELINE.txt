@@ -129,6 +129,6 @@ patch0008_sha256=498eb06fd94df6fa265f05eabafb1a86f93f38cf129eea0c071cace02ad9e3f
 #   · PanelScreen 不再需要 isDark 入参（改读 LocalAppDarkMode），onBack 由宿主传 finish()。
 # 仍然只用平台 android.webkit 与项目现有 Compose API，不引入新依赖。
 patch0009_prereq=0001,0002,0003,0004,0005,0006,0007,0008
-patch0009_sha256=258b1ccfe59f2ac560e9c463b7120b9ae35874b4395f02b2545a68ce7f57c5c3
+patch0009_sha256=4949daca27f8f0f728d68c4e3da530ffa0b386044412875397d5c48bc2e1e26d
 patch0009_blob_new=89a0fc21c1d02369e859c389e69a1c10b5e63d29 app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt
 patch0009_blob_new=4055f3cc1e20cf48dda4e1ffc2069b635fdfdd9e app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt
