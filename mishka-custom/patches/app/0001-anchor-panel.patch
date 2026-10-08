@@ -18283,7 +18283,7 @@ index 1eaec7ec42b6e6cf34e800879563b29006d2b3d8..82cc70beab268c30bc04d1cda40ee1c9
      suspend fun getConnections(): Result<ConnectionsResponse>
      suspend fun closeAllConnections(): Result<Unit>
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
-index bfb7c72650c170540154ac3b685dfc3cdd41bb37..255efc2a63d16d2669331540cb66adced250a4df 100644
+index bfb7c72650c170540154ac3b685dfc3cdd41bb37..eb3fef81374a5efdb6611a36ecfc7f2a735fe292 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 @@ -19,6 +19,10 @@ object StorageKeys {
@@ -18297,7 +18297,16 @@ index bfb7c72650c170540154ac3b685dfc3cdd41bb37..255efc2a63d16d2669331540cb66adce
  
      // 启动时刻的 boot session 标记，用于 reopen 重连前识别设备是否重启过（重启会杀死 root
      // mihomo，不能把过期 PID 误当"仍存活"）。判定逻辑见 [BootSession]
-@@ -88,6 +92,15 @@ object StorageKeys {
+@@ -64,6 +68,8 @@ object StorageKeys {
+ 
+     // 启动时生效的 ROOT submode 快照（"tun"/"tproxy"）；attach 路径按此与当前 TUN_MODE 比对
+     const val ROOT_SUBMODE_ACTIVE = "root_submode_active"
++    // true means the previous stop completed process + netfilter cleanup; fresh start may skip recovery sweeps.
++    const val ROOT_LAST_STOP_CLEAN = "root_last_stop_clean"
+ 
+     // sing-tun jumbo MTU + GSO 开关；默认 true（mtu=9000 + gso=true）
+     // 极端 ROM 下 TUN 到上游分片异常时可关（回退 mtu=1500、gso=false）
+@@ -88,6 +94,15 @@ object StorageKeys {
      // 非全局模式下 GLOBAL 组是否留在列表里；全局模式无视此开关强制显示
      const val PROXY_SHOW_GLOBAL_GROUP = "proxy_show_global_group"
  
@@ -18712,6 +18721,135 @@ index 0000000000000000000000000000000000000000..934edb341b90e1e1a3c9b37fcd1a8732
 +    private fun isAgeEncrypted(source: String): Boolean =
 +        source.trimStart().startsWith("-----BEGIN AGE ENCRYPTED FILE-----")
 +}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/AndroidProcessResolver.kt b/app/src/main/kotlin/top/yukonga/mishka/service/AndroidProcessResolver.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..934ab5456a0c2eef9b9c8e8ff52eb8477e9aca88
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/AndroidProcessResolver.kt
+@@ -0,0 +1,123 @@
++package top.yukonga.mishka.service
++
++import android.content.Context
++import android.net.ConnectivityManager
++import android.os.Build
++import android.os.Process
++import android.system.OsConstants
++import android.util.Log
++import java.net.DatagramPacket
++import java.net.DatagramSocket
++import java.net.InetAddress
++import java.net.InetSocketAddress
++import java.net.SocketException
++import java.util.concurrent.atomic.AtomicBoolean
++
++/**
++ * Bridges mihomo's standalone child process to Android's authoritative socket-owner API.
++ *
++ * A fork+exec core cannot call [ConnectivityManager.getConnectionOwnerUid] directly. CMFA solves
++ * that with an in-process JNI callback; Mishka deliberately runs a separate process, so a tiny
++ * loopback UDP bridge is used instead. Requests never leave loopback and carry only protocol plus
++ * source/destination socket addresses. The response is the owning package name.
++ */
++class AndroidProcessResolver(context: Context) : AutoCloseable {
++    private val appContext = context.applicationContext
++    private val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
++        ?: error("ConnectivityManager unavailable")
++    // Stable across Service recreation so a surviving ROOT core reconnects after the app process
++    // is killed. Different Android app UIDs get different ports.
++    private val socket = bindSocket()
++    private val running = AtomicBoolean(true)
++    val address: String = "$LOOPBACK:${socket.localPort}"
++
++    private val worker = Thread({ serve() }, "mishka-process-resolver").apply {
++        isDaemon = true
++        start()
++    }
++
++    private fun serve() {
++        val buffer = ByteArray(MAX_PACKET_SIZE)
++        while (running.get()) {
++            val request = DatagramPacket(buffer, buffer.size)
++            try {
++                socket.receive(request)
++                val text = String(request.data, request.offset, request.length, Charsets.UTF_8)
++                val packageName = resolve(text).orEmpty()
++                val response = packageName.toByteArray(Charsets.UTF_8)
++                socket.send(DatagramPacket(response, response.size, request.address, request.port))
++            } catch (_: SocketException) {
++                if (running.get()) Log.w(TAG, "process resolver socket closed unexpectedly")
++                return
++            } catch (e: Exception) {
++                Log.d(TAG, "process resolver request failed: ${e.message}")
++            }
++        }
++    }
++
++    private fun resolve(request: String): String? {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
++        val fields = request.trim().split('\t')
++        if (fields.size != 3) return null
++        val protocol = when (fields[0]) {
++            "tcp" -> OsConstants.IPPROTO_TCP
++            "udp" -> OsConstants.IPPROTO_UDP
++            else -> return null
++        }
++        val source = parseSocketAddress(fields[1]) ?: return null
++        val target = parseSocketAddress(fields[2]) ?: return null
++        val uid = runCatching {
++            connectivity.getConnectionOwnerUid(protocol, source, target)
++        }.getOrDefault(-1)
++        if (uid < 0) return null
++        val packages = appContext.packageManager.getPackagesForUid(uid).orEmpty()
++        // sharedUserId is rare; prefer a non-Mishka package so the VPN's own control connection
++        // cannot mask the actual app when Android reports a shared UID.
++        return packages.firstOrNull { it != appContext.packageName } ?: packages.firstOrNull()
++    }
++
++    private fun parseSocketAddress(value: String): InetSocketAddress? {
++        val host: String
++        val portText: String
++        if (value.startsWith("[")) {
++            val end = value.lastIndexOf("]:" )
++            if (end <= 1) return null
++            host = value.substring(1, end)
++            portText = value.substring(end + 2)
++        } else {
++            val split = value.lastIndexOf(':')
++            if (split <= 0) return null
++            host = value.substring(0, split)
++            portText = value.substring(split + 1)
++        }
++        val port = portText.toIntOrNull()?.takeIf { it in 0..65535 } ?: return null
++        return InetSocketAddress(InetAddress.getByName(host.substringBefore('%')), port)
++    }
++
++    private fun bindSocket(): DatagramSocket {
++        val preferredPort = BASE_PORT + (Process.myUid() % PORT_SPAN)
++        return runCatching {
++            DatagramSocket(null).apply {
++                reuseAddress = true
++                bind(InetSocketAddress(InetAddress.getByName(LOOPBACK), preferredPort))
++            }
++        }.getOrElse {
++            Log.w(TAG, "stable resolver port $preferredPort unavailable; using ephemeral port")
++            DatagramSocket(0, InetAddress.getByName(LOOPBACK))
++        }
++    }
++
++    override fun close() {
++        if (!running.compareAndSet(true, false)) return
++        socket.close()
++        runCatching { worker.join(200) }
++    }
++
++    companion object {
++        private const val TAG = "AndroidProcessResolver"
++        private const val LOOPBACK = "127.0.0.1"
++        private const val MAX_PACKET_SIZE = 1024
++        private const val BASE_PORT = 32000
++        private const val PORT_SPAN = 10000
++    }
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
 index 9652c8ec515ef09cd762b6ab902e7fc440c58c76..bc4e1d9de5625bb5be5ff33d649b553a8564c918 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
@@ -18974,7 +19112,7 @@ index ecdcdb58040002a9172ae323f743e4e6326b6028..44da07197b532d9bc67dbd5b1c5ac32c
                  }
              )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
-index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfdb80b6941 100644
+index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..a757ff17dbd2ad0566fb9f1a425f41d2827cb56d 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
 @@ -16,6 +16,7 @@ class MihomoRunner(private val context: Context) {
@@ -19023,7 +19161,7 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
          activeSubscriptionId = subscriptionId
          Log.i(TAG, "Attached to existing mihomo process: pid=$pid")
          return true
-@@ -73,7 +76,8 @@ class MihomoRunner(private val context: Context) {
+@@ -73,10 +76,12 @@ class MihomoRunner(private val context: Context) {
          useRoot: Boolean = false,
          overrideJsonPath: String,
          secret: String,
@@ -19033,7 +19171,11 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
          ageSecretKey: String = "",
          transformPath: String? = null,
          preferTransformMixedPort: Boolean = false,
-@@ -92,7 +96,8 @@ class MihomoRunner(private val context: Context) {
++        processResolverAddress: String = "",
+     ): Boolean = withContext(Dispatchers.IO) {
+         if (isRunning) {
+             Log.w(TAG, "mihomo already running")
+@@ -92,7 +97,8 @@ class MihomoRunner(private val context: Context) {
          isRootMode = useRoot
          activeSubscriptionId = subscriptionId
          this@MihomoRunner.secret = secret
@@ -19043,7 +19185,7 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
  
          // ROOT 模式走独立 runtime/{uuid}/ 沙箱（mihomo 会以 uid=0 写 provider 缓存，不能污染 imported/）；
          // 调用方（MishkaRootService）必须在 start 之前调 ProfileFileOps.prepareRootRuntime 准备好内容。
-@@ -120,8 +125,10 @@ class MihomoRunner(private val context: Context) {
+@@ -120,11 +126,16 @@ class MihomoRunner(private val context: Context) {
                      add("--transform"); add(transformPath)
                      if (preferTransformMixedPort) add("--prefer-transform-mixed-port")
                  }
@@ -19056,7 +19198,13 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
                  if (ageSecretKey.isNotEmpty()) {
                      add("--age-secret-key"); add(ageSecretKey)
                  }
-@@ -176,7 +183,12 @@ class MihomoRunner(private val context: Context) {
++                if (processResolverAddress.isNotEmpty()) {
++                    add("--android-process-resolver"); add(processResolverAddress)
++                }
+             }.toTypedArray()
+             val logFile = File(workDir, "mihomo.log")
+ 
+@@ -176,7 +187,12 @@ class MihomoRunner(private val context: Context) {
          if (childPid > 0) {
              Log.i(TAG, "Stopping mihomo pid=$childPid (root=$isRootMode)")
              if (isRootMode) {
@@ -19070,7 +19218,7 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
                  val killed = RootHelper.killAsRoot(childPid, tunDevice)
                  if (!killed) {
                      RootHelper.killMihomoByName(tunDevice)
-@@ -194,6 +206,7 @@ class MihomoRunner(private val context: Context) {
+@@ -194,6 +210,7 @@ class MihomoRunner(private val context: Context) {
          }
          secret = ""
          isRootMode = false
@@ -19078,7 +19226,7 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
      }
  
      /**
-@@ -203,16 +216,16 @@ class MihomoRunner(private val context: Context) {
+@@ -203,16 +220,16 @@ class MihomoRunner(private val context: Context) {
       * 其他 inbound 仍响应 /version，只有日志能区分 silent failure。
       */
      private suspend fun waitForReady(useRoot: Boolean, workDir: File): String? {
@@ -19100,7 +19248,7 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
              if (round % LIVENESS_CHECK_EVERY != 0) return@repeat
              val alive = if (useRoot) RootHelper.isAliveAsRoot(childPid) else isProcessAlive(childPid)
              if (!alive) {
-@@ -287,8 +300,8 @@ class MihomoRunner(private val context: Context) {
+@@ -287,8 +304,8 @@ class MihomoRunner(private val context: Context) {
      private fun isApiReady(): Boolean {
          return try {
              val conn = URL("http://$externalController/version").openConnection() as HttpURLConnection
@@ -19111,7 +19259,7 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
              conn.responseCode // 任何响应（200/401 等）都说明 API 已就绪
              conn.disconnect()
              true
-@@ -298,15 +311,17 @@ class MihomoRunner(private val context: Context) {
+@@ -298,15 +315,17 @@ class MihomoRunner(private val context: Context) {
      }
  
      /**
@@ -19132,7 +19280,7 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
              val code = conn.responseCode
              conn.disconnect()
              code in 200..299
-@@ -327,8 +342,8 @@ class MihomoRunner(private val context: Context) {
+@@ -327,8 +346,8 @@ class MihomoRunner(private val context: Context) {
      companion object {
          private const val TAG = "MihomoRunner"
  
@@ -19144,7 +19292,7 @@ index 7529653dbb6e253ea74aa99ee2e8275e91f13af9..ca241ff8aab346c7178afb6fe2c4bbfd
          private const val GRACEFUL_STOP_TIMEOUT_MS = 3000
          private const val FORCE_STOP_TIMEOUT_MS = 500
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667cca1b2003 100644
+index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..dfb7471f34e7ed851839645f455df1dce6ad8aca 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 @@ -18,10 +18,10 @@ import kotlinx.coroutines.withContext
@@ -19187,7 +19335,25 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
  
          companion object {
              fun from(value: String?): Submode = entries.firstOrNull { it.storageValue == value } ?: Tun
-@@ -148,13 +151,13 @@ class MishkaRootService : Service() {
+@@ -61,6 +64,8 @@ class MishkaRootService : Service() {
+     // 跑在 Default 上会长时间占住数个 CPU 池线程，与 Compose 重组、导入管线抢同一批核
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+     private val runner by lazy { MihomoRunner(this) }
++    private val processResolverDelegate = lazy { AndroidProcessResolver(this) }
++    private val processResolver by processResolverDelegate
+     private val dynamicNotification by lazy {
+         DynamicNotificationManager(this, scope, MishkaApplication.instance.connectionManager)
+     }
+@@ -89,6 +94,8 @@ class MishkaRootService : Service() {
+     override fun onCreate() {
+         super.onCreate()
+         NotificationHelper.createChannels(this)
++        // Rebind the stable UID resolver port before an attach to a surviving ROOT core.
++        processResolver.address
+         try {
+             startForeground(
+                 NotificationHelper.NOTIFICATION_ID_VPN,
+@@ -148,13 +155,13 @@ class MishkaRootService : Service() {
      }
  
      private fun isRootRunning(mode: TunMode): Boolean =
@@ -19203,7 +19369,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
          val inFlight = startJob?.takeIf { it.isActive }
          if (inFlight != null) {
              if (attachOnly || !startJobAttachOnly) {
-@@ -193,11 +196,27 @@ class MishkaRootService : Service() {
+@@ -193,11 +200,27 @@ class MishkaRootService : Service() {
              )
              val tetherModeActive = storage.getString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, "")
              val submodeActive = storage.getString(StorageKeys.ROOT_SUBMODE_ACTIVE, "")
@@ -19231,7 +19397,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
              // 请求的订阅与运行中的不一致时拒绝重连，走全新启动加载新 config
              val subscriptionMismatch = existingPid > 0 && subscriptionId != existingSubscriptionId
              // 用户在 app 被杀期间改过 tether mode：运行中的 mihomo 的 tproxy-port 配置已锁死，
-@@ -226,11 +245,19 @@ class MishkaRootService : Service() {
+@@ -226,11 +249,19 @@ class MishkaRootService : Service() {
              if (submodeMismatch) {
                  Log.i(TAG, "Submode changed while app was killed (active=$submodeActive, requested=${submode.storageValue}), restarting")
              }
@@ -19254,7 +19420,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
                      Log.i(TAG, "Reconnected to existing mihomo: pid=$existingPid submode=${submode.storageValue}")
                      // App 进程重启后内存态丢失：规则默认仍在（mihomo 进程一直活着，iptables
                      // 在内核里也一直活着），无需重建。但系统重启 / 与其他代理模块共存被清过
-@@ -238,6 +265,13 @@ class MishkaRootService : Service() {
+@@ -238,6 +269,13 @@ class MishkaRootService : Service() {
                      // ROOT_ATTACH_FORCE_REAPPLY=true 可强制 re-apply，诊断用。
                      when (submode) {
                          Submode.Tun -> {
@@ -19268,7 +19434,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
                              val activeMode = RootTetherHijacker.Mode.from(tetherModeActive.ifEmpty { tetherModeRequested })
                              val tproxySupported = activeMode == RootTetherHijacker.Mode.PROXY &&
                                      RootTetherHijacker.probeTproxySupport()
-@@ -251,12 +285,15 @@ class MishkaRootService : Service() {
+@@ -251,12 +289,15 @@ class MishkaRootService : Service() {
                                  applyTproxyRules(storage)
                              }
                          }
@@ -19285,7 +19451,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
                              tunMode = tunMode,
                              startTime = existingStartTime,
                              mihomoPid = runner.pid
-@@ -295,16 +332,16 @@ class MishkaRootService : Service() {
+@@ -295,16 +336,20 @@ class MishkaRootService : Service() {
                  return@launch
              }
  
@@ -19296,13 +19462,17 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
 -                runner.stop()
 +            // 2. 清理残留进程与规则。restartProxy 已完成同样工作时通过 preCleaned 跳过，
 +            // 避免一次“热重载”连续执行两轮 pkill + 两套 netfilter teardown。
-+            if (!preCleaned) {
++            val previousStopClean = storage.getString(StorageKeys.ROOT_LAST_STOP_CLEAN, "false") == "true"
++            if (!preCleaned && !previousStopClean) {
 +                // pid 字段比 runner.isRunning 便宜；后者在 ROOT 下会额外 fork 一次 su 判活。
 +                if (runner.pid > 0) runner.stop()
 +                val currentTun = if (existingPid > 0) existingTunDevice else rootTunDeviceFallback
 +                RootHelper.cleanupOrphanedMihomo(tunDevice = currentTun)
-+                // 启动前把上一次残留的 iptables 规则（另一个 submode 可能还没清干净）彻底擦一遍
-+                teardownAllRootRules()
++                // 仅异常/未知前置状态执行恢复扫描；正常 stop 已清理，不再让下次 start 重复付费。
++                teardownActiveRootRules(storage)
++                storage.putString(StorageKeys.ROOT_LAST_STOP_CLEAN, "true")
++            } else if (previousStopClean) {
++                Log.i(TAG, "Previous ROOT stop was clean; skipping orphan and netfilter recovery sweep")
              }
 -            val currentTun = storage.getString(StorageKeys.ROOT_TUN_DEVICE, RuntimeOverrideBuilder.DEFAULT_TUN_DEVICE)
 -            RootHelper.cleanupOrphanedMihomo(tunDevice = currentTun)
@@ -19311,7 +19481,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
  
              // 3. 检查 ROOT 权限
              if (!RootHelper.hasRootAccess()) {
-@@ -330,6 +367,28 @@ class MishkaRootService : Service() {
+@@ -330,6 +375,28 @@ class MishkaRootService : Service() {
                  storage.putString(StorageKeys.ROOT_TPROXY_KERNEL_CAPABLE, "true")
              }
  
@@ -19340,7 +19510,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
              // 3.5 准备 runtime/{uuid}/ 沙箱：从 imported/{uuid}/ 复制，mihomo 在此以 root 写入
              //     不污染 imported/，保证更新/删除始终在 app UID 下工作
              if (subscriptionId != null) {
-@@ -350,10 +409,7 @@ class MishkaRootService : Service() {
+@@ -350,10 +417,7 @@ class MishkaRootService : Service() {
              }
  
              // 4. 装配 override.run.json
@@ -19352,7 +19522,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
              // 仅 TUN submode 且用户选 PROXY 时才探测 xt_TPROXY 为 RootTetherHijacker 开 tproxy-port 入站；
              // 探测结果同步写入 StorageKeys.ROOT_TPROXY_KERNEL_CAPABLE，UI 据此决定是否显示降级告警
              val userWantsProxy = submode == Submode.Tun &&
-@@ -385,6 +441,59 @@ class MishkaRootService : Service() {
+@@ -385,6 +449,59 @@ class MishkaRootService : Service() {
                  stopSelf()
                  return@launch
              }
@@ -19412,7 +19582,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
              val overrideFile = RuntimeOverrideBuilder.buildAndWriteForRun(
                  context = this@MishkaRootService,
                  userOverride = userOverride,
-@@ -392,7 +501,14 @@ class MishkaRootService : Service() {
+@@ -392,20 +509,30 @@ class MishkaRootService : Service() {
                  tunMode = submode.tunMode,
                  subscriptionUpdateViaProxy = viaProxy,
                  subscriptionMixedPort = transformPlan.mixedPort,
@@ -19427,7 +19597,10 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
              )
  
              // 5. 以 root 启动 mihomo
-@@ -402,7 +518,8 @@ class MishkaRootService : Service() {
+             // age 加密订阅：runtime/ 保持密文，密钥与覆写选择来自同一份 imported DB 快照。
++            storage.putString(StorageKeys.ROOT_LAST_STOP_CLEAN, "false")
+             val success = runner.start(
+                 subscriptionId = subscriptionId,
                  useRoot = true,
                  overrideJsonPath = overrideFile.absolutePath,
                  secret = secret,
@@ -19437,7 +19610,11 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
                  ageSecretKey = transformPlan.ageSecretKey,
                  transformPath = transformPlan.transformPath,
                  preferTransformMixedPort = transformPlan.transformPath != null && viaProxy && userOverride.mixedPort == null,
-@@ -419,7 +536,8 @@ class MishkaRootService : Service() {
++                processResolverAddress = processResolver.address,
+             )
+             if (!success) {
+                 val errorMsg = runner.errorMessage.ifBlank { getString(R.string.error_start_failed) }
+@@ -419,7 +546,8 @@ class MishkaRootService : Service() {
  
              // 6. 持久化 PID、secret、启动时间、订阅 ID（用于 app 重启后重连 + 订阅一致性校验）
              val startTime = Clock.System.now().toEpochMilliseconds()
@@ -19447,7 +19624,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
              // 保存本次启动时生效的 tether mode / submode 快照；attach 路径据此判断用户是否改过设置
              storage.putString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, tetherModeRequested)
              storage.putString(StorageKeys.ROOT_SUBMODE_ACTIVE, submode.storageValue)
-@@ -428,6 +546,8 @@ class MishkaRootService : Service() {
+@@ -428,6 +556,8 @@ class MishkaRootService : Service() {
              when (submode) {
                  Submode.Tun -> applyTetherRules(storage, tproxyForTether)
                  Submode.Tproxy -> applyTproxyRules(storage)
@@ -19456,7 +19633,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
              }
  
              // 7. 更新状态和通知
-@@ -435,7 +555,7 @@ class MishkaRootService : Service() {
+@@ -435,7 +565,7 @@ class MishkaRootService : Service() {
                  ProxyServiceStatus(
                      ProxyState.Running,
                      secret = runner.secret,
@@ -19465,7 +19642,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
                      tunMode = tunMode,
                      startTime = startTime,
                      mihomoPid = runner.pid
-@@ -474,7 +594,14 @@ class MishkaRootService : Service() {
+@@ -474,7 +604,14 @@ class MishkaRootService : Service() {
              AppListProvider(this@MishkaRootService).resolveUids(packages)
          }
          val ipv6Enabled = storage.getString(StorageKeys.VPN_ALLOW_IPV6, "false") == "true"
@@ -19481,7 +19658,39 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
      }
  
      /**
-@@ -542,11 +669,20 @@ class MishkaRootService : Service() {
+@@ -501,10 +638,18 @@ class MishkaRootService : Service() {
+      * 不依赖内存态 currentSubmode 的准确性）。走 NonCancellable 保证 stop/restart/死亡
+      * 路径即使协程被取消也能完成清理，避免规则残留。
+      */
+-    private suspend fun teardownAllRootRules() {
++    private suspend fun teardownActiveRootRules(storage: PlatformStorage) {
+         withContext(NonCancellable) {
+-            RootTetherHijacker.teardown()
+-            RootTproxyApplier.teardown()
++            when (storage.getString(StorageKeys.ROOT_SUBMODE_ACTIVE, "")) {
++                Submode.Tun.storageValue -> RootTetherHijacker.teardown()
++                Submode.Tproxy.storageValue -> RootTproxyApplier.teardown()
++                Submode.Ebpf.storageValue -> Unit
++                // Missing snapshot means an abnormal previous exit: only recovery pays for both.
++                else -> {
++                    RootTetherHijacker.teardown()
++                    RootTproxyApplier.teardown()
++                }
++            }
+         }
+     }
+ 
+@@ -530,7 +675,8 @@ class MishkaRootService : Service() {
+             Log.e(TAG, "mihomo process died unexpectedly (ROOT): $errorMsg")
+             val storage = PlatformStorage(this@MishkaRootService)
+             val runningSubscriptionId = storage.getString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "").ifEmpty { null }
+-            teardownAllRootRules()
++            teardownActiveRootRules(storage)
++            storage.putString(StorageKeys.ROOT_LAST_STOP_CLEAN, "true")
+             clearPersistedState(storage)
+             storage.putString(StorageKeys.SERVICE_WAS_RUNNING, "false")
+             // 进程死透了，清 runtime/{uuid}/（里面有 root:root 的 provider 缓存，app 删不动）
+@@ -542,11 +688,20 @@ class MishkaRootService : Service() {
          }
      }
  
@@ -19503,7 +19712,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
          // reopen 时据此识别设备是否重启过
          BootSession.mark(this, storage)
      }
-@@ -556,6 +692,9 @@ class MishkaRootService : Service() {
+@@ -556,6 +711,9 @@ class MishkaRootService : Service() {
          storage.putString(StorageKeys.ROOT_MIHOMO_SECRET, "")
          storage.putString(StorageKeys.ROOT_START_TIME, "")
          storage.putString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "")
@@ -19513,7 +19722,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
          BootSession.clear(storage)
          storage.putString(StorageKeys.ROOT_TETHER_MODE_ACTIVE, "")
          storage.putString(StorageKeys.ROOT_SUBMODE_ACTIVE, "")
-@@ -569,7 +708,7 @@ class MishkaRootService : Service() {
+@@ -569,7 +727,7 @@ class MishkaRootService : Service() {
          val ifaces = RootTetherHijacker.parseInterfaces(
              storage.getString(StorageKeys.ROOT_TETHER_IFACES, RootTetherHijacker.DEFAULT_IFACES)
          )
@@ -19522,7 +19731,7 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
      }
  
      /** Attach 路径：用上次启动时持久化的 active mode（与 mihomo 实际监听状态对齐）。 */
-@@ -580,9 +719,15 @@ class MishkaRootService : Service() {
+@@ -580,9 +738,15 @@ class MishkaRootService : Service() {
          val ifaces = RootTetherHijacker.parseInterfaces(
              storage.getString(StorageKeys.ROOT_TETHER_IFACES, RootTetherHijacker.DEFAULT_IFACES)
          )
@@ -19539,15 +19748,17 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
      private fun restartProxy(subscriptionId: String?) {
          Log.i(TAG, "Restarting proxy (ROOT)...")
          monitorJob?.cancel()
-@@ -592,14 +737,13 @@ class MishkaRootService : Service() {
+@@ -592,14 +756,14 @@ class MishkaRootService : Service() {
              // 先让进行中的启动协程收敛，否则下面的 startProxy 会被幂等检查挡掉
              startJob?.cancelAndJoin()
              val storage = PlatformStorage(this@MishkaRootService)
 -            val runningSubscriptionId = storage.getString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "").ifEmpty { null }
              runner.stop()
-             teardownAllRootRules()
+-            teardownAllRootRules()
 -            // 清掉上一轮 runtime 沙箱，下轮 startProxy 会 prepareRootRuntime 重新从 imported/ 复制
 -            runningSubscriptionId?.let { ProfileFileOps.cleanupRootRuntime(this@MishkaRootService, it) }
++            teardownActiveRootRules(storage)
++            storage.putString(StorageKeys.ROOT_LAST_STOP_CLEAN, "true")
 +            // 不在这里先 rm runtime：下一轮 prepareRootRuntime 会一次性替换；旧流程先清一次、
 +            // startProxy 再清一次，并且还重复执行 orphan cleanup + 两套规则 teardown。
              clearPersistedState(storage)
@@ -19557,8 +19768,28 @@ index 6cf82837e304bbd9f70bbe8b3fbc643e122e251a..c7f3ae543046ffb411b3773b02be667c
              }
          }
      }
+@@ -615,8 +779,9 @@ class MishkaRootService : Service() {
+             val storage = PlatformStorage(this@MishkaRootService)
+             val runningSubscriptionId = storage.getString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "").ifEmpty { null }
+             runner.stop()
+-            teardownAllRootRules()
+-            runningSubscriptionId?.let { ProfileFileOps.cleanupRootRuntime(this@MishkaRootService, it) }
++            teardownActiveRootRules(storage)
++            storage.putString(StorageKeys.ROOT_LAST_STOP_CLEAN, "true")
++            // 保留 runtime provider/ruleset 缓存；下次启动只增量覆盖配置，停止无需等待 rm -rf。
+             clearPersistedState(storage)
+             storage.putString(StorageKeys.SERVICE_WAS_RUNNING, "false")
+             ProxyServiceBridge.markStopped(currentSubmode.tunMode)
+@@ -631,6 +796,7 @@ class MishkaRootService : Service() {
+         dynamicNotification.stop()
+         // 注意：onDestroy 不 kill mihomo，让它继续运行以便重连
+         ProxyServiceBridge.markStoppedUnlessError(currentSubmode.tunMode)
++        if (processResolverDelegate.isInitialized()) processResolver.close()
+         scope.cancel()
+         Log.i(TAG, "MishkaRootService destroyed")
+         super.onDestroy()
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
-index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302fd5be6149 100644
+index fa04d6948a826a842400a01f433bae18d4f7a796..cba5286dd36fccc7a9a5b12b515d7991d40e9108 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 @@ -19,10 +19,10 @@ import kotlinx.coroutines.withContext
@@ -19573,7 +19804,16 @@ index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302f
  import top.yukonga.mishka.platform.PlatformStorage
  import top.yukonga.mishka.platform.ProxyServiceBridge
  import top.yukonga.mishka.platform.ProxyServiceController
-@@ -140,21 +140,45 @@ class MishkaTunService : VpnService() {
+@@ -41,6 +41,8 @@ class MishkaTunService : VpnService() {
+     // 跑在 Default 上会长时间占住数个 CPU 池线程，与 Compose 重组、导入管线抢同一批核
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+     private val runner by lazy { MihomoRunner(this) }
++    private val processResolverDelegate = lazy { AndroidProcessResolver(this) }
++    private val processResolver by processResolverDelegate
+     private val dynamicNotification by lazy {
+         DynamicNotificationManager(this, scope, MishkaApplication.instance.connectionManager)
+     }
+@@ -140,21 +142,45 @@ class MishkaTunService : VpnService() {
              // 条件 hadRootPid || hasRoot：后者覆盖"ROOT 崩溃后 storage 被清但进程仍活"的冷启动；
              // 无 root 设备两者均为 false，不触发 su。
              val storage = PlatformStorage(this@MishkaTunService)
@@ -19622,7 +19862,7 @@ index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302f
  
              // 1. 建立 VPN 接口，获取 fd
              val fd = try {
-@@ -307,8 +331,6 @@ class MishkaTunService : VpnService() {
+@@ -307,8 +333,6 @@ class MishkaTunService : VpnService() {
  
              // 2. 装配 override.run.json（用户设置 + 运行时字段 tun.file-descriptor 等）
              // secret / extCtl 走 CLI flag 不进 JSON
@@ -19631,7 +19871,7 @@ index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302f
              val viaProxy = storage.getString(StorageKeys.SUBSCRIPTION_UPDATE_VIA_PROXY, "true") == "true"
              val transformPlan = try {
                  prepareRuntimeTransform(this@MishkaTunService, subscriptionId, subscriptionRepository, transformWriter)
-@@ -325,6 +347,43 @@ class MishkaTunService : VpnService() {
+@@ -325,6 +349,43 @@ class MishkaTunService : VpnService() {
                  stopSelf()
                  return@launch
              }
@@ -19675,7 +19915,7 @@ index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302f
              val overrideFile = RuntimeOverrideBuilder.buildAndWriteForRun(
                  context = this@MishkaTunService,
                  userOverride = userOverride,
-@@ -332,6 +391,9 @@ class MishkaTunService : VpnService() {
+@@ -332,6 +393,9 @@ class MishkaTunService : VpnService() {
                  tunMode = TunMode.Vpn,
                  subscriptionUpdateViaProxy = viaProxy,
                  subscriptionMixedPort = transformPlan.mixedPort,
@@ -19685,7 +19925,7 @@ index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302f
              )
  
              // 3. 启动 mihomo 核心
-@@ -341,7 +403,7 @@ class MishkaTunService : VpnService() {
+@@ -341,10 +405,11 @@ class MishkaTunService : VpnService() {
                  useRoot = false,
                  overrideJsonPath = overrideFile.absolutePath,
                  secret = secret,
@@ -19694,7 +19934,11 @@ index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302f
                  ageSecretKey = transformPlan.ageSecretKey,
                  transformPath = transformPlan.transformPath,
                  preferTransformMixedPort = transformPlan.transformPath != null && viaProxy && userOverride.mixedPort == null,
-@@ -362,7 +424,7 @@ class MishkaTunService : VpnService() {
++                processResolverAddress = processResolver.address,
+             )
+             if (!success) {
+                 val errorMsg = runner.errorMessage.ifBlank { getString(R.string.error_start_failed) }
+@@ -362,7 +427,7 @@ class MishkaTunService : VpnService() {
                  ProxyServiceStatus(
                      ProxyState.Running,
                      secret = runner.secret,
@@ -19703,8 +19947,16 @@ index fa04d6948a826a842400a01f433bae18d4f7a796..26386b4ab9362d1f24061fc52dc5302f
                      tunMode = TunMode.Vpn,
                      startTime = Clock.System.now().toEpochMilliseconds(),
                      mihomoPid = runner.pid
+@@ -467,6 +532,7 @@ class MishkaTunService : VpnService() {
+         closeTunFd()
+         PlatformStorage(this).putString(StorageKeys.SERVICE_WAS_RUNNING, "false")
+         ProxyServiceBridge.markStoppedUnlessError(TunMode.Vpn)
++        if (processResolverDelegate.isInitialized()) processResolver.close()
+         scope.cancel()
+         Log.i(TAG, "MishkaTunService destroyed")
+         super.onDestroy()
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
-index e86fc359b1c92bbcdac1630bc274497fcee58254..0a19898c71ce3b19d59a4241ea665bbcb768edc9 100644
+index e86fc359b1c92bbcdac1630bc274497fcee58254..6329dcc412c1caacf31434c56c4eceb6dcd5c2cc 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
 @@ -47,6 +47,10 @@ object ProfileFileOps {
@@ -19734,8 +19986,36 @@ index e86fc359b1c92bbcdac1630bc274497fcee58254..0a19898c71ce3b19d59a4241ea665bbc
      }
  
      /**
+@@ -214,16 +220,19 @@ object ProfileFileOps {
+     fun prepareRootRuntime(context: Context, uuid: String): File {
+         val imported = File(getWorkDir(context), "imported/$uuid")
+         val runtime = getRuntimeDir(context, uuid)
+-        // 先清残留（可能是 root:root 遗孤，Kotlin 删不掉走 su）
+-        if (runtime.exists()) {
+-            if (!runtime.deleteRecursively()) {
+-                RootHelper.rmRfAsRoot(runtime.absolutePath)
+-            }
++        // 正常 stop/restart 保留 runtime 里的 provider/ruleset 缓存。用一次 root cp 合并最新
++        // imported 配置，避免先 rm 大目录再完整复制；未被新配置引用的旧缓存文件无副作用。
++        if (runtime.exists() && imported.exists() &&
++            RootHelper.syncDirectoryContentsAsRoot(imported.absolutePath, runtime.absolutePath)
++        ) {
++            return runtime
+         }
+-        runtime.mkdirs()
+-        if (imported.exists()) {
+-            imported.copyRecursively(runtime, overwrite = true)
++        // 首次启动或快速合并失败时才走完整重建兜底。
++        if (runtime.exists() && !runtime.deleteRecursively()) {
++            RootHelper.rmRfAsRoot(runtime.absolutePath)
+         }
++        runtime.mkdirs()
++        if (imported.exists()) imported.copyRecursively(runtime, overwrite = true)
+         ensureGeodataLinks(context, runtime)
+         return runtime
+     }
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
-index 0a60c2efb1c64b81457ee54706fed3e23f93e421..a209ad8f47287cbca6422ccca5c494b5e9fab039 100644
+index 0a60c2efb1c64b81457ee54706fed3e23f93e421..e609ff2176b8ccda38ce06cb8c4ed122794ce60a 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 @@ -1,6 +1,7 @@
@@ -19919,8 +20199,29 @@ index 0a60c2efb1c64b81457ee54706fed3e23f93e421..a209ad8f47287cbca6422ccca5c494b5
      /**
       * 以 root 身份 rm -rf 指定路径。调用方自行保证路径语义（仅用于 app 自己的数据目录下）。
       * best-effort：无 su 设备或失败返回 false，不抛异常。
+@@ -312,6 +321,20 @@ object RootHelper {
+         }
+     }
+ 
++    /** Merge an imported profile into an existing ROOT runtime without deleting provider caches. */
++    fun syncDirectoryContentsAsRoot(sourcePath: String, destinationPath: String): Boolean {
++        val source = escapeShellSingleQuoted(sourcePath)
++        val destination = escapeShellSingleQuoted(destinationPath)
++        val script = "mkdir -p $destination && cp -a $source/. $destination/"
++        return try {
++            val process = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
++            awaitDrained(process, 10).code == 0
++        } catch (e: Exception) {
++            Log.w(TAG, "syncDirectoryContentsAsRoot failed: ${e.message}")
++            false
++        }
++    }
++
+     /**
+      * 以 root 身份 chown -R 指定路径到 uid:gid（Android 应用数据目录 uid==gid）。
+      * 用于一次性迁移旧版本 mihomo 以 root 权限直写入 imported/ 产生的 root:root 文件。
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
-index 0c3c8c3abb07e743c460a8280bfc217a51163863..75618b0beeac3aabdf4256d39b72351deaafd6b7 100644
+index 0c3c8c3abb07e743c460a8280bfc217a51163863..cb24b64cc84a7afd283d48a35ff9dbd69cda3c30 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
 @@ -48,8 +48,8 @@ object RootTetherHijacker {
@@ -19995,6 +20296,35 @@ index 0c3c8c3abb07e743c460a8280bfc217a51163863..75618b0beeac3aabdf4256d39b72351d
              )
          }
  
+@@ -363,24 +369,11 @@ object RootTetherHijacker {
+      * （不阻止 stop 流程；与第三方模块共存被引用时内核会拒绝删，属预期）。
+      */
+     fun teardown() {
+-        Log.i(TAG, "Tearing down tether rules")
++        Log.i(TAG, "Tearing down tether rules (single-pass fast path)")
++        // The script itself deletes every anchor in bounded loops and is idempotent. The old path
++        // launched another su just to verify, then sometimes a third su to repeat the same script;
++        // that dominated normal stop/restart latency on Magisk and KernelSU devices.
+         runTeardownPass()
+-        val report = verifyClean()
+-        if (report.residual.isEmpty()) {
+-            Log.i(TAG, "teardown verified clean")
+-            return
+-        }
+-        Log.w(TAG, "teardown residual after first pass (${report.residual.size}): ${report.residual}, retrying")
+-        runTeardownPass()
+-        val retryReport = verifyClean()
+-        if (retryReport.residual.isEmpty()) {
+-            Log.i(TAG, "teardown verified clean after retry")
+-        } else {
+-            Log.w(
+-                TAG,
+-                "teardown residual after retry (${retryReport.residual.size}): ${retryReport.residual} — manual intervention may be needed"
+-            )
+-        }
+     }
+ 
+     /**
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt
 index 2a8f11d4ffe8485775de9eba2cd5dcf5a92b1921..948ec257a69df036d0b72ccb86dc4c1ec180dbcd 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt
@@ -22505,6 +22835,110 @@ index ef9b641bbd774b403bf03531c43932de623134a0..91a7411f1c2f09ae2c86ca25c789565b
      /**
       * 取消当前正在进行的订阅 Pipeline（导入 / 更新 / 编辑 / 复制）。
       *
+diff --git a/app/src/main/native/mishka_core/runtime.go b/app/src/main/native/mishka_core/runtime.go
+index 86038bcab2bab2cfc4bf9c2c28bcf61cafc7d347..a03b6c9eeaeeee436928ba539714caed5fbbbc66 100644
+--- a/app/src/main/native/mishka_core/runtime.go
++++ b/app/src/main/native/mishka_core/runtime.go
+@@ -14,10 +14,13 @@ import (
+ 	"os"
+ 	"os/signal"
+ 	"path/filepath"
++	"strings"
+ 	"syscall"
++	"time"
+ 	"unsafe"
+ 
+ 	"github.com/metacubex/mihomo/component/age"
++	"github.com/metacubex/mihomo/component/process"
+ 	"github.com/metacubex/mihomo/component/updater"
+ 	"github.com/metacubex/mihomo/config"
+ 	Const "github.com/metacubex/mihomo/constant"
+@@ -47,14 +50,15 @@ func runMihomo() int {
+ 	// 独立 FlagSet 避开 mishka_core 其他文件可能注册到 flag.CommandLine 的 flag。
+ 	fs := flag.NewFlagSet("mihomo", flag.ExitOnError)
+ 	var (
+-		homeDir             string
+-		configFile          string
+-		secret              string
+-		externalController  string
+-		overrideJSON        string
+-		transformPath       string
+-		preferTransformPort bool
+-		ageSecretKey        string
++		homeDir                string
++		configFile             string
++		secret                 string
++		externalController     string
++		overrideJSON           string
++		transformPath          string
++		preferTransformPort    bool
++		ageSecretKey           string
++		androidProcessResolver string
+ 	)
+ 	fs.StringVar(&homeDir, "d", "", "set configuration directory")
+ 	fs.StringVar(&configFile, "f", "", "specify configuration file")
+@@ -64,6 +68,7 @@ func runMihomo() int {
+ 	fs.StringVar(&secret, "secret", "", "override RESTful API secret")
+ 	fs.StringVar(&externalController, "ext-ctl", "", "override external controller address")
+ 	fs.StringVar(&ageSecretKey, "age-secret-key", "", "age secret key to decrypt age-armor encrypted configuration")
++	fs.StringVar(&androidProcessResolver, "android-process-resolver", "", "Mishka Android socket-owner bridge address")
+ 	if err := fs.Parse(os.Args[1:]); err != nil {
+ 		return 2
+ 	}
+@@ -80,6 +85,10 @@ func runMihomo() int {
+ 		config.OverrideJSONPath = overrideJSON
+ 	}
+ 
++	if androidProcessResolver != "" {
++		installAndroidProcessResolver(androidProcessResolver)
++	}
++
+ 	// age armor 加密的订阅配置在磁盘上保持加密，运行时用此密钥解密（hub.Parse 内部调
+ 	// config.UnmarshalRawConfig → age.DecryptBytes 读全局密钥）；SIGHUP reload 也持续生效。
+ 	if ageSecretKey != "" {
+@@ -175,6 +184,42 @@ func runMihomo() int {
+ 	}
+ }
+ 
++// installAndroidProcessResolver bridges the standalone mihomo process back to VpnService's
++// ConnectivityManager.getConnectionOwnerUid. Native /proc lookup remains the fallback for ROOT
++// mode and for the brief interval where Android is recreating the service.
++func installAndroidProcessResolver(address string) {
++	previous := process.DefaultPackageNameResolver
++	process.DefaultPackageNameResolver = func(metadata *Const.Metadata) (string, error) {
++		if metadata.RawSrcAddr != nil && metadata.RawDstAddr != nil {
++			network := metadata.RawSrcAddr.Network()
++			if strings.HasPrefix(network, "tcp") {
++				network = "tcp"
++			} else if strings.HasPrefix(network, "udp") {
++				network = "udp"
++			}
++			request := network + "\t" + metadata.RawSrcAddr.String() + "\t" + metadata.RawDstAddr.String()
++			if conn, err := net.DialTimeout("udp", address, 100*time.Millisecond); err == nil {
++				_ = conn.SetDeadline(time.Now().Add(150 * time.Millisecond))
++				if _, err = conn.Write([]byte(request)); err == nil {
++					buffer := make([]byte, 256)
++					if n, readErr := conn.Read(buffer); readErr == nil {
++						pkg := strings.TrimSpace(string(buffer[:n]))
++						if pkg != "" {
++							_ = conn.Close()
++							return pkg, nil
++						}
++					}
++				}
++				_ = conn.Close()
++			}
++		}
++		if previous != nil {
++			return previous(metadata)
++		}
++		return "", process.ErrNotFound
++	}
++}
++
+ func shouldDefaultTunStack(configBytes []byte, overrideJSON, ageSecretKey string) (bool, error) {
+ 	plain, err := decryptConfig(configBytes, ageSecretKey)
+ 	if err != nil {
 diff --git a/app/src/main/native/mishka_core/runtime_test.go b/app/src/main/native/mishka_core/runtime_test.go
 index df86317213f3cb47e89f6d944969492e43f430da..987a093b9df3b34e3da6a3868c8d9ca1ef1defbd 100644
 --- a/app/src/main/native/mishka_core/runtime_test.go

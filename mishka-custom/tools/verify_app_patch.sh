@@ -116,6 +116,15 @@ assert_contains 'if (secret.isNotEmpty())' \
 assert_contains 'findProcessMode = userOverride.findProcessMode' \
   app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
   'profile find-process-mode survives when Meta setting is not modified'
+assert_contains 'getConnectionOwnerUid(protocol, source, target)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/AndroidProcessResolver.kt \
+  'VPN process rules use Android authoritative socket-owner lookup'
+assert_contains 'installAndroidProcessResolver(androidProcessResolver)' \
+  app/src/main/native/mishka_core/runtime.go \
+  'standalone mihomo process installs the Android package resolver bridge'
+assert_contains 'add("--android-process-resolver"); add(processResolverAddress)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt \
+  'VPN and ROOT cores receive the process resolver endpoint'
 assert_not_contains 'findProcessMode = userOverride.findProcessMode ?: "off"' \
   app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
   'runtime override no longer silently forces process lookup off'
@@ -125,6 +134,18 @@ assert_contains 'startProxy(subscriptionId, preCleaned = true)' \
 assert_contains 'while kill -0 $pid 2>/dev/null' \
   app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt \
   'ROOT process shutdown polls inside one su session'
+assert_contains 'single-pass fast path' \
+  app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt \
+  'ROOT tether teardown no longer launches verify/retry su sessions'
+assert_contains 'syncDirectoryContentsAsRoot' \
+  app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt \
+  'ROOT restart preserves provider caches and incrementally refreshes runtime'
+assert_contains 'teardownActiveRootRules(storage)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt \
+  'ROOT normal lifecycle tears down only the active interception mode'
+assert_contains 'ROOT_LAST_STOP_CLEAN' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt \
+  'ROOT clean stop lets the next start skip recovery sweeps'
 assert_contains 'mishkaReadRuntimeConfigValues' \
   app/src/main/native/mishka_core/transform_bridge.go \
   'native runtime config reader is exported'

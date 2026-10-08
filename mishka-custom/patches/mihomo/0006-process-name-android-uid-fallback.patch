@@ -1,8 +1,8 @@
 diff --git a/tunnel/tunnel.go b/tunnel/tunnel.go
-index a8b3a071e3b781e318a2c5d34811b8ed96d8f682..bd4cfaca1566fd84ccf55b7cf7c86d9ac2ed0499 100644
+index a8b3a071e3b781e318a2c5d34811b8ed96d8f682..f38871fe86973c1dcade947533fde1a38d8a90c3 100644
 --- a/tunnel/tunnel.go
 +++ b/tunnel/tunnel.go
-@@ -420,13 +420,22 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, decidedM
+@@ -420,14 +420,18 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, decidedM
  					// rules need nothing more, so keep it; other platforms return 0.
  					metadata.Uid = uid
  					if err != nil {
@@ -14,16 +14,14 @@ index a8b3a071e3b781e318a2c5d34811b8ed96d8f682..bd4cfaca1566fd84ccf55b7cf7c86d9a
 +					}
  
 -						if pkg, err := process.FindPackageName(metadata); err == nil { // for android (not CMFA) package names
-+					// Android 10+ commonly hides /proc/<pid> from a VPN app. INET_DIAG can
-+					// still return the socket UID, and sing-tun's PackageManager can map that
-+					// UID to the package name. Do this even when the inode -> /proc path lookup
-+					// failed; previously PROCESS-NAME silently missed in VPN mode for exactly
-+					// that case. ROOT mode benefits from the same UID fallback on short-lived fds.
-+					if uid != 0 {
-+						if pkg, pkgErr := process.FindPackageName(metadata); pkgErr == nil {
- 							metadata.Process = pkg
-+						} else if err != nil {
-+							log.Debugln("[Process] find package for uid %d error: %v", uid, pkgErr)
- 						}
+-							metadata.Process = pkg
+-						}
++					// The resolver may be Mishka's Android ConnectivityManager bridge and does
++					// not require a UID from INET_DIAG, so call it even when uid == 0.
++					if pkg, pkgErr := process.FindPackageName(metadata); pkgErr == nil {
++						metadata.Process = pkg
++					} else if err != nil {
++						log.Debugln("[Process] find package for uid %d error: %v", uid, pkgErr)
  					}
  				} else {
+ 					// check package names
