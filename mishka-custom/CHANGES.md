@@ -1,4 +1,249 @@
-# 本次改动（2026-10-07）——与 mihomo_box 模块对齐的三处交互
+# 本次改动（2026-10-08 第三轮）——内核补丁合并为单个文件
+
+`patches/mihomo/` 下原来的 7 个补丁（`0001`..`0007`）合并成一个：
+**`0001-mishka-custom.patch`**（18 个文件，1024 行）。
+
+内容与拆分版逐一等价 —— 应用到 `fc45379e` 后的树哈希仍是
+`0c6dd39bcd6e11558f22e01aa39b1f7c9280ffa2`，与 `BASELINE.txt` 的 `patched_tree` 一致，
+18 个 blob 逐条对上（`tools/verify_mihomo_patches.sh` 实跑 PASS）。
+
+## 为什么可以安全合并
+
+- 所有消费方都用通配 `[0-9]*.patch`（`tools/verify_mihomo_patches.sh:14`、
+  `scripts/setup.sh:202`、`scripts/lib.sh:118`），**不需要改任何脚本或 workflow**。
+- 补丁头部保留了 git 格式的提交说明，逐条列出原 7 个补丁各自做了什么，
+  便于回溯（`git apply` / `git am` 都能识别这个头）。
+
+## 原 7 个补丁的对应关系（现在都在同一个文件里）
+
+| 原文件 | 内容 |
+| --- | --- |
+| `0001-config-override-json` | `--override-json`：JSON 覆盖 YAML，未出现的键保留 YAML 值 |
+| `0002-sing-tun-mishka-build-tag` | 构建标签放宽到 `android && (!cmfa \|\| mishka)`；注册 `process.DefaultPackageNameResolver`；fd 模式跳过 `buildAndroidRules` |
+| `0003-config-mishka-tun-dns-patch` | `config/patch_mishka.go`：DNS 默认值，fd 模式追加系统 DNS |
+| `0004-sing-tun-forwarder-bind-interface` | `forwarderBindInterface = true` |
+| `0005-disable-ebpf-listener-noop` | eBPF listener 变 no-op 桩：编得进、起得来，但不填充规则元数据 |
+| `0006-process-lookup-under-cmfa-mishka` | `features.Mishka` + `tunnel.go` 分支条件 `!features.CMFA \|\| features.Mishka` |
+| `0007-connection-owner-oracle-mishka` | `ConnectionOwnerResolver` 挂钩 + `uid-oracle` unix socket 客户端，让无 root 的 VPN 模式也能匹配 `PROCESS-NAME` / `UID` |
+
+## 验证（本机实跑）
+
+| 检查 | 结果 |
+| --- | --- |
+| `tools/verify_mihomo_patches.sh --kernel-dir <fc45379e clone>` | **PASS**：tree `0c6dd39b…` 一致，18/18 blob 一致 |
+| `gofmt -l component/process/ tunnel/tunnel.go listener/sing_tun/ constant/features/` | **无输出**（`config/config.go` 在上游 base 上就已非 gofmt 干净，与本次无关） |
+| `go build -tags cmfa,mishka,with_gvisor,with_ebpf` | **通过** |
+| `go build -tags cmfa,with_gvisor,with_ebpf`（不带 mishka，走 stub 分支） | **通过** |
+| `go test ./component/process/`（6 个 oracle 用例） | **全过** |
+| app 侧（未改动，回归确认） | **170 ok / 0 FAIL** |
+
+> 注意：`docs/find-process-mode-诊断与修复.md` 与 `docs/CI-构建报错-修复.md` 里的历史叙述
+> 仍按拆分后的 `0001`..`0007` 文件名书写（那是当时的排查过程记录）；实际交付文件已合并。
+
+---
+
+# 本次改动（2026-10-08 第二轮）——让订阅的 find-process-mode 生效 + VPN 模式支持 PROCESS-NAME
+
+两件事：①App 不再强制覆盖订阅 YAML 里的 `find-process-mode`；②新增内核补丁 0007 + app 侧
+`UidOracleServer`，让 **VPN（无 root）模式**下 `PROCESS-NAME` / `PROCESS-PATH` / `UID` 规则也能匹配。
+
+上一轮只解决了「ROOT TUN 模式下 cmfa 构建不查进程」；这一轮把「YAML 写的模式没人理」和
+「VPN 模式压根查不到」两个缺口补上。
+
+## 1. 订阅里的 find-process-mode 终于生效
+
+改动一处（`RuntimeOverrideBuilder.kt`）：
+
+```kotlin
+- findProcessMode = userOverride.findProcessMode ?: "off",
++ findProcessMode = userOverride.findProcessMode,
+```
+
+原理：override JSON 用 `explicitNulls = false` 序列化，字段为 null 时**整个键都不写**；
+内核 `applyOverrideJSON` 只覆盖 JSON 里出现的键（补丁 0001 的语义），所以键不存在 =
+保留订阅 YAML 的值。行为矩阵：
+
+| App 设置（设置 → Meta 设置 → 进程匹配模式） | 订阅 YAML 写 `find-process-mode` | 实际生效 |
+| --- | --- | --- |
+| 不修改（null） | 未写 | 内核默认 `strict` |
+| 不修改（null） | `always` / `strict` / `off` | **YAML 的值** ← 本次修复 |
+| 显式选 `always` / `strict` / `off` | 任意 | App 的选择（覆盖订阅） |
+
+即：YAML 现在是「基线」，App 设置是「可选覆盖」，不再是「App 永远赢」。
+
+## 2. 内核补丁 0007 + UidOracleServer：VPN 模式的进程/UID 匹配
+
+### 为什么 VPN 模式之前一定匹配不到
+
+补丁 0006 之后 ROOT TUN 模式能匹配了（mihomo 以 uid 0 运行，netlink `INET_DIAG` + procfs 可用）。
+但 VPN 模式走 `VpnService`，**没有 root**：
+
+- `/proc/net/{tcp,udp}` 从 Android 10 起对普通应用返回 `EACCES`；
+- 非 root 的 `NETLINK_INET_DIAG` dump 应用拿不到；
+- `untrusted_app` 域禁 eBPF；sing-tun 的 UID/包名规则也依赖 root 读 `/data/system/packages.xml`。
+
+所以 `findProcessName` 必然空手而归 —— 这不是构建标签问题，是权限问题。
+
+### 唯一的正当入口
+
+Android 专门给「当前生效的 VPN」开了一个 API（API 29+，公开）：
+
+```java
+ConnectivityManager.getConnectionOwnerUid(int protocol, InetSocketAddress local, InetSocketAddress remote)
+```
+
+底层用 netlink `inet_diag` 实现，只允许查询**本 VPN 隧道上**的连接 —— 而 MishkaTunService
+正好就是那个 VpnService。仅支持 TCP/UDP（内核也只在 TCP/UDP 上调它）。
+
+### 通道：本地 unix socket「归属应答服务」
+
+核心是 fork 出来的子进程（`libmihomo_runner.so` → cgo c-shared），Go 侧无法回调 Kotlin，
+只能走本地 IPC：
+
+```
+tunnel.go  metadata.Uid == 0
+   └─ process.FindConnectionOwner(metadata)
+        └─ dial <workDir>/uid-oracle.sock   （-d 目录，App 私有 0700）
+             请求: "tcp|192.168.1.24|41234|28.0.14.7|443"
+             应答: "10456\tcom.tencent.mm"
+   └─ metadata.Uid = 10456 ; metadata.Process = "com.tencent.mm"
+```
+
+- 内核侧：`component/process/connection_owner.go`（未打标签的挂钩点）+
+  `uid_oracle_mishka.go`（`//go:build mishka` 的客户端实现）；`tunnel/tunnel.go` 只在
+  `features.Mishka && metadata.Uid == 0` 时兜底调用，**ROOT 模式一次都不会触发**。
+- App 侧：`service/UidOracleServer.kt`，`MishkaTunService` 在起核心**之前**启动它，
+  目录就是 `MihomoRunner` 传给 mihomo 的 `-d`（订阅目录 / 工作目录），
+  `stopProxy` / `onDestroy` / `onRevoke` 三处都会 `stop()`。
+- 命名空间用 **FILESYSTEM 而非 ABSTRACT**：抽象命名空间会向同一 netns 里的任何应用
+  泄露「谁在连什么」，文件路径在 0700 私有目录里则没有这个问题。
+- IP 用 `InetAddresses.parseNumericAddress` 而不是 `InetSocketAddress(String, port)`：
+  后者会做 DNS，而这里的地址可能正是 fake-ip 的伪造地址。
+- fake-ip 无碍：应用侧内核 socket 连的就是那个伪造地址，`inet_diag` 照样能匹配上。
+
+### 代价与保护
+
+- 每条新连接一次本地 unix 往返（仅当规则真的要查进程时；`strict` 是懒查）。
+- 500ms 超时 + 熔断：连续 8 次传输失败后停问 5 秒。否则「App 卡死 + 每条连接 N 条
+  PROCESS 规则」会把隧道拖住。
+- socket 不存在（ROOT 模式）时只付一次 `stat`，行为零变化。
+- 共享 UID 的包取第一个（与 sing-tun 的索引行为一致）。
+
+### 内核基线刷新
+
+`patches/mihomo/BASELINE.txt`：新增 0007 一行、`tunnel/tunnel.go` blob 更新、
+新增 3 个 blob，`patched_tree` → `0c6dd39bcd6e11558f22e01aa39b1f7c9280ffa2`。
+**不改这一行 CI 必红**（上一轮就是这个原因挂的）。
+
+## 验证（本机实跑）
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 内核 7 个补丁累积应用 + 逐文件 blob | `tools/verify_mihomo_patches.sh --kernel-dir <fc45379e clone>` | **PASS**，tree `0c6dd39b…` 一致 |
+| oracle 协议 / 缺 socket / 往返 / 超时 / 熔断 | `go test -tags cmfa,mishka,with_gvisor,with_ebpf ./component/process/` | **6 个测试全过** |
+| Kotlin 类型检查（对着真实 Android API 签名） | `kotlinc -cp <android stubs> UidOracleServer.kt` | **通过**（顺带抓到一个真错：`computeIfAbsent` 不接受可空返回值） |
+| app 补丁双向可逆 + 170 项断言 | `tools/verify_app_patch.sh --repo <d49a1f4 clone>` | **PASS，170 ok / 0 FAIL** |
+
+本机跑不了、需要你在设备上确认的：Gradle 全量编译（无 Android SDK）、真机上
+`getConnectionOwnerUid` 的实际返回、以及规则命中。设备上自检：
+`GET /connections` 看新连接的 `metadata.uid` / `metadata.process` 是否非空。
+
+---
+
+# 本次改动（2026-10-08）——内核进程匹配修复 + app 补丁跟随上游重导出
+
+三件事：①新增内核补丁 0006，让 `PROCESS-*` / `UID` 规则在 cmfa 构建下真的能匹配；
+②刷新内核基线（0006 进清单）；③app 补丁重导出到上游 `d49a1f4`，修 CI。
+详细推导见 `docs/find-process-mode-诊断与修复.md` 与 `docs/CI-构建报错-修复.md`。
+
+## 1. 新增内核补丁 0006：cmfa 构建下也解析进程
+
+症状：配置里写 `find-process-mode: always`，`PROCESS-NAME` / `PROCESS-PATH` / `UID` 规则一律不命中。
+
+根因两层，缺一不可：
+
+1. **订阅 YAML 里的 `find-process-mode` 永远不生效。** `config.Parse()` 的顺序是
+   「解析订阅 YAML → `applyOverrideJSON(rawCfg)` → `ParseRawConfig`」（补丁 0001），而 App 每次
+   启动都写 `override.run.json` 并以 `--override-json` 交给内核，那个 JSON 里**必定**带这个键
+   （`RuntimeOverrideBuilder.kt:105` 的 `findProcessMode = userOverride.findProcessMode ?: "off"`
+   恒非 null，`explicitNulls = false` 也拦不住），于是 YAML 的值被覆盖 —— 默认还是 `off`，
+   比内核自己的默认 `strict`（`config/config.go:515`）更低。设置项在 App 的
+   「设置 → Meta 设置 → 进程匹配模式」，留在「不修改」= null = 写 `off`。
+2. **就算改成 always 也匹配不到。** 构建标签含 `cmfa` → `features.CMFA == true` →
+   `tunnel/tunnel.go` 的 `FindProcess` 走 CMFA 专用分支，只调 `process.FindPackageName(metadata)`；
+   而全树**唯一**给 `metadata.Uid` 赋值的地方（`tunnel/tunnel.go:421`）就在它跳过的另一个分支里。
+   补丁 0002 装上的解析器（`listener/sing_tun/server_android.go:70`）于是恒拿 uid 0 →
+   `package not found` → `metadata.Process` 恒空。`UID` 规则同理（`rules/common/uid.go:48`
+   的 `if metadata.Uid != 0`，并在 `:54` 打 Warn `[UID] could not get uid from …`，
+   不开 debug 也能看见）。`find-process-mode` 只决定「查不查」，查了也是空。
+
+修法：与 0002 同一套路，新增 `features.Mishka`（`constant/features/mishka.go` /
+`mishka_stub.go`，`//go:build mishka` / `!mishka`），把 `tunnel.go` 的分支条件改成
+`if !features.CMFA || features.Mishka`。mishka 构建走「正常查进程」那条：netlink `INET_DIAG`
+取 socket owner（Android 上已有 `/proc/net/{tcp,udp}` 与「按 UID 找进程」两级回退，
+`component/process/process_linux.go:65-91`）填 `Uid` / `Process` / `ProcessPath`，再让 Android
+解析器把进程名换成包名。非 mishka 的 cmfa 构建走 stub、行为一字不变；`Tags()` 里一并上报
+`mishka` 便于核对。
+
+**没有**改成「去掉 `cmfa` 标签」：`cmfa` 还管着 `dns/patch_android.go`（Kotlin 侧喂的
+`UpdateSystemDNS` / `system://` 兜底，补丁 0003 依赖它）、`hub/route/patch_android.go`（embed
+mode）、`component/loopback/detector.go`、`constant/path.go:90`（路径安全），去标签会连带炸掉这几处。
+
+语义提醒（Android）：`PROCESS-NAME` 匹配的是**包名**（解析器按 UID 查
+`/data/system/packages.xml`，多进程应用归到主包名）；`PROCESS-PATH` 不是文件路径，是
+`cmdline[0]` 的 basename（`process_linux.go:274` 的 `splitCmdline`）。生效前提 root + ROOT TUN；
+VPN 模式（fd > 0，非 root）拿不到别的应用的 socket，分应用只能靠 sing-tun 的
+`include-package` / `exclude-package`。推荐 `strict` 而不是 `always`：strict 只在评估到
+process/uid 规则时才查（`rules/common/process.go:34`、`uid.go:46`），always 是每条连接都做一次
+netlink dump + `/proc` 扫描。
+
+## 2. 内核基线刷新（`patches/mihomo/BASELINE.txt`）
+
+0006 新增 2 个文件、改 2 个文件，`patched_tree` 必须跟着换，否则
+`tools/verify_mihomo_patches.sh` 的树哈希比对会报
+「FAIL: 补丁应用结果与基线不一致」（**这正是上一版 CI 挂掉的原因** —— 只复制了补丁文件、
+没更新基线）。改动 6 行：`patched_tree=872e84ff… → d76e8fe8…`，新增 4 条 blob
+（`constant/features/mishka.go` / `mishka_stub.go` / `constant/features/tags.go` /
+`tunnel/tunnel.go`）与 0006 的 patch sha256 行；`base_commit` 不变。
+注意失败时 11 条 blob 检查仍会全绿（0006 改的文件不在老清单里），只有最后的树哈希对不上。
+
+## 3. app 补丁重导出到上游 d49a1f4
+
+上游 `09f9a80 fix: Encode slash in external-controller paths (#16)` 给
+`data/api/MihomoApiClient.kt` 加了 `private fun pathSegment(raw) = raw.encodeURLPath(encodeSlash = true)`
+并包了 7 处路径参数，与本补丁自带的 `pathSeg(raw) = URLEncoder.encode(raw,"UTF-8").replace("+","%20")`
+撞在同一个 bug 上（2 个冲突块）。`setup.sh` step 5 的判定还会放大它：
+`git apply --check` 失败 → `git apply --check --3way` **返回 0**（`--check` 不做冲突检测）→
+真跑 `git apply --3way` 才 exit 1，`set -e` 当场 die 并留一个半应用的树。
+
+解决口径：**保留上游的 `pathSegment`**（ktor 的路径段百分号编码，语义正确且由上游维护），
+删掉本补丁重复的 `pathSeg` 助手与 `java.net.URLEncoder` import，本补丁新增代码里的
+`pathSeg(...)` 全部改成 `pathSegment(...)`。补丁按新基线重新导出：67 个文件清单不变，
+**只有 `MihomoApiClient.kt` 一个文件的 diff 变了**（逐文件比对确认）；`BASELINE.txt` 同步
+`upstream_commit=d49a1f4…`、新 `patch_sha256`、该文件的 `blob_after`（其余 66 条一字未改）。
+
+## 验证
+
+- `tools/verify_mihomo_patches.sh --kernel-dir <jieluojun/mihomo @ fc45379e 干净树>`
+  → **PASS**：6 个补丁累积应用，15/15 blob 一致，`实际 tree == 期望 tree == d76e8fe8…`。
+  反向排除「上游漂了」：只用原始 5 个补丁 + 老基线跑同脚本也 PASS（11/11），
+  加 0006 不更新基线则精确复现 CI 那条
+  「期望 872e84ff… / 实际 d76e8fe8… / FAIL: 补丁应用结果与基线不一致」。
+- `tools/verify_app_patch.sh --repo <d49a1f4 干净树>` → **161 条 ok / 0 FAIL**，
+  「PASS: app 侧补丁双向可逆、结果与基线逐文件一致」，跑完工作区回到干净；
+  新补丁在新上游上 `git apply --check` 直接通过，不再走 3way。
+- Go 编译（Go 1.25.1）：`gofmt -l` 4 个改动文件无输出；
+  `go build -tags "cmfa,mishka,with_gvisor" ./constant/features/ ./tunnel/` 与
+  `-tags "cmfa,with_gvisor"`（stub 分支）均 exit 0；`go vet` exit 0。
+- 解决后的 `MihomoApiClient.kt` 静态自洽：`pathSegment` 定义 1 处、`encodeURLPath` /
+  `JsonElement` / `intOrNull` import 在位、`delayBodyOrThrow` / `getGroupDelay` /
+  `DelayTestFailedException` / `extractErrorMessage` / `ensureSuccess` 均在位，
+  `pathSeg(` / `URLEncoder` / 冲突标记 0 处，括号配平。
+- **未跑**：Gradle / Kotlin 编译（沙箱无 Android SDK + NDK）与真机验证。落地后请先跑
+  `./gradlew :app:compileReleaseKotlin -x buildMihomo_arm64_v8a`，进程规则命中与否在
+  ROOT TUN 下用 `GET /connections` 的 `metadata.process` 复核。
+
+# 上一轮改动（2026-10-07）——与 mihomo_box 模块对齐的三处交互
 
 > **追加（CI 构建报错修复）**：首轮 CI 在 `:app:compileReleaseKotlin` 失败（3m37s），**94 条**错误全是同一处——
 > `MiniIconButton` 的 `onClick` 被排在 `modifier` **前面**，而 47 处调用全用尾随 lambda

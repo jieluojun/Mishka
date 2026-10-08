@@ -17941,10 +17941,10 @@ index 0000000..0434c16
 +    private fun leadingIndent(value: String): Int = value.takeWhile { it == ' ' }.length
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-index 33aa9cc..eec239e 100644
+index c982b6d..038716c 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-@@ -19,6 +19,9 @@ import io.ktor.http.contentType
+@@ -20,6 +20,9 @@ import io.ktor.http.encodeURLPath
  import io.ktor.http.isSuccess
  import io.ktor.serialization.kotlinx.json.json
  import kotlinx.serialization.json.Json
@@ -17954,20 +17954,12 @@ index 33aa9cc..eec239e 100644
  import top.yukonga.mishka.domain.model.ConnectionsResponse
  import top.yukonga.mishka.domain.model.DelayResult
  import top.yukonga.mishka.domain.model.DnsQueryResponse
-@@ -29,6 +32,7 @@ import top.yukonga.mishka.domain.model.ProvidersResponse
- import top.yukonga.mishka.domain.model.ProxiesResponse
- import top.yukonga.mishka.domain.model.RuleProvidersResponse
- import top.yukonga.mishka.domain.model.RulesResponse
-+import java.net.URLEncoder
- 
- class MihomoApiClient(
-     private val baseUrl: String = "http://127.0.0.1:9090",
-@@ -90,13 +94,16 @@ class MihomoApiClient(
+@@ -91,13 +94,16 @@ class MihomoApiClient(
          ensureSuccess(response, "proxy group '$group'")
      }
  
 -    suspend fun getProxyDelay(name: String, testUrl: String = "http://www.gstatic.com/generate_204", timeout: Int = 5000): DelayResult =
--        client.get("$baseUrl/proxies/$name/delay") {
+-        client.get("$baseUrl/proxies/${pathSegment(name)}/delay") {
 -            url {
 -                parameters.append("url", testUrl)
 -                parameters.append("timeout", timeout.toString())
@@ -17975,7 +17967,7 @@ index 33aa9cc..eec239e 100644
 -        }.body()
 +    suspend fun getProxyDelay(name: String, testUrl: String = DEFAULT_DELAY_TEST_URL, timeout: Int = 8000): DelayResult =
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/proxies/${pathSeg(name)}/delay") {
++            client.get("$baseUrl/proxies/${pathSegment(name)}/delay") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -17986,7 +17978,7 @@ index 33aa9cc..eec239e 100644
  
      /**
       * 测试 proxy-provider 内单节点延迟。provider 节点不在 /proxies 命名空间，
-@@ -105,15 +112,88 @@ class MihomoApiClient(
+@@ -106,15 +112,80 @@ class MihomoApiClient(
      suspend fun getProviderProxyDelay(
          provider: String,
          name: String,
@@ -17994,9 +17986,9 @@ index 33aa9cc..eec239e 100644
 +        testUrl: String = DEFAULT_DELAY_TEST_URL,
          timeout: Int = 5000,
      ): DelayResult =
--        client.get("$baseUrl/providers/proxies/$provider/$name/healthcheck") {
+-        client.get("$baseUrl/providers/proxies/${pathSegment(provider)}/${pathSegment(name)}/healthcheck") {
 +        delayBodyOrThrow(
-+            client.get("$baseUrl/providers/proxies/${pathSeg(provider)}/${pathSeg(name)}/healthcheck") {
++            client.get("$baseUrl/providers/proxies/${pathSegment(provider)}/${pathSegment(name)}/healthcheck") {
 +                url {
 +                    parameters.append("url", testUrl)
 +                    parameters.append("timeout", timeout.toString())
@@ -18023,7 +18015,7 @@ index 33aa9cc..eec239e 100644
 +        testUrl: String = DEFAULT_DELAY_TEST_URL,
 +        timeout: Int = GROUP_DELAY_TIMEOUT_MILLIS,
 +    ): Map<String, Int> {
-+        val response: HttpResponse = client.get("$baseUrl/group/${pathSeg(group)}/delay") {
++        val response: HttpResponse = client.get("$baseUrl/group/${pathSegment(group)}/delay") {
              url {
                  parameters.append("url", testUrl)
                  parameters.append("timeout", timeout.toString())
@@ -18057,14 +18049,6 @@ index 33aa9cc..eec239e 100644
 +        return response.body()
 +    }
 +
-+    /**
-+     * 路径段 URL 编码：节点名 / provider 名会含 `/`、空格与 emoji（如 `免流订阅/🇺🇸 美国-17`），
-+     * 裸拼进 URL 会被 chi 路由拆成多层路径直接 404（整组测速全失败的根因）。
-+     * URLEncoder 是表单编码：`+` 要还原成 `%20`；`/` 编成 `%2F` 正是路径段需要的，
-+     * 内核侧 `getEscapeParam` 会解码回原名。
-+     */
-+    private fun pathSeg(raw: String): String = URLEncoder.encode(raw, "UTF-8").replace("+", "%20")
-+
 +    companion object {
 +        /** 测速地址与 mihomo_box 参考实现对齐（https：免流/直连节点上 http 明文探测更易被重置）。 */
 +        const val DEFAULT_DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
@@ -18078,7 +18062,7 @@ index 33aa9cc..eec239e 100644
  
      suspend fun getRules(): RulesResponse =
          client.get("$baseUrl/rules").body()
-@@ -219,4 +299,8 @@ class MihomoApiClient(
+@@ -228,4 +299,8 @@ class MihomoApiClient(
      }
  }
  
@@ -19507,7 +19491,7 @@ index 6cf8283..1659c72 100644
          Log.i(TAG, "Restarting proxy (ROOT)...")
          monitorJob?.cancel()
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
-index fa04d69..26386b4 100644
+index fa04d69..b53dc62 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 @@ -19,10 +19,10 @@ import kotlinx.coroutines.withContext
@@ -19522,7 +19506,21 @@ index fa04d69..26386b4 100644
  import top.yukonga.mishka.platform.PlatformStorage
  import top.yukonga.mishka.platform.ProxyServiceBridge
  import top.yukonga.mishka.platform.ProxyServiceController
-@@ -140,21 +140,45 @@ class MishkaTunService : VpnService() {
+@@ -51,6 +51,13 @@ class MishkaTunService : VpnService() {
+     private val subscriptionRepository: SubscriptionRepositoryImpl by inject()
+     private var tunFd: Int = -1
+     private var monitorJob: Job? = null
++
++    /**
++     * 连接归属应答服务：VPN 模式下核心没有 root，PROCESS-NAME / UID 规则要的
++     * 「这条连接属于哪个 App」只能由我们（当前生效的 VpnService）替它问系统。
++     * ROOT 模式不启动：核心自己就能从 netlink/procfs 拿到答案。
++     */
++    private var uidOracle: UidOracleServer? = null
+     private var notificationRefreshJob: Job? = null
+ 
+     // 与 ROOT 侧同源：ACTION_START 会被「打开应用自动连接」与补发 BOOT_COMPLETED 的
+@@ -140,21 +147,45 @@ class MishkaTunService : VpnService() {
              // 条件 hadRootPid || hasRoot：后者覆盖"ROOT 崩溃后 storage 被清但进程仍活"的冷启动；
              // 无 root 设备两者均为 false，不触发 su。
              val storage = PlatformStorage(this@MishkaTunService)
@@ -19571,7 +19569,7 @@ index fa04d69..26386b4 100644
  
              // 1. 建立 VPN 接口，获取 fd
              val fd = try {
-@@ -307,8 +331,6 @@ class MishkaTunService : VpnService() {
+@@ -307,8 +338,6 @@ class MishkaTunService : VpnService() {
  
              // 2. 装配 override.run.json（用户设置 + 运行时字段 tun.file-descriptor 等）
              // secret / extCtl 走 CLI flag 不进 JSON
@@ -19580,13 +19578,21 @@ index fa04d69..26386b4 100644
              val viaProxy = storage.getString(StorageKeys.SUBSCRIPTION_UPDATE_VIA_PROXY, "true") == "true"
              val transformPlan = try {
                  prepareRuntimeTransform(this@MishkaTunService, subscriptionId, subscriptionRepository, transformWriter)
-@@ -325,6 +347,43 @@ class MishkaTunService : VpnService() {
+@@ -325,6 +354,51 @@ class MishkaTunService : VpnService() {
                  stopSelf()
                  return@launch
              }
 +            val profileWorkDir = subscriptionId?.let {
 +                ProfileFileOps.getSubscriptionDir(this@MishkaTunService, it)
 +            } ?: ConfigGenerator.getWorkDir(this@MishkaTunService)
++
++            // 先于核心启动：socket 必须在核心接受第一条连接前就位。目录就是 mihomo 的
++            // -d（MihomoRunner 用同一个 workDir 起核心），内核按 <workDir>/uid-oracle.sock 找它
++            uidOracle = UidOracleServer(this@MishkaTunService, profileWorkDir).also {
++                if (!it.start()) {
++                    Log.w(TAG, "UID oracle unavailable; PROCESS-NAME/UID rules will not match in VPN mode")
++                }
++            }
 +            val profileParameters = runCatching {
 +                MishkaCoreBridge.readRuntimeConfigValues(
 +                    profileWorkDir.absolutePath,
@@ -19624,7 +19630,7 @@ index fa04d69..26386b4 100644
              val overrideFile = RuntimeOverrideBuilder.buildAndWriteForRun(
                  context = this@MishkaTunService,
                  userOverride = userOverride,
-@@ -332,6 +391,9 @@ class MishkaTunService : VpnService() {
+@@ -332,6 +406,9 @@ class MishkaTunService : VpnService() {
                  tunMode = TunMode.Vpn,
                  subscriptionUpdateViaProxy = viaProxy,
                  subscriptionMixedPort = transformPlan.mixedPort,
@@ -19634,7 +19640,7 @@ index fa04d69..26386b4 100644
              )
  
              // 3. 启动 mihomo 核心
-@@ -341,7 +403,7 @@ class MishkaTunService : VpnService() {
+@@ -341,7 +418,7 @@ class MishkaTunService : VpnService() {
                  useRoot = false,
                  overrideJsonPath = overrideFile.absolutePath,
                  secret = secret,
@@ -19643,7 +19649,7 @@ index fa04d69..26386b4 100644
                  ageSecretKey = transformPlan.ageSecretKey,
                  transformPath = transformPlan.transformPath,
                  preferTransformMixedPort = transformPlan.transformPath != null && viaProxy && userOverride.mixedPort == null,
-@@ -362,7 +424,7 @@ class MishkaTunService : VpnService() {
+@@ -362,7 +439,7 @@ class MishkaTunService : VpnService() {
                  ProxyServiceStatus(
                      ProxyState.Running,
                      secret = runner.secret,
@@ -19652,6 +19658,33 @@ index fa04d69..26386b4 100644
                      tunMode = TunMode.Vpn,
                      startTime = Clock.System.now().toEpochMilliseconds(),
                      mihomoPid = runner.pid
+@@ -434,6 +511,8 @@ class MishkaTunService : VpnService() {
+             // 用户在启动过程中按停止：先中止启动协程，避免它继续把状态写回 Running
+             startJob?.cancelAndJoin()
+             runner.stop()
++            uidOracle?.stop()
++            uidOracle = null
+             closeTunFd()
+             PlatformStorage(this@MishkaTunService).putString(StorageKeys.SERVICE_WAS_RUNNING, "false")
+             ProxyServiceBridge.markStopped(TunMode.Vpn)
+@@ -464,6 +543,8 @@ class MishkaTunService : VpnService() {
+         monitorJob?.cancel()
+         dynamicNotification.stop()
+         runner.stop()
++        uidOracle?.stop()
++        uidOracle = null
+         closeTunFd()
+         PlatformStorage(this).putString(StorageKeys.SERVICE_WAS_RUNNING, "false")
+         ProxyServiceBridge.markStoppedUnlessError(TunMode.Vpn)
+@@ -481,6 +562,8 @@ class MishkaTunService : VpnService() {
+         scope.launch {
+             startJob?.cancelAndJoin()
+             runner.stop()
++            uidOracle?.stop()
++            uidOracle = null
+             closeTunFd()
+             ProxyServiceBridge.markStopped(TunMode.Vpn)
+             stopForeground(STOP_FOREGROUND_REMOVE)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
 index e86fc35..0a19898 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
@@ -19871,7 +19904,7 @@ index 2a8f11d..948ec25 100644
                                  "pre-tproxy-tether-$proto-v6"
                              )
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
-index b57d687..b3ca808 100644
+index b57d687..fe5cc4f 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 @@ -2,6 +2,8 @@ package top.yukonga.mishka.service
@@ -19935,9 +19968,21 @@ index b57d687..b3ca808 100644
              },
              // RootTproxy 下**不**注入 routing-mark：Android Netd 用 fwmark 低 16 位编码 netId，
              // mihomo 若带 SO_MARK 会被解释为不存在的 netId，命中 legacy_system 表（无默认路由）
-@@ -104,7 +117,19 @@ object RuntimeOverrideBuilder {
+@@ -98,13 +111,27 @@ object RuntimeOverrideBuilder {
+             // 放行 mihomo（它以 root 运行），副作用是所有 root 进程都不经 TPROXY，但用户 app 正常代理
+             routingMark = userOverride.routingMark,
+             // tcp-concurrent：代理侧并发拨号，显著降低首包延迟，多客户端并发场景尤其有效；
+-            // find-process-mode=off：ROOT TUN 分应用已由 sing-tun include/exclude-package 的 uidrange
+-            // 处理，mihomo 运行期遍历 /proc 查进程纯属冗余；VPN 模式 AppProxy 走 VpnService 同理。
+-            // 用户显式设置优先：仅在未设置时注入默认值
++            // find-process-mode：**不注入默认值**。override JSON 里缺这个键，内核就保留订阅
++            // YAML 的值（`applyOverrideJSON` 只覆盖 JSON 里出现过的字段），YAML 也没写则用
++            // 内核自己的默认 strict。之前在这里兜底成 "off" 会让订阅配置里的
++            // `find-process-mode: always` 永远失效——「用户显式设置优先」指的是本设置项，
++            // 不是订阅 YAML；只有用户在 App 里选了值，才轮到 App 覆盖订阅。
              tcpConcurrent = userOverride.tcpConcurrent ?: true,
-             findProcessMode = userOverride.findProcessMode ?: "off",
+-            findProcessMode = userOverride.findProcessMode ?: "off",
++            findProcessMode = userOverride.findProcessMode,
              dns = buildDnsOverride(tunMode, userOverride.dns),
 -            tun = buildTunOverride(context, tunMode, tunFd, userOverride.tun),
 +            tun = buildTunOverride(
@@ -19956,7 +20001,7 @@ index b57d687..b3ca808 100644
              profile = ProfileOverride(storeSelected = false, storeFakeIp = true),
          )
          // 原子写：mihomo 紧接着就以 --override-json 读它，半个 JSON 会让启动失败且难以定位
-@@ -132,14 +157,40 @@ object RuntimeOverrideBuilder {
+@@ -132,14 +159,40 @@ object RuntimeOverrideBuilder {
          tunMode: TunMode,
          tunFd: Int,
          userTun: TunOverride?,
@@ -20000,7 +20045,7 @@ index b57d687..b3ca808 100644
  
          // 分应用代理：仅 RootTun 通过 mihomo include/exclude-package 实现；
          // VPN 由 VpnService.Builder.addAllowed/DisallowedApplication 管；
-@@ -186,15 +237,19 @@ object RuntimeOverrideBuilder {
+@@ -186,15 +239,19 @@ object RuntimeOverrideBuilder {
          // 破坏同 LAN 设备发现 / P2P 直连（如妙享桌面）。注入私网 + 组播 route-exclude 留在物理网卡，
          // 与 VPN / TPROXY 的 LAN 放行对齐；仅 ROOT TUN 需要，用户显式设置优先。
          val routeExclude: List<String>? = when {
@@ -20024,7 +20069,7 @@ index b57d687..b3ca808 100644
  
          // sing-tun userspace TUN 性能：mtu=9000 + gso + gso-max-size=65535 让大包聚合，
          // 减少每包 read syscall；仅 ROOT TUN 注入 GSO（VPN fd 由 VpnService 创建无 vnet header）。
-@@ -209,20 +264,148 @@ object RuntimeOverrideBuilder {
+@@ -209,20 +266,148 @@ object RuntimeOverrideBuilder {
          return TunOverride(
              enable = true,
              device = device,
@@ -20178,6 +20223,199 @@ index b57d687..b3ca808 100644
          )
      }
  
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/UidOracleServer.kt b/app/src/main/kotlin/top/yukonga/mishka/service/UidOracleServer.kt
+new file mode 100644
+index 0000000..1ddfdda
+--- /dev/null
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/UidOracleServer.kt
+@@ -0,0 +1,187 @@
++package top.yukonga.mishka.service
++
++import android.content.Context
++import android.net.ConnectivityManager
++import android.net.InetAddresses
++import android.net.LocalServerSocket
++import android.net.LocalSocketAddress
++import android.os.Process
++import android.util.Log
++import java.io.BufferedReader
++import java.io.File
++import java.io.InputStreamReader
++import java.net.InetSocketAddress
++import java.nio.charset.StandardCharsets
++import java.util.concurrent.ConcurrentHashMap
++import java.util.concurrent.atomic.AtomicBoolean
++
++/**
++ * 连接归属应答服务：内核问「这条连接是哪个 App 的」，我们用系统 API 回答。
++ *
++ * 为什么必须有这个服务：VPN 模式没有 root，内核拿不到 netlink INET_DIAG，
++ * /proc/net 从 Android 10 起对普通应用返回 EACCES —— findProcessName 注定失败，
++ * PROCESS-NAME / UID 规则永远不匹配。但平台留了一个正当入口给「当前生效的 VPN」：
++ * ConnectivityManager.getConnectionOwnerUid(proto, local, remote)（API 29+），
++ * 它只允许查询本 VPN 隧道上的连接，而这正好就是我们。
++ *
++ * 通道：workDir（0700，本应用 UID 私有）下的 unix socket，文件系统命名空间。
++ * 不用抽象命名空间，否则同 netns 里任何应用都能问出别人的连接归属。
++ * 文件名与内核侧 component/process.UidOracleSocketName 一致。
++ *
++ * 只在 VPN 模式启动。ROOT 模式下 mihomo 以 uid 0 运行，自己就能从 netlink/procfs
++ * 得到答案，socket 不存在，内核每次查询只付一次 stat。
++ */
++class UidOracleServer(
++    private val context: Context,
++    private val workDir: File,
++) {
++
++    private val running = AtomicBoolean(false)
++    private var server: LocalServerSocket? = null
++    private var thread: Thread? = null
++
++    /** uid → 包名。同一 uid 多包（共享 UID）时取第一个，与 sing-tun 的索引一致。 */
++    private val packageNames = ConcurrentHashMap<Int, String>()
++
++    @Volatile
++    private var stats = OracleStats()
++
++    /** 启动监听。重复调用幂等；启动失败不抛异常（PROCESS 规则不可用，代理本身照常工作）。 */
++    fun start(): Boolean {
++        if (running.get()) return true
++        val socketFile = File(workDir, SOCKET_NAME)
++        return try {
++            if (!workDir.exists()) workDir.mkdirs()
++            // 上次进程被杀会留下 socket 文件，bind 前必须清掉
++            socketFile.delete()
++            val serverSocket = LocalServerSocket(
++                LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM)
++            )
++            server = serverSocket
++            running.set(true)
++            thread = Thread({ acceptLoop(serverSocket) }, "uid-oracle").apply {
++                isDaemon = true
++                start()
++            }
++            Log.i(TAG, "UID oracle listening at ${socketFile.absolutePath}")
++            true
++        } catch (e: Exception) {
++            running.set(false)
++            server = null
++            socketFile.delete()
++            Log.w(TAG, "UID oracle failed to start: $e")
++            false
++        }
++    }
++
++    fun stop() {
++        if (!running.compareAndSet(true, false)) return
++        runCatching { server?.close() }
++        server = null
++        runCatching { thread?.interrupt() }
++        thread = null
++        packageNames.clear()
++        runCatching { File(workDir, SOCKET_NAME).delete() }
++        Log.i(TAG, "UID oracle stopped ($stats)")
++    }
++
++    fun snapshotStats(): OracleStats = stats
++
++    private fun acceptLoop(serverSocket: LocalServerSocket) {
++        while (running.get()) {
++            val client = try {
++                serverSocket.accept()
++            } catch (e: Exception) {
++                if (running.get()) Log.w(TAG, "accept failed: $e")
++                return
++            }
++            // 逐条串行处理：每个请求是一次 binder 调用，正常在百微秒级；
++            // 内核侧有 500ms 超时和熔断，慢一点也不会拖垮隧道
++            try {
++                client.use { handle(it) }
++            } catch (e: Exception) {
++                Log.d(TAG, "handle failed: $e")
++            }
++        }
++    }
++
++    private fun handle(client: android.net.LocalSocket) {
++        val reader = BufferedReader(InputStreamReader(client.inputStream, StandardCharsets.UTF_8))
++        val line = reader.readLine() ?: return
++        val response = resolve(line) + "\n"
++        client.outputStream.write(response.toByteArray(StandardCharsets.UTF_8))
++        client.outputStream.flush()
++    }
++
++    /** 解析请求行并回答；无法定位时回 "-"（内核按 ErrPlatformNotSupport 处理）。 */
++    private fun resolve(request: String): String {
++        val parts = request.trim().split("|")
++        if (parts.size != FIELD_COUNT) return NO_OWNER.also { stats = stats.copy(malformed = stats.malformed + 1) }
++        val protocol = when (parts[0]) {
++            "tcp" -> ConnectivityManager.PROTOCOL_TCP
++            "udp" -> ConnectivityManager.PROTOCOL_UDP
++            // 内核只在 TCP/UDP 上调用，其余一律无法定位
++            else -> return NO_OWNER.also { stats = stats.copy(unsupported = stats.unsupported + 1) }
++        }
++        val local = parts.getOrNull(1)?.let { parts.getOrNull(2)?.toIntOrNull()?.let { p -> address(it, p) } }
++        val remote = parts.getOrNull(3)?.let { parts.getOrNull(4)?.toIntOrNull()?.let { p -> address(it, p) } }
++        if (local == null || remote == null) {
++            return NO_OWNER.also { stats = stats.copy(malformed = stats.malformed + 1) }
++        }
++
++        val uid = try {
++            connectivityManager.getConnectionOwnerUid(protocol, local, remote)
++        } catch (e: Exception) {
++            // SecurityException：我们不是当前生效的 VPN；其余（binder 挂了）同样只能放弃
++            stats = stats.copy(failed = stats.failed + 1)
++            Log.d(TAG, "getConnectionOwnerUid failed: $e")
++            return NO_OWNER
++        }
++        if (uid == Process.INVALID_UID) {
++            stats = stats.copy(unknown = stats.unknown + 1)
++            return NO_OWNER
++        }
++        // 不能用 computeIfAbsent：它的映射函数不允许返回 null，而 uid 可能查不到包名
++        val packageName = packageNames[uid] ?: packageNameOf(uid)?.also { packageNames[uid] = it }
++        if (packageName.isNullOrEmpty()) {
++            stats = stats.copy(unknown = stats.unknown + 1)
++            return NO_OWNER
++        }
++        stats = stats.copy(resolved = stats.resolved + 1)
++        return "$uid\t$packageName"
++    }
++
++    /**
++     * 字面量 IP 转地址。必须走 InetAddresses：InetSocketAddress(String, port) 会做 DNS，
++     * 而这里的 IP 可能正是 fake-ip 的伪造地址，解析它会既慢又毫无意义。
++     */
++    private fun address(ip: String, port: Int): InetSocketAddress? = try {
++        // Go 侧 netip 的 IPv6 可能带 zone（fe80::1%wlan0），inet_diag 不需要
++        InetSocketAddress(InetAddresses.parseNumericAddress(ip.substringBefore('%')), port)
++    } catch (e: Exception) {
++        null
++    }
++
++    private fun packageNameOf(uid: Int): String? =
++        runCatching { context.packageManager.getPackagesForUid(uid)?.firstOrNull() }.getOrNull()
++
++    private val connectivityManager: ConnectivityManager
++        get() = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
++
++    data class OracleStats(
++        val resolved: Int = 0,
++        val unknown: Int = 0,
++        val failed: Int = 0,
++        val malformed: Int = 0,
++        val unsupported: Int = 0,
++    )
++
++    companion object {
++        private const val TAG = "UidOracle"
++
++        /** 与内核 component/process/uid_oracle_mishka.go 的 UidOracleSocketName 保持一致。 */
++        const val SOCKET_NAME = "uid-oracle.sock"
++        private const val FIELD_COUNT = 5
++        private const val NO_OWNER = "-"
++    }
++}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt
 index 7a0fb51..7e2415d 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt

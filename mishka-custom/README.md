@@ -4,15 +4,35 @@
 
 ## 基线
 
+### app 侧（YuKongA/Mishka）
+
 | 项 | 值 |
 | --- | --- |
-| app 侧 base commit | `5e6743592b9c465eb015db7b05c588c50cd2b874` |
+| base commit | `d49a1f49a37d0ac01547f723cb598ac0faa4d8e6` |
 | 补丁文件 | `patches/app/0001-anchor-panel.patch`（全量补丁，相对 base commit） |
-| `patch_sha256` | `1f5cadbcf6be5dc41ca74bd011229230d8c90c7a940bef0eeccbc42e8306c17a` |
-| 补丁涉及文件 | 74 个（28 新增 + 46 修改），完整清单与每个文件的 blob 哈希见 `patches/app/BASELINE.txt` |
+| `patch_sha256` | `79d9f847e96b300aabb309f5ccf4cb11c83a7590620a2c64ea89a37b311a228b` |
+| 补丁涉及文件 | 68 个（26 新增 + 42 修改），完整清单与每个文件的 blob 哈希见 `patches/app/BASELINE.txt` |
 
 > 补丁是**全量**补丁：它对 base commit 的干净树上「一次成型」，不是增量补丁。上一版补丁
-> （`patch_sha256 = f3435619…` / `6d98c73f…`）请先撤掉，或直接把仓库重置回 base commit 再应用。
+> （`patch_sha256 = 1f5cadbc…` / `f3435619…` / `6d98c73f…`）请先撤掉，或直接把仓库重置回
+> base commit 再应用。
+
+### 内核侧（jielojun/mihomo，`Alpha` 分支）
+
+| 项 | 值 |
+| --- | --- |
+| base commit | `fc45379ef1bdbe358c63cc9eb6134e3691cbb113` |
+| 补丁文件 | `patches/mihomo/0001-mishka-custom.patch`（原 `0001`..`0007` 已合并为单个文件） |
+| `patch sha256` | `4c06536fcb58572ed402bb2989a23ccfb0a61cdd970a02d8051997efecd8324d` |
+| 补丁涉及文件 | 18 个，打完后的树哈希 `0c6dd39bcd6e11558f22e01aa39b1f7c9280ffa2`（= `BASELINE.txt` 的 `patched_tree`） |
+| 内容清单 | 合并补丁头部逐条列出原 7 个补丁各自做了什么 |
+
+两侧都能用脚本自证：
+
+```bash
+bash mishka-custom/tools/verify_mihomo_patches.sh --kernel-dir <fc45379e 的干净 clone>
+bash mishka-custom/tools/verify_app_patch.sh      --repo     <d49a1f4 的干净 clone>
+```
 
 ## 应用
 
@@ -20,7 +40,7 @@
 
 ```bash
 cd <Mishka 仓库>
-git checkout 5e6743592b9c465eb015db7b05c588c50cd2b874   # 若已在：git reset --hard 5e67435…
+git checkout d49a1f49a37d0ac01547f723cb598ac0faa4d8e6   # 若已在：git reset --hard d49a1f4…
 git clean -fd                                            # 清掉未跟踪文件（新增源码会落在此）
 git apply mishka-custom/patches/app/0001-anchor-panel.patch
 ```

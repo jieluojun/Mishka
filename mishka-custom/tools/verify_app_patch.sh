@@ -384,6 +384,36 @@ else
   echo "ok  web panel package (custom/panel) is gone"
 fi
 
+# --- find-process-mode：订阅 YAML 的值必须能生效 ---
+# 教训：App 曾无条件注入 find-process-mode，YAML 里的 always/strict 永远被 override JSON 覆盖成 off。
+assert_contains 'findProcessMode = userOverride.findProcessMode,' \
+  app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
+  'subscription find-process-mode survives the override JSON (null = key omitted)'
+assert_not_contains 'findProcessMode = userOverride.findProcessMode ?: "off"' \
+  app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt \
+  'the App no longer force-injects find-process-mode: off'
+
+# --- VPN 模式的 PROCESS-NAME/UID：连接归属应答服务 ---
+# 无 root 时内核拿不到 netlink/procfs，只有当前生效的 VpnService 能问系统要 UID。
+assert_contains 'getConnectionOwnerUid(protocol, local, remote)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/UidOracleServer.kt \
+  'UID oracle resolves ownership through the public ConnectivityManager API'
+assert_contains 'const val SOCKET_NAME = "uid-oracle.sock"' \
+  app/src/main/kotlin/top/yukonga/mishka/service/UidOracleServer.kt \
+  'oracle socket name matches the kernel-side constant'
+assert_contains 'LocalSocketAddress.Namespace.FILESYSTEM' \
+  app/src/main/kotlin/top/yukonga/mishka/service/UidOracleServer.kt \
+  'oracle binds in the app-private filesystem namespace (not abstract)'
+assert_contains 'InetAddresses.parseNumericAddress(' \
+  app/src/main/kotlin/top/yukonga/mishka/service/UidOracleServer.kt \
+  'literal IPs are parsed without DNS (fake-ip destinations must not resolve)'
+assert_contains 'uidOracle = UidOracleServer(this@MishkaTunService, profileWorkDir)' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt \
+  'VPN mode starts the oracle in the same dir mihomo gets as -d'
+assert_contains 'uidOracle?.stop()' \
+  app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt \
+  'the oracle is torn down with the service'
+
 while read -r _ expected path; do
   actual="$(git -C "$REPO" hash-object "$path")"
   if [[ "$actual" == "$expected" ]]; then

@@ -1,0 +1,1024 @@
+From: Mishka 定制移植 <noreply@mishka.local>
+Subject: [PATCH] mishka 定制合并补丁（原 0001..0007）
+
+把 YuKongA/Mishka 的内核定制合并成单个补丁，内容与拆分的 7 个补丁逐一等价：
+应用后的树哈希必须等于 BASELINE.txt 的 patched_tree。
+
+  0001 config: 支持 --override-json，JSON 覆盖 YAML（不出现的键保留 YAML 值）
+  0002 sing_tun: 构建标签放宽到 android && (!cmfa || mishka)，注册
+         process.DefaultPackageNameResolver；fd 模式（非 root）跳过 buildAndroidRules
+  0003 config: patch_mishka.go —— DNS 默认值，fd 模式追加系统 DNS
+  0004 sing_tun: forwarderBindInterface = true
+  0005 eBPF listener 变 no-op 桩：编得进、起得来，但不填充规则元数据
+  0006 constant/features: 新增 features.Mishka；tunnel.go 分支条件改为
+         !features.CMFA || features.Mishka，让 cmfa 构建也走正常进程查询
+  0007 component/process: ConnectionOwnerResolver 挂钩 + uid-oracle unix socket
+         客户端；tunnel.go 在 metadata.Uid == 0 时兜底查询 —— 让无 root 的
+         VPN 模式也能匹配 PROCESS-NAME / PROCESS-PATH / UID
+
+校验：tools/verify_mihomo_patches.sh --kernel-dir <fc45379e 的干净 clone>
+
+---
+diff --git a/component/process/connection_owner.go b/component/process/connection_owner.go
+new file mode 100644
+index 00000000..f5493fcc
+--- /dev/null
++++ b/component/process/connection_owner.go
+@@ -0,0 +1,30 @@
++package process
++
++import (
++	C "github.com/metacubex/mihomo/constant"
++)
++
++// ConnectionOwnerResolver answers "which UID owns this connection, and what
++// should rules call it" for hosts where the kernel cannot tell us. An
++// unprivileged Android VpnService is the case in point: /proc/net and
++// NETLINK_INET_DIAG are closed to it, so findProcessName always comes back
++// empty, yet the platform hands the same answer to the active VPN through
++// ConnectivityManager.getConnectionOwnerUid.
++//
++// Implementations must be safe for concurrent use (routing calls this from
++// arbitrary goroutines) and must fail fast: returning an error is cheap,
++// blocking the tunnel is not.
++type ConnectionOwnerResolver func(metadata *C.Metadata) (uid uint32, name string, err error)
++
++// DefaultConnectionOwnerResolver is nil unless the platform provides one.
++var DefaultConnectionOwnerResolver ConnectionOwnerResolver
++
++// FindConnectionOwner asks the host who owns this connection. The returned name
++// is what PROCESS-NAME rules match on -- on Android that is the package name,
++// not a process title.
++func FindConnectionOwner(metadata *C.Metadata) (uint32, string, error) {
++	if resolver := DefaultConnectionOwnerResolver; resolver != nil {
++		return resolver(metadata)
++	}
++	return 0, "", ErrPlatformNotSupport
++}
+diff --git a/component/process/uid_oracle_mishka.go b/component/process/uid_oracle_mishka.go
+new file mode 100644
+index 00000000..ff3c2db8
+--- /dev/null
++++ b/component/process/uid_oracle_mishka.go
+@@ -0,0 +1,136 @@
++//go:build mishka
++
++package process
++
++import (
++	"bufio"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"os"
++	"strconv"
++	"strings"
++	"sync/atomic"
++	"time"
++
++	C "github.com/metacubex/mihomo/constant"
++)
++
++// UidOracleSocketName is the unix socket the Mishka app serves connection
++// ownership from, inside the core's working directory (`-d`). The app only
++// creates it in VPN mode: under ROOT the core is uid 0 and answers from
++// netlink/procfs itself, so the socket is absent and every lookup below costs
++// one stat.
++//
++// Filesystem namespace, not abstract: the work dir is 0700 and owned by the
++// app's UID, so no other app on the device can ask who owns whose sockets.
++const UidOracleSocketName = "uid-oracle.sock"
++
++// uidOracleTimeout bounds one round trip. The app answers with a binder call to
++// ConnectivityService plus a PackageManager lookup; both are sub-millisecond
++// when healthy, and a slow answer must not stall the tunnel.
++const uidOracleTimeout = 500 * time.Millisecond
++
++// A dead or wedged oracle must not be paid for on every connection. After this
++// many consecutive transport failures we stop asking for a while; a valid
++// answer (including "nobody owns this") resets the count, so a genuinely absent
++// owner is never mistaken for a broken oracle.
++const (
++	oracleFailureThreshold = 8
++	oracleCooldown         = 5 * time.Second
++)
++
++var (
++	oracleFailures   atomic.Int32
++	oracleDisabledAt atomic.Int64 // unix nano
++)
++
++func init() {
++	DefaultConnectionOwnerResolver = findConnectionOwnerViaOracle
++}
++
++// findConnectionOwnerViaOracle asks the host app over a unix socket.
++//
++// Wire format, one line each way, no framing beyond the newline:
++//
++//	request  "<tcp|udp>|<srcIP>|<srcPort>|<dstIP>|<dstPort>"
++//	response "<uid>\t<packageName>"
++//
++// The destination is sent exactly as routing sees it: under fake-ip that is the
++// fake address, which is what the owning app's socket really is connected to,
++// so the app-side inet_diag lookup still matches.
++func findConnectionOwnerViaOracle(metadata *C.Metadata) (uint32, string, error) {
++	line, err := askOracle(metadata)
++	if err != nil {
++		if errors.Is(err, ErrPlatformNotSupport) || errors.Is(err, ErrInvalidNetwork) {
++			return 0, "", err
++		}
++		if n := oracleFailures.Add(1); n >= oracleFailureThreshold {
++			oracleDisabledAt.Store(time.Now().Add(oracleCooldown).UnixNano())
++			oracleFailures.Store(0)
++		}
++		return 0, "", err
++	}
++	oracleFailures.Store(0)
++	return parseOracleResponse(line)
++}
++
++func askOracle(metadata *C.Metadata) (string, error) {
++	if metadata == nil {
++		return "", ErrInvalidNetwork
++	}
++	if !metadata.SrcIP.IsValid() || !metadata.DstIP.IsValid() {
++		return "", ErrInvalidNetwork
++	}
++	if time.Now().UnixNano() < oracleDisabledAt.Load() {
++		return "", ErrPlatformNotSupport
++	}
++	socketPath := C.Path.Resolve(UidOracleSocketName)
++	if _, err := os.Stat(socketPath); err != nil {
++		return "", ErrPlatformNotSupport
++	}
++
++	conn, err := net.DialTimeout("unix", socketPath, uidOracleTimeout)
++	if err != nil {
++		return "", fmt.Errorf("uid oracle: dial: %w", err)
++	}
++	defer conn.Close()
++	if err = conn.SetDeadline(time.Now().Add(uidOracleTimeout)); err != nil {
++		return "", fmt.Errorf("uid oracle: deadline: %w", err)
++	}
++
++	request := strings.Join([]string{
++		metadata.NetWork.String(),
++		metadata.SrcIP.String(),
++		strconv.Itoa(int(metadata.SrcPort)),
++		metadata.DstIP.String(),
++		strconv.Itoa(int(metadata.DstPort)),
++	}, "|")
++	if _, err = io.WriteString(conn, request+"\n"); err != nil {
++		return "", fmt.Errorf("uid oracle: write: %w", err)
++	}
++	line, err := bufio.NewReader(conn).ReadString('\n')
++	if err != nil && line == "" {
++		return "", fmt.Errorf("uid oracle: read: %w", err)
++	}
++	return line, nil
++}
++
++func parseOracleResponse(line string) (uint32, string, error) {
++	uidText, name, found := strings.Cut(strings.TrimSpace(line), "\t")
++	if !found {
++		return 0, "", fmt.Errorf("uid oracle: malformed response %q", line)
++	}
++	uid, err := strconv.ParseUint(uidText, 10, 32)
++	if err != nil {
++		return 0, "", fmt.Errorf("uid oracle: bad uid %q", uidText)
++	}
++	if uid == 0 {
++		return 0, "", errors.New("uid oracle: connection has no owner")
++	}
++	if name == "" {
++		return 0, "", fmt.Errorf("uid oracle: missing name for uid %s", uidText)
++	}
++	return uint32(uid), name, nil
++}
+diff --git a/component/process/uid_oracle_mishka_test.go b/component/process/uid_oracle_mishka_test.go
+new file mode 100644
+index 00000000..c2d2f5b7
+--- /dev/null
++++ b/component/process/uid_oracle_mishka_test.go
+@@ -0,0 +1,195 @@
++//go:build mishka
++
++package process
++
++import (
++	"net"
++	"net/netip"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	C "github.com/metacubex/mihomo/constant"
++)
++
++func TestParseOracleResponse(t *testing.T) {
++	uid, name, err := parseOracleResponse("10233\tcom.android.chrome\n")
++	if err != nil || uid != 10233 || name != "com.android.chrome" {
++		t.Fatalf("parse = %d, %q, %v", uid, name, err)
++	}
++	for _, bad := range []string{"", "\n", "10233\n", "abc\tcom.x\n", "0\tcom.x\n", "10233\t\n"} {
++		if _, _, err := parseOracleResponse(bad); err == nil {
++			t.Fatalf("parseOracleResponse(%q) should fail", bad)
++		}
++	}
++}
++
++// A missing oracle socket must be a cheap, silent "not supported": ROOT modes
++// never run one, and this sits on the per-connection path.
++func TestOracleAbsentIsPlatformNotSupport(t *testing.T) {
++	restore := withHomeDir(t)
++	defer restore()
++
++	if _, err := os.Lstat(filepath.Join(C.Path.HomeDir(), UidOracleSocketName)); !os.IsNotExist(err) {
++		t.Fatalf("precondition: socket should not exist, got %v", err)
++	}
++	if _, _, err := findConnectionOwnerViaOracle(testMetadata()); err != ErrPlatformNotSupport {
++		t.Fatalf("err = %v, want ErrPlatformNotSupport", err)
++	}
++}
++
++// End to end over a real unix socket: the request carries the 5-tuple routing
++// saw (including a fake-ip destination), and the reply becomes the UID plus the
++// name PROCESS-NAME rules match on.
++func TestOracleRoundTrip(t *testing.T) {
++	restore := withHomeDir(t)
++	defer restore()
++
++	listener, err := net.Listen("unix", filepath.Join(C.Path.HomeDir(), UidOracleSocketName))
++	if err != nil {
++		t.Fatalf("listen: %v", err)
++	}
++	defer listener.Close()
++
++	type result struct {
++		request string
++	}
++	got := make(chan result, 1)
++	go func() {
++		conn, err := listener.Accept()
++		if err != nil {
++			got <- result{}
++			return
++		}
++		defer conn.Close()
++		buf := make([]byte, 256)
++		n, _ := conn.Read(buf)
++		got <- result{request: string(buf[:n])}
++		_, _ = conn.Write([]byte("10456\tcom.tencent.mm\n"))
++	}()
++
++	uid, name, err := findConnectionOwnerViaOracle(testMetadata())
++	if err != nil {
++		t.Fatalf("lookup: %v", err)
++	}
++	if uid != 10456 || name != "com.tencent.mm" {
++		t.Fatalf("lookup = %d, %q", uid, name)
++	}
++	if request := (<-got).request; request != "tcp|192.168.1.24|41234|28.0.14.7|443\n" {
++		t.Fatalf("request = %q", request)
++	}
++}
++
++// A hung oracle must time out instead of pinning the tunnel.
++func TestOracleTimeout(t *testing.T) {
++	restore := withHomeDir(t)
++	defer restore()
++
++	listener, err := net.Listen("unix", filepath.Join(C.Path.HomeDir(), UidOracleSocketName))
++	if err != nil {
++		t.Fatalf("listen: %v", err)
++	}
++	defer listener.Close()
++	go func() {
++		conn, err := listener.Accept()
++		if err != nil {
++			return
++		}
++		time.Sleep(2 * uidOracleTimeout) // accept, then never answer
++		_ = conn.Close()
++	}()
++
++	start := time.Now()
++	if _, _, err := findConnectionOwnerViaOracle(testMetadata()); err == nil {
++		t.Fatal("expected a timeout error")
++	}
++	if elapsed := time.Since(start); elapsed > 3*uidOracleTimeout {
++		t.Fatalf("lookup took %v, deadline not honoured", elapsed)
++	}
++}
++
++// Metadata without usable addresses must not reach the socket at all.
++func TestOracleRejectsIncompleteMetadata(t *testing.T) {
++	restore := withHomeDir(t)
++	defer restore()
++
++	metadata := testMetadata()
++	metadata.DstIP = netip.Addr{}
++	if _, _, err := findConnectionOwnerViaOracle(metadata); err != ErrInvalidNetwork {
++		t.Fatalf("err = %v, want ErrInvalidNetwork", err)
++	}
++	if _, _, err := findConnectionOwnerViaOracle(nil); err != ErrInvalidNetwork {
++		t.Fatalf("err = %v, want ErrInvalidNetwork", err)
++	}
++}
++
++// A wedged oracle must stop being asked for: every PROCESS/UID rule on every
++// connection would otherwise pay the timeout.
++func TestOracleCircuitBreaker(t *testing.T) {
++	restore := withHomeDir(t)
++	defer restore()
++	resetOracleState()
++
++	listener, err := net.Listen("unix", filepath.Join(C.Path.HomeDir(), UidOracleSocketName))
++	if err != nil {
++		t.Fatalf("listen: %v", err)
++	}
++	defer listener.Close()
++	// Accept and never answer: each call costs the full deadline.
++	for i := 0; i < oracleFailureThreshold+2; i++ {
++		go func() {
++			conn, err := listener.Accept()
++			if err != nil {
++				return
++			}
++			time.Sleep(3 * uidOracleTimeout)
++			_ = conn.Close()
++		}()
++	}
++
++	for i := 0; i < oracleFailureThreshold; i++ {
++		if _, _, err := findConnectionOwnerViaOracle(testMetadata()); err == nil {
++			t.Fatalf("call %d: expected an error", i)
++		}
++	}
++	// Circuit is open now: the next call must bail immediately, not wait.
++	start := time.Now()
++	if _, _, err := findConnectionOwnerViaOracle(testMetadata()); err != ErrPlatformNotSupport {
++		t.Fatalf("err = %v, want ErrPlatformNotSupport while cooling down", err)
++	}
++	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
++		t.Fatalf("cooling-down call took %v", elapsed)
++	}
++
++	// A healthy answer clears the failure count for the next round.
++	resetOracleState()
++	if oracleFailures.Load() != 0 || oracleDisabledAt.Load() != 0 {
++		t.Fatal("resetOracleState did not clear the breaker")
++	}
++}
++
++func resetOracleState() {
++	oracleFailures.Store(0)
++	oracleDisabledAt.Store(0)
++}
++
++func testMetadata() *C.Metadata {
++	return &C.Metadata{
++		NetWork: C.TCP,
++		SrcIP:   netip.MustParseAddr("192.168.1.24"),
++		SrcPort: 41234,
++		DstIP:   netip.MustParseAddr("28.0.14.7"),
++		DstPort: 443,
++	}
++}
++
++// withHomeDir points the constant path resolver at a fresh temp dir. C.Path is
++// process-wide, so these tests must not run in parallel with each other.
++func withHomeDir(t *testing.T) func() {
++	t.Helper()
++	previous := C.Path.HomeDir()
++	C.SetHomeDir(t.TempDir())
++	t.Cleanup(func() { C.SetHomeDir(previous) })
++	return func() { C.SetHomeDir(previous) }
++}
+diff --git a/config/config.go b/config/config.go
+index 182bacc9..ba86b9e1 100644
+--- a/config/config.go
++++ b/config/config.go
+@@ -1,11 +1,13 @@
+ package config
+ 
+ import (
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"net"
+ 	"net/netip"
+ 	"net/url"
++	"os"
+ 	"path/filepath"
+ 	"strings"
+ 	"time"
+@@ -480,6 +482,15 @@ type RawConfig struct {
+ 	ClashForAndroid RawClashForAndroid `yaml:"clash-for-android" json:"clash-for-android"`
+ }
+ 
++// OverrideJSONPath points to an optional JSON file whose fields override the parsed RawConfig.
++// Set by the host application before Parse/ParseWithBytes (the Mishka Android app sets it from
++// its --override-json runtime option, see mishka_core/runtime.go).
++var OverrideJSONPath string
++
++// mishkaPatch is an optional hook applied after the override JSON has been merged.
++// Registered via init() in patch_mishka.go when built with the mishka tag; nil otherwise.
++var mishkaPatch func(cfg *RawConfig)
++
+ // Parse config
+ func Parse(buf []byte) (*Config, error) {
+ 	rawCfg, err := UnmarshalRawConfig(buf)
+@@ -487,9 +498,36 @@ func Parse(buf []byte) (*Config, error) {
+ 		return nil, err
+ 	}
+ 
++	applyOverrideJSON(rawCfg)
++
++	if mishkaPatch != nil {
++		mishkaPatch(rawCfg)
++	}
++
+ 	return ParseRawConfig(rawCfg)
+ }
+ 
++// applyOverrideJSON merges the JSON file named by OverrideJSONPath into rawCfg.
++// Field names follow the existing `json:` tags of RawConfig. A missing or malformed file only
++// logs a warning: the override is a host-provided runtime input and must not keep the core
++// from starting (the app shows the parse error of the subscription itself instead).
++func applyOverrideJSON(rawCfg *RawConfig) {
++	if OverrideJSONPath == "" {
++		return
++	}
++	data, err := os.ReadFile(OverrideJSONPath)
++	if err != nil {
++		log.Warnln("Read override.json failed: %s", err.Error())
++		return
++	}
++	if len(data) == 0 {
++		return
++	}
++	if err := json.Unmarshal(data, rawCfg); err != nil {
++		log.Warnln("Apply override.json failed: %s", err.Error())
++	}
++}
++
+ func DefaultRawConfig() *RawConfig {
+ 	return &RawConfig{
+ 		AllowLan:          false,
+diff --git a/config/patch_mishka.go b/config/patch_mishka.go
+new file mode 100644
+index 00000000..7a42efd5
+--- /dev/null
++++ b/config/patch_mishka.go
+@@ -0,0 +1,118 @@
++//go:build mishka
++
++package config
++
++import (
++	C "github.com/metacubex/mihomo/constant"
++)
++
++var (
++	mishkaDefaultNameServers = []string{
++		"223.5.5.5",
++		"119.29.29.29",
++		"8.8.4.4",
++		"1.0.0.1",
++	}
++	mishkaDefaultFakeIPFilter = []string{
++		// STUN
++		"+.stun.*.*",
++		"+.stun.*.*.*",
++		"+.stun.*.*.*.*",
++		"+.stun.*.*.*.*.*",
++		// Google Voices
++		"lens.l.google.com",
++		// Nintendo Switch STUN
++		"*.n.n.srv.nintendo.net",
++		// PlayStation STUN
++		"+.stun.playstation.net",
++		// Xbox
++		"xbox.*.*.microsoft.com",
++		"*.*.xboxlive.com",
++		// Microsoft Captive Portal
++		"*.msftncsi.com",
++		"*.msftconnecttest.com",
++		// Bilibili CDN
++		"*.mcdn.bilivideo.cn",
++		// Windows default LAN workgroup
++		"WORKGROUP",
++	}
++	mishkaDefaultFakeIPRange = "28.0.0.0/8"
++	// DefaultRawConfig 内置的 external-ui-url 默认值；用于判断「用户没有显式指定下载地址」。
++	mishkaStockExternalUIURL = "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip"
++	// 替换用的下载源：zashboard 经 gh-proxy 镜像（与作者 mihomo_box 自带配置同源）。
++	// 内置默认直连 github.com，国内网络基本不可达，会导致 UI 下载失败、面板空白。
++	mishkaDefaultExternalUIURL = "https://v6.gh-proxy.org/https://github.com/Zephyruso/zashboard/archive/refs/heads/gh-pages-no-fonts.zip"
++)
++
++func init() {
++	mishkaPatch = patchMishka
++}
++
++// patchMishka adjusts the parsed RawConfig for Android usage:
++//   - When the subscription has DNS disabled, inject a sensible default
++//     (fake-ip mode, a mix of domestic and international nameservers, and a
++//     fake-ip filter list covering STUN, game consoles, captive portals, etc.).
++//     Applies to all tunnel modes (VPN / ROOT TUN / ROOT TPROXY) because dns
++//     hijack/redirect leaves no responder when DNS is off.
++//   - In VPN mode only (FileDescriptor > 0): when AppendSystemDNS is set
++//     (either by the subscription or implied by the default injection above),
++//     append "system://" so Android system DNS acts as a last-resort fallback.
++//     Skipped under ROOT modes — ROOT TUN would re-enter sing-tun's catch-all
++//     route and loop, and ROOT TPROXY has no Kotlin-side UpdateSystemDNS feed
++//     either, so the entry would be a dead nameserver slot.
++//   - When running in VPN mode (FileDescriptor > 0), rebuild cfg.Tun with a
++//     whitelist of fields required by sing-tun's fd path, dropping any
++//     subscription-supplied Linux-only fields that would otherwise crash
++//     sing-tun on Android (auto-redirect, iproute2-*, include-uid,
++//     include-interface, route-address, etc.).
++//   - When neither external-ui nor external-ui-name is configured, inject
++//     external-ui: "ui" (plus a gh-proxy mirrored download URL if the stock
++//     default is still in place) so the in-app external panel WebView has
++//     something to serve at /ui instead of a bare 404.
++func patchMishka(cfg *RawConfig) {
++	if !cfg.DNS.Enable {
++		cfg.DNS = DefaultRawConfig().DNS
++		cfg.DNS.Enable = true
++		cfg.DNS.NameServer = mishkaDefaultNameServers
++		cfg.DNS.EnhancedMode = C.DNSFakeIP
++		cfg.DNS.FakeIPRange = mishkaDefaultFakeIPRange
++		cfg.DNS.FakeIPFilter = mishkaDefaultFakeIPFilter
++		if cfg.Tun.FileDescriptor > 0 {
++			cfg.ClashForAndroid.AppendSystemDNS = true
++		}
++	}
++	if cfg.Tun.FileDescriptor > 0 && cfg.ClashForAndroid.AppendSystemDNS {
++		cfg.DNS.NameServer = append(cfg.DNS.NameServer, "system://")
++	}
++
++	// ROOT 模式（fd == 0）走 mihomo TUN（netlink + tun.New()）路径。
++	if cfg.Tun.FileDescriptor > 0 {
++		// 白名单外的所有 RawTun 字段归零。
++		cfg.Tun = RawTun{
++			Enable:              cfg.Tun.Enable,
++			Device:              cfg.Tun.Device,
++			Stack:               cfg.Tun.Stack,
++			DNSHijack:           cfg.Tun.DNSHijack,
++			AutoRoute:           cfg.Tun.AutoRoute,
++			AutoDetectInterface: cfg.Tun.AutoDetectInterface,
++			Inet6Address:        cfg.Tun.Inet6Address,
++			MTU:                 cfg.Tun.MTU,
++			FileDescriptor:      cfg.Tun.FileDescriptor,
++			IncludePackage:      cfg.Tun.IncludePackage,
++			ExcludePackage:      cfg.Tun.ExcludePackage,
++		}
++	}
++
++	// 外置面板兜底：应用内 WebView 打开 /ui 路由，而 mihomo 只有在 external-ui 非空时才
++	// 挂载该路由（否则 404 → 面板空白）。大量订阅配置不带这个字段，这里注入默认 "ui"
++	// （配置目录下的相对路径，能过 IsSafePath 检查）：ui/ 目录已有内容则直接伺服；
++	// 为空则 AutoDownloadUI 启动时自动下载一次，失败仅记日志、不影响内核运行。
++	// 用户显式配置过 external-ui 或 external-ui-name 时完全尊重原配置，不做任何改动。
++	if cfg.ExternalUI == "" && cfg.ExternalUIName == "" {
++		cfg.ExternalUI = "ui"
++		// 下载地址仅替换「还是内置默认值」的情况；订阅自带 external-ui-url 则保留。
++		if cfg.ExternalUIURL == "" || cfg.ExternalUIURL == mishkaStockExternalUIURL {
++			cfg.ExternalUIURL = mishkaDefaultExternalUIURL
++		}
++	}
++}
+diff --git a/constant/features/mishka.go b/constant/features/mishka.go
+new file mode 100644
+index 00000000..4e9b01b5
+--- /dev/null
++++ b/constant/features/mishka.go
+@@ -0,0 +1,5 @@
++//go:build mishka
++
++package features
++
++const Mishka = true
+diff --git a/constant/features/mishka_stub.go b/constant/features/mishka_stub.go
+new file mode 100644
+index 00000000..2ffbb37f
+--- /dev/null
++++ b/constant/features/mishka_stub.go
+@@ -0,0 +1,5 @@
++//go:build !mishka
++
++package features
++
++const Mishka = false
+diff --git a/constant/features/tags.go b/constant/features/tags.go
+index 3af7086c..2b32ae9f 100644
+--- a/constant/features/tags.go
++++ b/constant/features/tags.go
+@@ -4,6 +4,9 @@ func Tags() (tags []string) {
+ 	if CMFA {
+ 		tags = append(tags, "cmfa")
+ 	}
++	if Mishka {
++		tags = append(tags, "mishka")
++	}
+ 	if WithLowMemory {
+ 		tags = append(tags, "with_low_memory")
+ 	}
+diff --git a/listener/inbound/ebpf.go b/listener/inbound/ebpf.go
+index ba9f658f..c2ddfde4 100644
+--- a/listener/inbound/ebpf.go
++++ b/listener/inbound/ebpf.go
+@@ -150,7 +150,9 @@ func (e *EBPF) Listen(tunnel C.Tunnel) error {
+ 	if err != nil {
+ 		return err
+ 	}
+-	log.Infoln("EBPF[%s] proxy listening at: %s", e.Name(), e.Address())
++	if address := e.Address(); address != "" {
++		log.Infoln("EBPF[%s] proxy listening at: %s", e.Name(), address)
++	}
+ 	return nil
+ }
+ 
+diff --git a/listener/inbound/ebpf_update_test.go b/listener/inbound/ebpf_update_test.go
+index a949cfa3..a1addb44 100644
+--- a/listener/inbound/ebpf_update_test.go
++++ b/listener/inbound/ebpf_update_test.go
+@@ -14,6 +14,8 @@ import (
+ // reflection test below holds withoutInPlaceUpdatableFields to exactly this.
+ var inPlaceUpdatableFields = []string{"UDPTimeout", "BypassRuleSet", "BypassTUNDirect"}
+ 
++func boolOption(value bool) *bool { return &value }
++
+ type stubEBPFListener struct {
+ 	updates int
+ 	applied LC.EBPF
+@@ -211,6 +213,44 @@ func TestEBPFUpdateTreatsARebuildRequestAsUnhandled(t *testing.T) {
+ 	}
+ }
+ 
++func TestDisabledEBPFUpdateToEnabledRequestsRegistryRebuild(t *testing.T) {
++	options := &EBPFOption{
++		BaseOption: BaseOption{NameStr: "ebpf-in", Listen: "0.0.0.0", SpecialProxy: "DIRECT"},
++		Local: LC.EBPFLocal{
++			Enable:               boolOption(false),
++			IPv6:                 boolOption(false),
++			BypassPrivateAddress: boolOption(false),
++		},
++		Shared: LC.EBPFShared{
++			Enable:               boolOption(false),
++			IPv6:                 boolOption(false),
++			BypassPrivateAddress: boolOption(false),
++			Interface:            []string{"wlan2", "br-lan", "br0"},
++		},
++	}
++	listener, err := NewEBPF(options)
++	if err != nil {
++		t.Fatalf("build disabled wrapper: %v", err)
++	}
++	if err := listener.Listen(nil); err != nil {
++		t.Fatalf("listen disabled no-op: %v", err)
++	}
++	if listener.Address() != "" {
++		t.Fatalf("disabled wrapper exposed a dataplane address: %q", listener.Address())
++	}
++
++	enabled := *options
++	enabled.Local.Enable = boolOption(true)
++	enabled.Shared.Enable = boolOption(true)
++	handled, err := listener.Update(&enabled)
++	if err != nil {
++		t.Fatalf("enabling should fall back to rebuild, not fail: %v", err)
++	}
++	if handled {
++		t.Fatal("disabled listener claimed it applied a mode change without creating a new data plane")
++	}
++}
++
+ // A failed update must leave the listener answering for the config it is still
+ // running, so the caller's rebuild starts from the truth.
+ func TestEBPFUpdateKeepsTheOldConfigWhenItFails(t *testing.T) {
+diff --git a/listener/sing_ebpf/config.go b/listener/sing_ebpf/config.go
+index 6e538d15..14b8538e 100644
+--- a/listener/sing_ebpf/config.go
++++ b/listener/sing_ebpf/config.go
+@@ -15,9 +15,10 @@ import (
+ )
+ 
+ const (
+-	ebpfModeLocal  = "local"
+-	ebpfModeShared = "shared"
+-	ebpfModeHybrid = "hybrid"
++	ebpfModeLocal    = "local"
++	ebpfModeShared   = "shared"
++	ebpfModeHybrid   = "hybrid"
++	ebpfModeDisabled = "disabled"
+ 
+ 	dnsModeHijack        = "hijack"
+ 	dnsModeRespectPolicy = "respect_policy"
+@@ -125,10 +126,13 @@ func validateLocalOptions(enabled bool, options LC.EBPFLocal) error {
+ 	if options.DNSMode != "" {
+ 		return E.New("local.dns_mode requires local or hybrid mode")
+ 	}
+-	if options.IPv6 != nil {
++	// Explicit false values are harmless on a disabled scope and are commonly
++	// emitted by config generators. True would be misleading because that scope
++	// is not attached, so keep rejecting it.
++	if options.IPv6 != nil && *options.IPv6 {
+ 		return E.New("local.ipv6 requires local or hybrid mode")
+ 	}
+-	if options.BypassPrivateAddress != nil {
++	if options.BypassPrivateAddress != nil && *options.BypassPrivateAddress {
+ 		return E.New("local.bypass_private_address requires local or hybrid mode")
+ 	}
+ 	if len(options.BypassRuleSet) > 0 {
+@@ -353,10 +357,13 @@ func validateSharedOptions(enabled bool, options LC.EBPFShared) error {
+ 	if options.DNSMode != "" {
+ 		return E.New("shared.dns_mode requires shared or hybrid mode")
+ 	}
+-	if options.IPv6 != nil {
++	// Explicit false values are harmless on a disabled scope and are commonly
++	// emitted by config generators. True would be misleading because that scope
++	// is not attached, so keep rejecting it.
++	if options.IPv6 != nil && *options.IPv6 {
+ 		return E.New("shared.ipv6 requires shared or hybrid mode")
+ 	}
+-	if options.BypassPrivateAddress != nil {
++	if options.BypassPrivateAddress != nil && *options.BypassPrivateAddress {
+ 		return E.New("shared.bypass_private_address requires shared or hybrid mode")
+ 	}
+ 	if len(options.Interface) > 0 {
+@@ -388,6 +395,9 @@ func normalizeDataPlanes(options LC.EBPF) (normalizedDataPlanes, error) {
+ 	if err != nil {
+ 		return normalizedDataPlanes{}, err
+ 	}
++	if !localEnabled && !sharedEnabled {
++		return normalizedDataPlanes{mode: ebpfModeDisabled}, nil
++	}
+ 	localDataPlane, cgroupPath, err := normalizeLocalDataPlane(options.Local)
+ 	if err != nil {
+ 		return normalizedDataPlanes{}, err
+@@ -438,7 +448,7 @@ func normalizeModeWithEnabled(mode string, localEnabled, sharedEnabled *bool) (s
+ 		local := localEnabled != nil && *localEnabled
+ 		shared := sharedEnabled != nil && *sharedEnabled
+ 		if !local && !shared {
+-			return "", false, false, E.New("local.enable or shared.enable must be true")
++			return ebpfModeDisabled, false, false, nil
+ 		}
+ 		switch {
+ 		case local && shared:
+diff --git a/listener/sing_ebpf/config_enablement_test.go b/listener/sing_ebpf/config_enablement_test.go
+index b4a85820..3531c441 100644
+--- a/listener/sing_ebpf/config_enablement_test.go
++++ b/listener/sing_ebpf/config_enablement_test.go
+@@ -3,6 +3,8 @@
+ package sing_ebpf
+ 
+ import (
++	"context"
++	"errors"
+ 	"reflect"
+ 	"testing"
+ 
+@@ -54,6 +56,63 @@ func TestEnablementSharedEnabledField(t *testing.T) {
+ 	}
+ }
+ 
++func TestExplicitlyDisabledEBPFIsSafeNoopAndRequiresRebuildToEnable(t *testing.T) {
++	disabled := LC.EBPF{
++		Local: LC.EBPFLocal{
++			Enable:               boolPtr(false),
++			IPv6:                 boolPtr(false),
++			BypassPrivateAddress: boolPtr(false),
++		},
++		Shared: LC.EBPFShared{
++			Enable:               boolPtr(false),
++			IPv6:                 boolPtr(false),
++			BypassPrivateAddress: boolPtr(false),
++			Interface:            []string{"wlan2", "br-lan", "br0"},
++		},
++	}
++	normalized, _, err := applyLegacyOptions(disabled)
++	if err != nil {
++		t.Fatalf("disabled role config should normalize to a no-op: %v", err)
++	}
++	selection, err := normalizeDataPlanes(normalized)
++	if err != nil {
++		t.Fatalf("disabled role selection failed: %v", err)
++	}
++	if selection.mode != ebpfModeDisabled || selection.localEnabled || selection.sharedEnabled {
++		t.Fatalf("disabled selection = %+v", selection)
++	}
++
++	listener, err := New(context.Background(), disabled, nil)
++	if err != nil {
++		t.Fatalf("disabled listener should not validate/attach inactive options: %v", err)
++	}
++	if listener.Address() != "" {
++		t.Fatalf("disabled listener exposed an attached address: %q", listener.Address())
++	}
++	if err := listener.Close(); err != nil {
++		t.Fatalf("close disabled listener: %v", err)
++	}
++	if err := listener.Update(disabled); err != nil {
++		t.Fatalf("disabled-to-disabled update should be a no-op: %v", err)
++	}
++
++	enabled := disabled
++	enabled.Local.Enable = boolPtr(true)
++	enabled.Shared.Enable = boolPtr(true)
++	if err := listener.Update(enabled); !errors.Is(err, ErrRebuildRequired) {
++		t.Fatalf("enabling an inactive listener should request normal rebuild, got %v", err)
++	}
++}
++
++func TestDisabledLocalAcceptsExplicitFalseDefaults(t *testing.T) {
++	if err := validateLocalOptions(false, LC.EBPFLocal{
++		IPv6:                 boolPtr(false),
++		BypassPrivateAddress: boolPtr(false),
++	}); err != nil {
++		t.Fatalf("false defaults on disabled local scope should be harmless: %v", err)
++	}
++}
++
+ func TestValidateSharedDisabledNoConfig(t *testing.T) {
+ 	// mode=local with empty shared block should NOT error
+ 	var shared LC.EBPFShared
+diff --git a/listener/sing_ebpf/inbound.go b/listener/sing_ebpf/inbound.go
+index 44dba1c1..c30b4f04 100644
+--- a/listener/sing_ebpf/inbound.go
++++ b/listener/sing_ebpf/inbound.go
+@@ -36,6 +36,30 @@ type Listener interface {
+ 	Update(options LC.EBPF) error
+ }
+ 
++// disabledInbound is returned when both eBPF roles are explicitly disabled.
++// It intentionally owns no kernel resources. Re-enabling a role asks the
++// listener registry for a normal rebuild rather than trying to attach in place.
++type disabledInbound struct{}
++
++func (disabledInbound) Close() error    { return nil }
++func (disabledInbound) Address() string { return "" }
++func (disabledInbound) Update(options LC.EBPF) error {
++	options, _, err := applyLegacyOptions(options)
++	if err != nil {
++		return err
++	}
++	selection, err := normalizeDataPlanes(options)
++	if err != nil {
++		return err
++	}
++	if selection.localEnabled || selection.sharedEnabled {
++		return ErrRebuildRequired
++	}
++	return nil
++}
++
++var _ Listener = disabledInbound{}
++
+ type Inbound struct {
+ 	dnsRelayAccess sync.Mutex
+ 	dnsRelays      *dnsRelayLimiter
+@@ -229,6 +253,10 @@ func New(ctx context.Context, options LC.EBPF, tunnel C.Tunnel, additions ...inb
+ 		return nil, err
+ 	}
+ 	mode, localEnabled, sharedEnabled := selection.mode, selection.localEnabled, selection.sharedEnabled
++	if !localEnabled && !sharedEnabled {
++		log.Debugln("[EBPF] listener disabled; no eBPF data plane will be attached")
++		return disabledInbound{}, nil
++	}
+ 	if err = validateLocalOptions(localEnabled, options.Local); err != nil {
+ 		return nil, err
+ 	}
+diff --git a/listener/sing_ebpf/legacy_options.go b/listener/sing_ebpf/legacy_options.go
+index 828a7a12..088fe576 100644
+--- a/listener/sing_ebpf/legacy_options.go
++++ b/listener/sing_ebpf/legacy_options.go
+@@ -59,6 +59,11 @@ func applyLegacyOptions(options LC.EBPF) (LC.EBPF, []string, error) {
+ 		// New reports the mode error itself; there is nothing to fold.
+ 		return options, nil, nil
+ 	}
++	if !localEnabled && !sharedEnabled {
++		// An explicitly disabled listener is a safe no-op. Its role fields do
++		// not participate in legacy normalization or attach-time validation.
++		return options, nil, nil
++	}
+ 	// Discard inactive shared settings before legacy conversion and validation.
+ 	// Configuration generators may populate this block in local-only mode.
+ 	// Keep Enabled because it participates in mode selection on the next pass.
+diff --git a/listener/sing_tun/server.go b/listener/sing_tun/server.go
+index 77f044cc..f1d68384 100644
+--- a/listener/sing_tun/server.go
++++ b/listener/sing_tun/server.go
+@@ -159,7 +159,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
+ 	if options.FileDescriptor > 0 {
+ 		if tunnelName, err := getTunnelName(int32(options.FileDescriptor)); err == nil {
+ 			tunName = tunnelName // sing-tun must have the truth tun interface name even it from a fd
+-			//forwarderBindInterface = true
++			forwarderBindInterface = true
+ 			log.Debugln("[TUN] use tun name %s for fd %d", tunnelName, options.FileDescriptor)
+ 		} else {
+ 			log.Warnln("[TUN] get tun name failed for fd %d, fallback to use tun interface name %s", options.FileDescriptor, tunName)
+diff --git a/listener/sing_tun/server_android.go b/listener/sing_tun/server_android.go
+index fac3bbfb..a629a80f 100644
+--- a/listener/sing_tun/server_android.go
++++ b/listener/sing_tun/server_android.go
+@@ -1,4 +1,4 @@
+-//go:build android && !cmfa
++//go:build android && (!cmfa || mishka)
+ 
+ package sing_tun
+ 
+@@ -8,7 +8,6 @@ import (
+ 
+ 	"github.com/metacubex/mihomo/component/process"
+ 	"github.com/metacubex/mihomo/constant"
+-	"github.com/metacubex/mihomo/constant/features"
+ 	"github.com/metacubex/mihomo/log"
+ 
+ 	"github.com/metacubex/sing-tun"
+@@ -54,6 +53,14 @@ func GetPackageManager() (tun.PackageManager, error) {
+ }
+ 
+ func (l *Listener) buildAndroidRules(tunOptions *tun.Options) error {
++	// TUN handed in as an fd (Android VpnService) already has its routes set up by the Kotlin
++	// side, so sing-tun must not build them again; package filtering is done by the VPN builder.
++	if tunOptions.FileDescriptor > 0 {
++		return nil
++	}
++	if len(tunOptions.IncludePackage) == 0 && len(tunOptions.ExcludePackage) == 0 {
++		return nil
++	}
+ 	packageManager, err := getPackageManager()
+ 	if err != nil {
+ 		return err
+@@ -78,7 +85,8 @@ func findPackageName(metadata *constant.Metadata) (string, error) {
+ }
+ 
+ func init() {
+-	if !features.CMFA {
+-		process.DefaultPackageNameResolver = findPackageName
+-	}
++	// Mishka always wants the uid -> package-name resolver: rules match on process names and
++	// the app does not use CMFA's package-name injection, which is why features.CMFA used to
++	// gate this off under the cmfa build tag.
++	process.DefaultPackageNameResolver = findPackageName
+ }
+diff --git a/listener/sing_tun/server_notandroid.go b/listener/sing_tun/server_notandroid.go
+index e393d4ca..6cf9023b 100644
+--- a/listener/sing_tun/server_notandroid.go
++++ b/listener/sing_tun/server_notandroid.go
+@@ -1,4 +1,4 @@
+-//go:build !android || cmfa
++//go:build !android || (cmfa && !mishka)
+ 
+ package sing_tun
+ 
+diff --git a/tunnel/tunnel.go b/tunnel/tunnel.go
+index a8b3a071..65b3ee63 100644
+--- a/tunnel/tunnel.go
++++ b/tunnel/tunnel.go
+@@ -411,7 +411,15 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, decidedM
+ 		FindProcess: func() {
+ 			if attemptProcessLookup {
+ 				attemptProcessLookup = false
+-				if !features.CMFA {
++				// Mishka builds carry the cmfa tag (for the Android system-DNS feed and
++				// embed mode) but do not inject package names the way CFM's app does.
++				// The CMFA-only branch below keys off metadata.Uid, which nothing else
++				// ever assigns, so under cmfa the resolver always sees uid 0 and every
++				// PROCESS/UID rule silently never matches. Take the normal lookup path
++				// instead: it fills Uid / Process / ProcessPath from the socket owner
++				// and then lets the Android resolver (server_android.go) replace the
++				// process name with the owning package name.
++				if !features.CMFA || features.Mishka {
+ 					// normal check for process
+ 					uid, path, err := findProcessName(metadata.NetWork.String(), metadata.SrcIP, int(metadata.SrcPort))
+ 					// On Linux the uid is the socket's owner from netlink, and the
+@@ -429,6 +437,22 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, decidedM
+ 							metadata.Process = pkg
+ 						}
+ 					}
++
++					// Android VPN mode has no root, so neither netlink nor procfs
++					// can name the socket's owner. The host app can: it is the
++					// active VpnService, and the platform resolves the owner of
++					// connections on its own tunnel (ConnectivityManager
++					// .getConnectionOwnerUid). Ask it, but only when the kernel
++					// side came up empty -- ROOT modes answer above and never
++					// expose the socket, where this costs one stat.
++					if features.Mishka && metadata.Uid == 0 {
++						if uid, name, err := process.FindConnectionOwner(metadata); err == nil {
++							metadata.Uid = uid
++							metadata.Process = name
++						} else {
++							log.Debugln("[Process] connection owner lookup failed for %s: %v", metadata.String(), err)
++						}
++					}
+ 				} else {
+ 					// check package names
+ 					pkg, err := process.FindPackageName(metadata)
