@@ -1,0 +1,36 @@
+Subject: [PATCH] constant: allow registering extra safe paths at runtime
+
+Mishka 不带 cmfa 构建标签（app/build.gradle.kts 里已说明原因：cmfa 会跳过
+Linux socket-owner 查询，metadata.Uid 恒为 0，PROCESS-NAME / 按 UID 的规则失效），
+所以 IsSafePath 里 `features.CMFA` 那条快捷通道对本定制不生效。
+
+订阅导入校验跑在 app 进程内（libmihomo.so 的 JNI 路径），homeDir 被设成
+files/mihomo/geodata（只为让内核找到 GeoIP/GeoSite/ASN），而 provider 文件
+落在 files/mihomo/processing/providers/ —— 不是 homeDir 的子路径，于是
+adapter/provider/parser.go 直接返回 ErrNotSafePath。
+
+SAFE_PATHS 环境变量只在 constant 包 init 时读一次（.so dlopen 的瞬间），
+Android 侧没有可靠时机去设置，这里补一个运行时注册入口，由 mishkaCoreInit 调用。
+---
+diff --git a/constant/path.go b/constant/path.go
+index 0000000..0000000 100644
+--- a/constant/path.go
++++ b/constant/path.go
+@@ -64,6 +64,17 @@ func SetHomeDir(root string) {
+ 	Path.homeDir = root
+ }
+ 
++// AddSafePaths registers extra directories accepted by IsSafePath at runtime.
++// SAFE_PATHS is only read once during package init, which an in-process (JNI) host
++// that learns its sandbox paths after dlopen cannot hook into.
++func AddSafePaths(paths ...string) {
++	for _, sp := range paths {
++		if sp != "" {
++			Path.safePaths = append(Path.safePaths, sp)
++		}
++	}
++}
++
+ // SetConfig is used to set the configuration file
+ func SetConfig(file string) {
+ 	Path.configFile = file

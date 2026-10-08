@@ -1,9 +1,15 @@
 # app 侧补丁基线（导出时生成）
 upstream_commit=dd21ee45c48901b14b7f13e7573c63e1f12abaf2
 patch_file=patches/app/0001-anchor-panel.patch
+# 安全路径修复（独立补丁，可单独 git apply / revert）
+extra_patch_file=patches/app/0002-jni-register-workdir-safe-path.patch
+extra_patch_sha256=a22148e076cbd69a561c5b284c53c81837f92284c174164b35b592df184f6be5
 patch_sha256=6758a7b2f37853c976c9a4376cdb54c07062d6286ac43b09ab385e2f9263bb10
 blob_after=6ecc565923a55fbb53b694964b2c321707ffc0e5 app/build.gradle.kts
 blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
+# 下面这个 blob 是按 YuKongA/Mishka main 最新的 main.go 算的；你的基线 dd21ee4 若与之不同，
+# 打完 0002 后用 git hash-object 重算再替换（文件内容本身不受影响）
+blob_after=fedaacae91ad7bb2fe8d98377cb3009c8415c3b4 app/src/main/native/mishka_core/main.go
 blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 blob_new=48b879f20a3cb57945e783d12c8ec262f42a401b app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt

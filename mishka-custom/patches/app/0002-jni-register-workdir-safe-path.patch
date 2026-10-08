@@ -1,0 +1,28 @@
+diff --git a/app/src/main/native/mishka_core/main.go b/app/src/main/native/mishka_core/main.go
+index 0000000..0000000 100644
+--- a/app/src/main/native/mishka_core/main.go
++++ b/app/src/main/native/mishka_core/main.go
+@@ -10,6 +10,7 @@ import (
+ 	"github.com/metacubex/mihomo/component/age"
+ 	"github.com/metacubex/mihomo/component/http"
+ 	"github.com/metacubex/mihomo/constant"
++	"path/filepath"
+ 	"strings"
+ 	"sync"
+ 	"sync/atomic"
+@@ -38,7 +39,14 @@ var (
+ func mishkaCoreInit(homeDir *C.char, userAgent *C.char) {
+ 	// homeDir 决定 mihomo 读 GeoIP/GeoSite/ASN 数据库的位置；进程级全局，只设一次。
+ 	initOnce.Do(func() {
+-		constant.SetHomeDir(C.GoString(homeDir))
++		dir := C.GoString(homeDir)
++		constant.SetHomeDir(dir)
++		// 不带 cmfa 标签时 IsSafePath 会真的生效：homeDir 是 files/mihomo/geodata，
++		// 而导入校验用的 provider 落在 files/mihomo/processing/providers/，必须把
++		// 工作目录（geodata 的上一级）登记为 safe path，否则 Parse 报 ErrNotSafePath。
++		if parent := filepath.Dir(dir); parent != "" && parent != "." {
++			constant.AddSafePaths(parent)
++		}
+ 	})
+ 	ua := C.GoString(userAgent)
+ 	if ua != "" {
