@@ -6,10 +6,10 @@
 # 要求仓库处在补丁基线 commit（BASELINE.txt 的 upstream_commit）且工作区干净；
 # 脚本跑完不会留下任何改动（成功与失败都还原）。
 #
-# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 → 0006 → 0007 的顺序叠加，
+# --series：0001 验收通过后，按 0002 → 0003 → 0004 → 0005 → 0006 → 0007 → 0008 的顺序叠加，
 #           逐条跑 0004 专属断言（字段整理 / DNS maplist 拖动 / 规则序号 / 批量测速），
 #           0005 面板 / 规则省略号断言，再检查 0006 编辑间距 / 连接代理类型 / WebView 缓存，
-#           0007 字段整理按钮位置与面板缓存页重进黑屏修复，最后逆序还原。
+#           0007 字段整理按钮位置与缓存页透明黑屏修复，0008 重进恢复所选面板入口页，最后逆序还原。
 #           0005 还会顺带跑 tools/panel/check_panel_refs.py（面板字符串键 × 4 locale、图标名对表）。
 #           不加 --series 只验 0001（与原行为一致）。
 set -euo pipefail
@@ -721,9 +721,9 @@ sys.exit(0 if s.count("rowMaxLines = 1,") == 1 else 1)
 PY7
   echo "ok  省略号只开在规则列表这一处调用点"
 
-  # ---- 0006–0007：编辑 / 连接 / WebView 修复系列 ----
+  # ---- 0006–0008：编辑 / 连接 / WebView 修复系列 ----
   LATEST_PATCHES=()
-  for n in 0006 0007; do
+  for n in 0006 0007 0008; do
     p="$(find "$ROOT/patches/app" -maxdepth 1 -name "$n-*.patch" | sort | head -1)"
     if [[ -z "$p" ]]; then
       echo "FAIL 缺少 $n 补丁文件" >&2; fail=1; continue
@@ -743,7 +743,7 @@ PY7
     fi
   done
 
-  echo "--- 0006–0007 修复断言 ---"
+  echo "--- 0006–0008 修复断言 ---"
   FFP="app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt"
   CONN="app/src/main/kotlin/top/yukonga/mishka/ui/screen/connection/ConnectionScreen.kt"
   PW="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt"
@@ -764,11 +764,50 @@ PY7
     'WebView tag remembers content commit across Compose screen disposal'
   assert_contains 'markContentCommitted(view)' "$PW" \
     'page commit and page finish persist the committed state on the WebView'
-  assert_contains 'val reusableCommittedPage = reusedTag?.let {' "$PW" \
-    'same URL/reloadKey committed cache page is eligible for immediate display'
-  assert_contains 'val reusablePendingPage = reusedTag?.let {' "$PW" \
-    'an uncommitted cached page is detected separately from a ready cache page'
-  assert_contains 'needsCanGoBackSync = true' "$PW" \
+  assert_contains 'Every cached re-entry starts at the configured entry URL' "$PW" \
+    'every re-entry resets the cached WebView to its configured start page'
+  assert_contains 'contentCommitted = false' "$PW" \
+    'the old page commit marker is cleared before loading the start page'
+  assert_contains 'if (isReused && resetHistoryOnUrlChange)' "$PW" \
+    'cached re-entry clears the previous WebView history'
+  assert_contains 'loadUrl(entryUrl)' "$PW" \
+    'the configured start URL is loaded on every factory entry'
+  assert_contains 'webView.alpha = if (canShowCommittedPage) 1f else 0f' "$PW" \
+    'old cached content remains hidden until the new entry page is committed'
+  assert_not_contains 'reusableCommittedPage' "$PW" \
+    'a committed cached subpage is never shown without reloading the entry URL'
+  assert_not_contains 'reusablePendingPage' "$PW" \
+    'cached views follow one deterministic entry reload path'
+  assert_contains 'tab / 子页' "$PSC" \
+    'PanelScreen documents that previous SPA tabs are not retained'
+  if python3 - "$REPO/$PW" <<'PY9'
+import sys
+s = open(sys.argv[1], encoding="utf-8").read()
+start = s.index("factory = { ctx ->")
+end = s.index("update = { webView ->", start)
+factory = s[start:end]
+lines = factory.splitlines()
+marker_line = next(i for i, line in enumerate(lines)
+                   if "Every cached re-entry starts at the configured entry URL" in line)
+entry_lines = lines[marker_line:]
+load_lines = [i for i, line in enumerate(entry_lines) if line.strip() == "loadUrl(entryUrl)"]
+assert len(load_lines) == 1, "entry URL must be loaded exactly once from factory"
+load_line = marker_line + load_lines[0]
+tag_line = next(i for i, line in enumerate(lines) if "contentCommitted = false" in line)
+clear_line = next(i for i, line in enumerate(lines) if "runCatching { clearHistory() }" in line)
+assert tag_line < load_line, "reset commit marker before loading"
+assert clear_line < load_line, "clear cached history before loading"
+assert "if (isReused && resetHistoryOnUrlChange)" in factory
+assert "reusableCommittedPage" not in factory and "reusablePendingPage" not in factory
+# The final load is an unconditional statement, not nested under cache-hit / reload conditions.
+assert lines[load_line].strip() == "loadUrl(entryUrl)"
+PY9
+  then
+    echo "ok  缓存重进先清 history / commit 标记，再无条件重载配置入口 URL"
+  else
+    echo "FAIL 缓存重进未保证从默认入口页开始" >&2; fail=1
+  fi
+  assert_contains 'needsCanGoBackSync = isReused' "$PW" \
     'a reattached cached view requests a one-time host canGoBack resync'
   assert_contains 'else if (last?.needsCanGoBackSync == true)' "$PW" \
     'cached-view back state is synchronized without requiring a navigation event'
@@ -793,17 +832,17 @@ PY8
     echo "FAIL 字段整理 Sort 按钮未放进 navigationIcon，或仍留在 actions" >&2; fail=1
   fi
 
-  echo "--- 0006–0007 静态检查 ---"
+  echo "--- 0006–0008 静态检查 ---"
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_cross_package_imports.py" ]]; then
     python3 "$ROOT/tools/check_cross_package_imports.py" --repo "$REPO" || {
-      echo "FAIL 跨包 import 检查（0001–0007 全序列）" >&2; fail=1; }
+      echo "FAIL 跨包 import 检查（0001–0008 全序列）" >&2; fail=1; }
   fi
   if command -v python3 >/dev/null 2>&1 && [[ -f "$ROOT/tools/check_trailing_lambda.py" ]]; then
     python3 "$ROOT/tools/check_trailing_lambda.py" --repo "$REPO" || {
-      echo "FAIL 尾随 lambda 检查（0001–0007 全序列）" >&2; fail=1; }
+      echo "FAIL 尾随 lambda 检查（0001–0008 全序列）" >&2; fail=1; }
   fi
 
-  echo "--- 0006–0007 apply -R（逆序还原） ---"
+  echo "--- 0006–0008 apply -R（逆序还原） ---"
   for ((i = ${#LATEST_PATCHES[@]} - 1; i >= 0; i--)); do
     git -C "$REPO" apply -R "${LATEST_PATCHES[$i]}" && echo "ok  已反向应用 $(basename "${LATEST_PATCHES[$i]}")"
   done
@@ -828,4 +867,4 @@ else
   echo "ok  工作区已回到干净状态"
 fi
 
-[[ $fail -eq 0 ]] && echo "PASS: app 侧补丁双向可逆、结果与基线逐文件一致（已校验到 0007）" || exit 1
+[[ $fail -eq 0 ]] && echo "PASS: app 侧补丁双向可逆、结果与基线逐文件一致（已校验到 0008）" || exit 1

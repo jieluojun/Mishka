@@ -62,10 +62,12 @@
 | --- | --- |
 | 首帧白闪 | 在 `factory` 末尾、`loadUrl()` 之前就把 `alpha` 置 0（复用实例不置），第一帧画上去的就是透明的，等 `onPageCommitVisible` 再恢复 1f。 |
 | INVISIBLE 致内容残缺 | 全程保持 `visibility = VISIBLE`，仅用 `alpha` 控制显隐。`update` 里不再写 `INVISIBLE`；同时防御性地把任何非 VISIBLE 状态拉回 VISIBLE。 |
-| 反复进入闪烁 | `WebViewPreloader` 新增「实例缓存」槽：`onRelease` 时不 destroy，调 `cache(wv, sessionKey)` 把 WebView 存下来；下次进入 factory 优先 `takeCached(sessionKey)` 取（需从旧 parent 里 `removeView` 出来），取到就直接复用——DOM/JS 状态全在，不需要再 loadUrl，也没有白屏等 commit；`sessionKey` 不匹配（用户切了面板）时旧实例在 `takeCached` 里 `stopLoading + destroy`，避免泄漏；缓存完立刻在主线程补一个预热空位，保证下次切面板总有新的实例可取。 |
+| 反复进入闪烁 | 0006 引入 `WebViewPreloader` 实例缓存，避免重复构造 Chromium；叠加 0008 后，缓存命中仍从旧 parent 摘下，但每次重进都会清空旧 history 并重载所选面板入口 URL。缓存只保留 WebView 实例，不保留上次 DOM / SPA tab；`sessionKey` 不匹配时旧实例会 `stopLoading + destroy`，避免跨面板串状态。 |
 | 复用实例首次挂上来时 canGoBack 错 | `update` 里加 `justAttached = last == null` 分支，复用实例第一次 update 时同步一次 `canGoBack`，不做 loadUrl/reload。 |
 
 ---
+
+> **后续行为更新（0008）**：上述 0006 的缓存命中最初会保留 DOM / JS 当前页；现在完整补丁序列再叠加 0008，缓存只用于复用 WebView 实例，每次重进都从所选面板入口 URL 重载，并在内容提交前保持透明、但始终 `VISIBLE`。因此既不保留上次 tab，也继续避免白闪 / SPA 合成暂停。详见 `FIX-panel-default-page-reentry.md`。
 
 ## 验证
 

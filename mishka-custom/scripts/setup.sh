@@ -15,7 +15,8 @@
 #      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐、
 #      0005 主页面板 / Web 界面（box.app 同款）+ 路由规则匹配值省略号、
 #      0006 规则编辑按钮间距 + 连接页代理类型标签 + Web 面板不闪/不缺内容，
-#      0007 字段整理按钮移到标题左侧 + 面板缓存页重进黑屏修复（沿用平台 WebView API，不加依赖）
+#      0007 字段整理按钮移到标题左侧 + 面板缓存页重进黑屏修复（沿用平台 WebView API，不加依赖），
+#      0008 面板 WebView 每次重进都重载所选面板入口页（不保留上次 tab / 子页）
 #
 # 回滚：scripts/revert-patches.sh --all
 set -euo pipefail
@@ -368,6 +369,21 @@ else
   die "补丁（0007）打不上：FileManagerEditorScreen / PanelWebView 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0007\" 看详细原因"
 fi
 
+# 0008：缓存仍用于避开 WebView 冷构造，但每次进入都从所选面板入口 URL 重新加载，
+# 清掉上次的 SPA tab / 子页与 WebView history；透明等待本次内容 commit，避免旧页闪现。
+PATCH_0008="$DELIVER/patches/app/0008-panel-reentry-default-page.patch"
+if grep -q 'Every cached re-entry starts at the configured entry URL' "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt" 2>/dev/null; then
+  ok "面板缓存重进默认页 / 历史重置（0008）已应用"
+elif git -C "$REPO" apply --check "$PATCH_0008" 2>/dev/null; then
+  git -C "$REPO" apply "$PATCH_0008"
+  ok "已应用 patches/app/0008-panel-reentry-default-page.patch"
+elif git -C "$REPO" apply --check --3way "$PATCH_0008" 2>/dev/null; then
+  git -C "$REPO" apply --3way "$PATCH_0008"
+  ok "已应用（3way 合并，注意确认 PanelScreen / PanelWebView）"
+else
+  die "补丁（0008）打不上：PanelWebView / PanelScreen 与预期 0007 基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0008\" 看详细原因"
+fi
+
 # ---------------------------------------------------------------- 6. 总结
 step "6/6 完成"
 say "  仓库状态："
@@ -377,7 +393,7 @@ cat <<EOF
   下一步：
     bash $DELIVER/scripts/build-release.sh --repo "$REPO"      # 本地出 release APK（只出 release）
     bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO"     # 校验 app 补丁可逆（只验 0001）
-    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0007 整套校验
+    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0008 整套校验
     bash $DELIVER/tools/verify_mihomo_patches.sh --kernel-dir "$KERNEL_DIR"
   回滚：
     bash $DELIVER/scripts/revert-patches.sh --repo "$REPO" --all

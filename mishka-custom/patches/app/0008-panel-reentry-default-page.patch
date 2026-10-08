@@ -1,0 +1,254 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+index 01ceea7641cd7c02cee5972ed865e69e6beca1b5..2c416a2ee50be1f0739b1e6138783d6249672025 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+@@ -82,10 +82,10 @@ import top.yukonga.miuix.kmp.window.WindowDialog
+  * 、标题与图标用 `onSurface`，和 App 其它顶栏同色系、随深浅色主题走。顶栏铺到状态栏后面，
+  * 状态栏图标外观交给 MainActivity 的主题化 enforce，不再强制。
+  *
+- * **返回进入逻辑**：相同 `sessionKey` 复用已缓存的 WebView，保留 DOM/JS 状态减少闪烁；切换面板
+- * 时增 `sessionKey` 重建，返回先退页内历史、退无可退退出页面。防白闪靠组件的
+- * `hideUntilCommitVisible`（内容提交前隐藏 WebView、只露底色），换面板加载完清 history。
+- * 无缓存时由 [WebViewPreloader] 秒建新实例。
++ * **返回进入逻辑**：相同 `sessionKey` 复用缓存 WebView 实例以减少构造开销，但每次进入都会重新
++ * 加载所选面板的入口 URL，并清空上次页内 history；不会保留上次停留的 SPA tab / 子页。
++ * 新页面 commit 前仅用 alpha 露底色，WebView 始终保持 VISIBLE，避免白闪及 Chromium 暂停渲染导致的内容缺失。
++ * 切换面板时增 `sessionKey` 隔离旧实例；无缓存时由 [WebViewPreloader] 提供预热实例。
+  *
+  * @param isDark 跟随 App 主题，交给 WebView 的算法深色
+  */
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+index bc5664fdc79f12aa9d694d4774e781d7ccb5b787..95bd0a16b6c7b0b639e3a3dd61d4375340103892 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.fillMaxSize
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.DisposableEffect
+-import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.key
+ import androidx.compose.runtime.mutableStateOf
+@@ -59,8 +58,9 @@ import java.util.concurrent.atomic.AtomicBoolean
+  * 阶段 1（后台线程，立即）：`CookieManager.getInstance()` 触发 Chromium native library 加载；
+  * 阶段 2（主线程，空闲时）：预创建 WebView 实例并暂存，不加载任何 URL、零历史。
+  *
+- * 相同 `sessionKey` 的缓存命中时直接复用已有页面；首次进入、切换面板或缓存未命中时，取预热空实例并 `loadUrl(入口)`。
+- * `new WebView()` 的 ~500ms 冷启由预热隐藏掉。用 WeakReference 暂存，避免静态持有 WebView 造成泄漏。
++ * 相同 `sessionKey` 的缓存命中时复用 WebView 实例，但每次进入都会重新加载配置的入口 URL；
++ * 首次进入、切换面板或缓存未命中时，取预热空实例并加载入口。预热缩短 `new WebView()` 冷启，
++ * 弱引用避免静态持有 WebView 造成泄漏。
+  */
+ internal object WebViewPreloader {
+     @Volatile
+@@ -226,26 +226,26 @@ private data class TagState(
+ )
+ 
+ /**
+- * 外部面板用的 WebView——基于 box.app `ThemedWebView` 移植，并补上会话缓存：
++ * 外部面板用的 WebView——基于 box.app `ThemedWebView` 移植，并补上 WebView 实例缓存：
+  *
+- *  - **相同 [sessionKey] 优先复用缓存实例**（DOM/JS 状态保留）；无缓存时取预热实例或新建并加载入口；
+- *  - **返回先退页内历史**（[backRequestKey] → `goBack`），退无可退由宿主退出页面；
+- *  - **防白闪 = [hideUntilCommitVisible]**：内容提交（`onPageCommitVisible`）前 WebView
+- *    保持隐藏，只露底色；
+- *  - **[resetHistoryOnUrlChange]**：换 [url]（切面板）加载完 `clearHistory()`，返回不会
+- *    走进上一个面板的历史；
+- *  - `key(isDark, sessionKey)` 重建：换面板 / 换深浅色都换实例。
++ *  - **同一 [sessionKey] 可复用 WebView 实例，但每次进入都从配置的入口 [url] 重新加载**；
++ *    不保留上次停留的 SPA 子页 / tab，也不保留上次 WebView history；站点 Cookie / localStorage 不清除；
++ *  - **返回先退当前这次进入后的页内历史**（[backRequestKey] → `goBack`），退无可退由宿主退出页面；
++ *  - **防闪 / 防缺内容**：新页面 commit 前只将 WebView 的 alpha 设为 0，始终保持 `VISIBLE`，
++ *    Chromium 渲染不会暂停；commit 后显露真实页面；
++ *  - **[resetHistoryOnUrlChange]**：切换 [url] 或缓存实例重进时，加载后清 history，避免回到上一面板 / 上次访问页；
++ *  - `key(isDark, sessionKey)` 重建：换面板 / 换深浅色都重新配置 WebView。
+  *
+  * 与 box.app 的差异：
+- *  1. `doUpdateVisitedHistory` 转发 canGoBack——SPA 的 pushState/回退不触发 `onPageFinished`；
++ *  1. `doUpdateVisitedHistory` 转发 canGoBack——SPA 的 pushState / 回退不触发 `onPageFinished`；
+  *  2. http(s) 导航交回 WebView（`return false`，保留 POST 语义），其余 scheme 交系统；
+- *  3. `onRelease` 只停止加载并交给 [WebViewPreloader] 缓存；同一面板下次进入复用，不再反复冷启动。
++ *  3. `onRelease` 停止加载并缓存实例；缓存只复用 Chromium / WebView 实例，每次重进仍重载入口。
+  *
+  * @param reloadKey 自增即触发一次 `reload()`
+- * @param sessionKey 自增即销毁重建 WebView（切面板时用）
+- * @param backRequestKey 自增即 `goBack()`（供返回手势/系统返回回调）
+- * @param hideUntilCommitVisible true 时内容提交前隐藏 WebView（去白闪），默认开启
+- * @param resetHistoryOnUrlChange true 时换 URL 加载完清 history（返回不进上一个面板）
++ * @param sessionKey 面板切换时自增，隔离不同面板的 WebView 实例
++ * @param backRequestKey 自增即 `goBack()`（供返回手势 / 系统返回回调）
++ * @param hideUntilCommitVisible true 时内容 commit 前仅透明显示底色，不暂停 WebView 渲染
++ * @param resetHistoryOnUrlChange true 时切换 URL / 缓存重进后清 history
+  */
+ @SuppressLint("SetJavaScriptEnabled")
+ @Composable
+@@ -267,12 +267,8 @@ fun PanelWebView(
+     val scope = rememberCoroutineScope()
+     val surfaceColor = if (isDark) Color.BLACK else Color.WHITE
+ 
+-    // 内容是否已提交可见（hideUntilCommitVisible 的开关）。放稳定 holder、key 化重置：
+-    // 记忆化 WebViewClient 闭包抓 State 实例，remember(url…) 换实例会让回调写到旧对象上
+-    val contentVisible = remember { mutableStateOf(!hideUntilCommitVisible) }
+-    LaunchedEffect(url, isDark, hideUntilCommitVisible) {
+-        contentVisible.value = !hideUntilCommitVisible
+-    }
++    // 可见提交状态保存在 WebView.tag：缓存实例跨 Compose 屏幕生命周期仍可准确标记，
++    // 但每次重进会先重置为未提交，再加载入口 URL，旧 tab 不会先闪出来。
+     // 换 URL 的加载完成后清一次 history（box.app resetHistoryOnUrlChange）
+     val clearHistoryAfterNextPageFinished = remember { AtomicBoolean(false) }
+ 
+@@ -425,10 +421,10 @@ fun PanelWebView(
+             }
+ 
+             override fun onPageCommitVisible(view: WebView?, url: String?) {
+-                // 防白闪的关键帧：真实内容已提交，可以露出来了；把事实写进 WebView tag，
+-                // 下次从缓存复用时 Compose 的 remember 状态已重建，仍能判断这页是否可直接显示。
+-                contentVisible.value = true
++                // 首屏真实内容已提交：把标记写入 WebView.tag 并显露；在此之前保持 alpha=0，
++                // 但 WebView 一直为 VISIBLE，避免暂停 Chromium 合成造成 SPA 内容缺失。
+                 markContentCommitted(view)
++                view?.alpha = 1f
+             }
+ 
+             override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+@@ -437,8 +433,9 @@ fun PanelWebView(
+             }
+ 
+             override fun onPageFinished(view: WebView?, url: String?) {
+-                contentVisible.value = true
++                // 兼容没有 onPageCommitVisible 回调的路径，结束加载后也允许显示页面。
+                 markContentCommitted(view)
++                view?.alpha = 1f
+                 // 换 URL 的那次加载完成后清 history：canGoBack 回报的是清完后的值
+                 if (clearHistoryAfterNextPageFinished.getAndSet(false)) {
+                     runCatching { view?.clearHistory() }
+@@ -558,20 +555,12 @@ fun PanelWebView(
+                     // 先取到面板入口 URL：apply 的 receiver 是 WebView，它自己就有个
+                     // getUrl() 属性，里面裸写 `url` 会被它遮蔽成「当前页地址」
+                     val entryUrl = url
+-                    // 优先取「上次离开时缓存的同一个实例」（DOM/JS 状态保留，无闪无重载）；
+-                    // 否则取预热的空实例；再 fallback 到新建。复用实例需要把它从原父容器
+-                    // 里摘掉（Android View 只能有一个 parent），旧 parent 是上次离开前
+-                    // 还没 detach 掉的 Compose 容器——removeView 让它归新容器管。
++                    // 复用上次离开的同一面板 WebView，避免反复构造 Chromium；但不能沿用上次的
++                    // SPA 子页 / tab：每次进入都重新加载该面板配置的入口 URL。先从旧容器摘下，
++                    // 再清历史、压低 alpha，避免旧页闪现或系统返回落回上一轮。
+                     val reused = WebViewPreloader.takeCached(sessionKey)?.also { wv ->
+                         (wv.parent as? ViewGroup)?.removeView(wv)
+                     }
+-                    val reusedTag = reused?.tag as? TagState
+-                    val reusableCommittedPage = reusedTag?.let {
+-                        it.url == entryUrl && it.reloadKey == reloadKey && it.contentCommitted
+-                    } == true
+-                    val reusablePendingPage = reusedTag?.let {
+-                        it.url == entryUrl && it.reloadKey == reloadKey && !it.contentCommitted
+-                    } == true
+                     (reused ?: WebViewPreloader.take() ?: WebView(ctx)).apply {
+                         layoutParams = ViewGroup.LayoutParams(
+                             ViewGroup.LayoutParams.MATCH_PARENT,
+@@ -625,42 +614,26 @@ fun PanelWebView(
+                         setBackgroundColor(if (isDark) Color.BLACK else Color.WHITE)
+ 
+                         val isReused = reused === this
+-                        // 防首帧白闪：新页面或尚未提交过内容的缓存实例先透明，真实页面 commit 后再显露。
+-                        // 关键是不能只看 Compose 的 contentVisible——返回重进会重建它，缓存 WebView 的 tag
+-                        // 才是页面是否已提交的稳定记录。成功渲染过且 URL / reloadKey 未变时直接展示缓存页；
+-                        // 上次还没 commit 的实例则从入口重新 load，避免 alpha 永久为 0。
+-                        if (hideUntilCommitVisible) {
+-                            this.alpha = if (reusableCommittedPage) 1f else 0f
+-                        } else {
+-                            this.alpha = 1f
+-                        }
+-
+-                        when {
+-                            !isReused -> {
+-                                tag = TagState(reloadKey, entryUrl, backRequestKey)
+-                                loadUrl(entryUrl)
+-                            }
++                        // 关键：任何新实例/缓存实例都先透明，不能因为上次已经 commit 就直接显示旧 tab。
++                        // 只有本次入口 URL 的内容 commit 后才由 WebViewClient 把 alpha 恢复为 1。
++                        this.alpha = if (hideUntilCommitVisible) 0f else 1f
+ 
+-                            reusableCommittedPage -> {
+-                                tag = reusedTag!!.copy(needsCanGoBackSync = true)
+-                            }
+-
+-                            reusablePendingPage -> {
+-                                tag = TagState(
+-                                    reloadKey = reloadKey,
+-                                    url = entryUrl,
+-                                    backRequestKey = backRequestKey,
+-                                    needsCanGoBackSync = true,
+-                                )
+-                                loadUrl(entryUrl)
+-                            }
+-
+-                            else -> {
+-                                // URL / reloadKey 已变：保留旧 tag 让 update 分支负责清 history / reload；
+-                                // alpha 已先置 0，旧页面不会在新入口加载前闪出来。
+-                                reusedTag?.let { tag = it.copy(needsCanGoBackSync = true) }
+-                            }
++                        if (isReused && resetHistoryOnUrlChange) {
++                            // 先清上次会话的 history，再在本次 entry load 完成后清一次新旧边界。
++                            clearHistoryAfterNextPageFinished.set(true)
++                            runCatching { clearHistory() }
+                         }
++                        // [mishka-custom] Every cached re-entry starts at the configured entry URL.
++                        // 重置提交标记与 backRequestKey 后，无条件重新 loadUrl(entryUrl)：复用仅保留
++                        // WebView / Cookie / localStorage，不保留上次浏览位置与页内返回栈。
++                        tag = TagState(
++                            reloadKey = reloadKey,
++                            url = entryUrl,
++                            backRequestKey = backRequestKey,
++                            contentCommitted = false,
++                            needsCanGoBackSync = isReused,
++                        )
++                        loadUrl(entryUrl)
+                     }
+                 },
+                 update = { webView ->
+@@ -684,10 +657,10 @@ fun PanelWebView(
+                     val backRequested = last?.backRequestKey != backRequestKey
+                     val canShowCommittedPage = tagMatchesUrl && last?.contentCommitted == true
+ 
+-                    // 防白闪：新内容 commit 前用 alpha 露底色，而不是 INVISIBLE/GONE（后者会暂停 Chromium
+-                    // 的合成）；缓存页则根据 WebView tag 里跨 Compose 生命周期保留的 commit 标记显示。
++                    // 防白闪 / 内容缺失：新内容 commit 前用 alpha 露底色，而不是 INVISIBLE/GONE；
++                    // 提交标记来自当前 WebView tag，不依赖离开页面后已销毁的 Compose remember 状态。
+                     if (hideUntilCommitVisible) {
+-                        webView.alpha = if (canShowCommittedPage || (tagMatchesUrl && contentVisible.value)) 1f else 0f
++                        webView.alpha = if (canShowCommittedPage) 1f else 0f
+                     } else {
+                         webView.alpha = 1f
+                     }
+@@ -696,7 +669,6 @@ fun PanelWebView(
+                     }
+ 
+                     if (urlChanged) {
+-                        contentVisible.value = !hideUntilCommitVisible
+                         webView.alpha = if (hideUntilCommitVisible) 0f else 1f
+                         if (resetHistoryOnUrlChange) {
+                             clearHistoryAfterNextPageFinished.set(true)
+@@ -705,7 +677,6 @@ fun PanelWebView(
+                         webView.tag = TagState(reloadKey, url, backRequestKey)
+                         webView.loadUrl(url)
+                     } else if (needsReload) {
+-                        contentVisible.value = !hideUntilCommitVisible
+                         webView.alpha = if (hideUntilCommitVisible) 0f else 1f
+                         webView.tag = TagState(reloadKey, url, backRequestKey)
+                         webView.reload()
+@@ -725,11 +696,9 @@ fun PanelWebView(
+                     }
+                 },
+                 onRelease = { released ->
+-                    // 离开本页时把 WebView 缓存起来，下次同样 sessionKey 再进直接复用：
+-                    // SPA 面板的 DOM/JS 状态保留在内存里，就不会「每次进入都白屏等 commit」。
+-                    // stopLoading 只防残留网络回调操作一个已脱离窗口的 WebView，不 destroy——
+-                    // 缓存命中要重新挂回 parent。切面板（sessionKey 变）时 takeCached 会自行
+-                    // discard 掉旧实例。
++                    // 缓存实例以避免重复构造 WebView；下次挂载时会重置 tag/history 并重新加载
++                    // 配置的入口 URL，因此 SPA 上次打开的 tab 不会跨次进入保留。
++                    // 先停请求，避免脱离窗口后继续回调；切换 sessionKey 时由 takeCached 丢弃旧实例。
+                     runCatching { released.stopLoading() }
+                     WebViewPreloader.cache(released, sessionKey)
+                 },

@@ -114,3 +114,8 @@ patch0006_sha256=d0dee8edabb0df0f19ec14124d70d69ea5caa08b1637bc164ff4bcb254f893c
 # 同步恢复 canGoBack。Sort 按钮放在返回键之后、config.yaml 文件名之前，保留原来的整理行为；不引入新依赖。
 patch0007_prereq=0001,0002,0003,0004,0005,0006
 patch0007_sha256=5a55cf1d214e606f8851b17a242002f7f52d4c7886a7c5e8f2685f4078e80ed4
+
+# --- 0008：面板 WebView 每次重进都从所选面板入口 URL 开始（在 0001–0007 之上应用）---
+# 复用缓存 WebView 以避开冷构造，但每次挂载重载入口并清 history；alpha 等待 commit，且始终 VISIBLE。
+patch0008_prereq=0001,0002,0003,0004,0005,0006,0007
+patch0008_sha256=250c65ae95c8402878cfffd8a59485f1338d75652f00b79e40def44035ddd7e3
