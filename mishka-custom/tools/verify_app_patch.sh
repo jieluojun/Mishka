@@ -152,6 +152,15 @@ assert_contains 'colors = ButtonDefaults.textButtonColorsPrimary()' \
 assert_contains 'if (field.type == FormFieldType.BOOL && !tri) setSwitchValue(!switchShown)' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
   'tapping anywhere on a boolean switch row toggles it'
+assert_contains 'private val freshDoc: () -> YamlDoc' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'form writeback rebases on fresh editor text (bug-2 no lost taps)'
+assert_contains 'FormHost(doc, ::apply, fileBaseDir) { YamlDoc.parse(controller.getText()) }' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'panel feeds FormHost live controller text (bug-2 no lost taps)'
+assert_not_contains 'commit(YamlPatch' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
+  'no stale-base commit call sites remain (bug-2 no lost taps)'
 assert_contains '0.0.0.0' \
   app/src/main/res/values-zh-rCN/strings.xml \
   'Chinese external-control hint warns about wildcard unauthenticated exposure'

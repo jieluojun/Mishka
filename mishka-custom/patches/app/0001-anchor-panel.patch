@@ -4414,10 +4414,10 @@ index 0000000..d4c6508
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
 new file mode 100644
-index 0000000..86ced72
+index 0000000..fb345ab
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
-@@ -0,0 +1,1515 @@
+@@ -0,0 +1,1537 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -4527,7 +4527,8 @@ index 0000000..86ced72
 +        showToast(toast)
 +    }
 +
-+    val host = remember(doc, fileBaseDir) { FormHost(doc, ::apply, fileBaseDir) }
++    // bug-2：写回基准取编辑器当前文本（freshDoc），两次点按落在同一重组窗口时也不丢写回
++    val host = remember(doc, fileBaseDir) { FormHost(doc, ::apply, fileBaseDir) { YamlDoc.parse(controller.getText()) } }
 +    val route = nav.current
 +
 +    WindowBottomSheet(
@@ -4623,6 +4624,13 @@ index 0000000..86ced72
 +    private val applyText: (newText: String, toast: String, revealLine1: Int?) -> Unit,
 +    /** 当前编辑文件所属订阅的 imported/ 目录；file 类型合集的源文件上传 / 编辑靠它落盘。null = 无文件能力。 */
 +    val fileBaseDir: String? = null,
++    /**
++     * 写回基准：编辑器**当前**文本实时解析出的文档。读路径用组合快照 [doc] 即可，
++     * 但写路径必须以 fresh 为准——两次点按若落在同一个重组窗口里，`doc` 已旧，
++     * 用旧基准算整篇 dump 再全量替换，会静默吞掉前一次的改动（bug-2：连点丢写回）。
++     * 点按处理在 UI 线程同步执行，fresh→算 dump→替换是原子的，天然关闭竞态。
++     */
++    private val freshDoc: () -> YamlDoc = { doc },
 +) {
 +    /** 行级手术（锚点继承等）的落地通道：整篇替换，与 set / batch 同一套「无变化」提示。 */
 +    fun applyRawText(newText: String, label: String, revealLine1: Int? = null): Boolean {
@@ -4639,13 +4647,13 @@ index 0000000..86ced72
 +        showToast("$label 未改动：这个位置不能这样写，请在编辑器里直接改这一段", long = true)
 +    }
 +
-+    private fun commit(out: YamlDoc, label: String, verb: String, reveal: YPath?): Boolean {
-+        if (out === doc) {
++    private fun commit(base: YamlDoc, out: YamlDoc, label: String, verb: String, reveal: YPath?): Boolean {
++        if (out === base) {
 +            refuse(label)
 +            return false
 +        }
 +        val dumped = out.dump()
-+        if (dumped == doc.dump()) {
++        if (dumped == base.dump()) {
 +            showToast("$label 没有变化")
 +            return false
 +        }
@@ -4654,45 +4662,57 @@ index 0000000..86ced72
 +    }
 +
 +    fun set(path: YPath, value: Any?, label: String): Boolean {
-+        if (!doc.canSet(path)) {
++        // bug-2：可写性检查、写穿/物化、commit 对比全程用 fresh 基准（见 freshDoc 注释）
++        val base = freshDoc()
++        if (!base.canSet(path)) {
 +            showToast("$label 不在可编辑位置（该路径下面是纯值 / 别名），请在编辑器里直接改", long = true)
 +            return false
 +        }
 +        // 继承感知：值来自 `<<:` 继承时按参考实现写穿锚点 / 物化整块，绝不建半块本地映射顶掉继承内容
-+        val w = AnchorInheritance.applySetAware(doc, path, value)
++        val w = AnchorInheritance.applySetAware(base, path, value)
 +        val named = if (w.anchor != null) "$label（已同步到锚点 &${w.anchor}，继承它的所有条目一起生效）" else label
-+        return commit(w.doc, named, "已写入", w.path)
++        return commit(base, w.doc, named, "已写入", w.path)
 +    }
 +
 +    fun clear(path: YPath, label: String): Boolean {
-+        if (doc.get(path) == null) {
-+            if (FormValues.hasEffective(doc, path)) {
++        val base = freshDoc()
++        if (base.get(path) == null) {
++            if (FormValues.hasEffective(base, path)) {
 +                showToast("$label 来自锚点继承，本地没有可删的行：直接填入新值即可覆盖，或在「锚点与继承」里解除继承", long = true)
 +            } else showToast("$label 本来就没有设置")
 +            return false
 +        }
-+        return commit(YamlPatch.removeKey(doc, path), label, "已清空", null)
++        return commit(base, YamlPatch.removeKey(base, path), label, "已清空", null)
 +    }
 +
-+    fun insertItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean =
-+        commit(YamlPatch.insertItem(doc, seqPath, index, value), label, "已新增", seqPath + index)
++    fun insertItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean {
++        val base = freshDoc()
++        return commit(base, YamlPatch.insertItem(base, seqPath, index, value), label, "已新增", seqPath + index)
++    }
 +
-+    fun setItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean =
-+        commit(YamlPatch.setItem(doc, seqPath, index, value), label, "已写入", seqPath + index)
++    fun setItem(seqPath: YPath, index: Int, value: Any?, label: String): Boolean {
++        val base = freshDoc()
++        return commit(base, YamlPatch.setItem(base, seqPath, index, value), label, "已写入", seqPath + index)
++    }
 +
-+    fun removeItem(seqPath: YPath, index: Int, label: String): Boolean =
-+        commit(YamlPatch.removeItem(doc, seqPath, index), label, "已删除", null)
++    fun removeItem(seqPath: YPath, index: Int, label: String): Boolean {
++        val base = freshDoc()
++        return commit(base, YamlPatch.removeItem(base, seqPath, index), label, "已删除", null)
++    }
 +
-+    fun moveItem(seqPath: YPath, from: Int, to: Int, label: String): Boolean =
-+        commit(YamlPatch.moveItem(doc, seqPath, from, to), label, "已移动", seqPath + to)
++    fun moveItem(seqPath: YPath, from: Int, to: Int, label: String): Boolean {
++        val base = freshDoc()
++        return commit(base, YamlPatch.moveItem(base, seqPath, from, to), label, "已移动", seqPath + to)
++    }
 +
 +    fun rename(path: YPath, newKey: String, label: String): Boolean {
-+        val parent = doc.get(path.dropLast(1))
-+        if (parent != null && doc.findEntry(parent, newKey) != null) {
++        val base = freshDoc()
++        val parent = base.get(path.dropLast(1))
++        if (parent != null && base.findEntry(parent, newKey) != null) {
 +            showToast("已经有叫「$newKey」的了，换个名字", long = true)
 +            return false
 +        }
-+        return commit(YamlPatch.renameKey(doc, path, newKey), label, "已改名", path.dropLast(1) + newKey)
++        return commit(base, YamlPatch.renameKey(base, path, newKey), label, "已改名", path.dropLast(1) + newKey)
 +    }
 +
 +    /**
@@ -4701,7 +4721,9 @@ index 0000000..86ced72
 +     * [BatchOp.Remove] 对不存在的键是空操作。
 +     */
 +    fun batch(ops: List<BatchOp>, label: String, verb: String = "已写入", reveal: YPath? = null): Boolean {
-+        var cur = doc
++        // bug-2：与 set() 同理，整批从 fresh 基准起算（commit 的无变化对比也以它为准）
++        val base = freshDoc()
++        var cur = base
 +        var touched = false
 +        val syncedAnchors = LinkedHashSet<String>()
 +        for (op in ops) {
@@ -4743,7 +4765,7 @@ index 0000000..86ced72
 +            val names = syncedAnchors.joinToString("、") { "&$it" }
 +            "$label（已同步到锚点 $names，继承它的所有条目一起生效）"
 +        }
-+        return commit(cur, named, verb, reveal)
++        return commit(base, cur, named, verb, reveal)
 +    }
 +
 +    // ---- 动态候选（下拉 / 多选里的节点名、代理组名、集合名）

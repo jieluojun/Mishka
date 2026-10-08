@@ -1,3 +1,30 @@
+# 本次改动（2026-10-08）——bug-2：连点丢写回（fresh 基准重定基）
+
+> **背景**：真机装 rebase 包后，DNS 页开关多按几次出现"不可能"状态
+> （`prefer-h3` 开着却弹 `本来就没有设置`；`respect-rules` 关着却弹 `没有变化`，
+> 且 `prefer-h3` 在两张截图之间从 present-true 变成未设置）。
+> 上一轮曾判"② 未能复现为代码缺陷"——本轮拿到用户 244 行真实配置原字节后复现成功。
+>
+> **根因**（JVM 桩 + 真引擎在用户配置上逐字复现，见 `docs/bug-2-diagnosis.md`）：
+> 两次点按落在同一个重组窗口里时，第二次写回基于**旧的 host.doc 快照**
+> 算整篇 dump 再全量替换，把第一次的改动静默吞掉——两个 `已写入` toast，
+> 只留下一处改动（键"消失"/开关"弹回"即此机制）。
+> 两个"矛盾" toast 经代码级证明不可能是开关点出来的（同一次组合里显示与
+> toast 条件互斥），只能是 DNS 页其它有 dialog 的行早先点按的排队延迟显示
+> （`showToast` 是裸 `Toast.makeText().show()`，FIFO 约 2 秒/条，无 single-flight）。
+>
+> **修法**：`FormHost` 写路径改以**新鲜文本**为基准——新增 `freshDoc` 参数，
+> 面板传入 `{ YamlDoc.parse(controller.getText()) }`；`set/clear/insertItem/
+> setItem/removeItem/moveItem/rename/batch` 的可写性检查、写穿/物化、commit
+> 对比全程用 fresh 基准。点按处理在 UI 线程同步执行，fresh→算 dump→替换
+> 是原子的，竞态关闭。无竞态时 fresh==composed，行为/toast 与修复前逐字相同；
+> 唯一 toast 变化是 stale 双点第二下从"已写入（回声）"变为诚实的"没有变化"。
+> `applyRawText` 调用方均为 modal dialog（串行化，天然安全），不动；全局 toast
+> 排队是标准安卓行为，不动。
+>
+> `verify_app_patch.sh` 新增 3 条断言（freshDoc 存在 / 面板传入 live 文本 /
+> 旧 commit 调用点消除），185 项全过。`BASELINE.txt` 随新补丁更新。
+
 # 本次改动（2026-10-08）——补丁变基到 c94f3bc（修 CI 冲突）
 
 > **背景**：CI 在 `setup.sh` 5/6 步失败：`MihomoApiClient.kt` 三方合并冲突。
