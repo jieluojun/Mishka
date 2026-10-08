@@ -13,7 +13,8 @@
 #   4. 应用 app 侧补丁 patches/app/0001-anchor-panel.patch（自定义编辑器 + 订阅页可视化配置入口迁移），
 #      随后依次叠加 0002 内置「免流」配置、0003 可视化编辑器修复、
 #      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐、
-#      0005 主页面板 / Web 界面（box.app 同款）+ 路由规则匹配值省略号
+#      0005 主页面板 / Web 界面（box.app 同款）+ 路由规则匹配值省略号、
+#      0006 规则编辑按钮间距 + 连接页代理类型标签 + Web 面板不闪/不缺内容
 #
 # 回滚：scripts/revert-patches.sh --all
 set -euo pipefail
@@ -332,6 +333,25 @@ else
   die "面板补丁（0005）打不上：custom/panel、navigation 或 home 下的文件与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0005\" 看详细原因"
 fi
 
+# 0006 在 0005 之上：三个小修复——
+#  1) 规则编辑对话框「切换为可视化编辑」按钮与输入框之间补 8dp 垂直间距；
+#  2) 连接列表每条 TCP/UDP 标签后追加代理类型标签（TUN/TPROXY/EBPF，取 metadata.type）；
+#  3) Web 界面面板反复返回/进入闪烁 + 内容缺失：factory 首帧即置 alpha=0 去白闪、
+#     去掉 INVISIBLE（Chromium 在 INVISIBLE 下会暂停合成，SPA 首屏易残缺）、
+#     WebView 实例跨进入缓存复用（同 sessionKey 再进不再 destroy→new→loadUrl）。
+PATCH_0006="$DELIVER/patches/app/0006-fixes-editor-margin-conn-proxytype-panel-flicker.patch"
+if grep -q "takeCached" "$REPO/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt" 2>/dev/null; then
+  ok "规则编辑间距 / 连接代理类型 / 面板不闪（0006）已应用"
+elif git -C "$REPO" apply --check "$PATCH_0006" 2>/dev/null; then
+  git -C "$REPO" apply "$PATCH_0006"
+  ok "已应用 patches/app/0006-fixes-editor-margin-conn-proxytype-panel-flicker.patch（按钮间距 + 代理类型标签 + 面板不闪）"
+elif git -C "$REPO" apply --check --3way "$PATCH_0006" 2>/dev/null; then
+  git -C "$REPO" apply --3way "$PATCH_0006"
+  ok "已应用（3way 合并，注意确认 FlowFormPages / ConnectionScreen / PanelWebView 的改动）"
+else
+  die "修复补丁（0006）打不上：规则编辑 / 连接列表 / PanelWebView 与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0006\" 看详细原因"
+fi
+
 # ---------------------------------------------------------------- 6. 总结
 step "6/6 完成"
 say "  仓库状态："
@@ -341,7 +361,7 @@ cat <<EOF
   下一步：
     bash $DELIVER/scripts/build-release.sh --repo "$REPO"      # 本地出 release APK（只出 release）
     bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO"     # 校验 app 补丁可逆（只验 0001）
-    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0005 整套校验（含 0004 / 0005 断言）
+    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0006 整套校验
     bash $DELIVER/tools/verify_mihomo_patches.sh --kernel-dir "$KERNEL_DIR"
   回滚：
     bash $DELIVER/scripts/revert-patches.sh --repo "$REPO" --all

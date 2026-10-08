@@ -97,3 +97,15 @@ patch0005_blob_new=a031029de0fab172a031522c3fac2d85390c3b2c app/src/main/kotlin/
 patch0005_blob_new=199e71c370e100dc3c33b9d8802801a447c2d807 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelStore.kt
 patch0005_blob_new=1769d75b488fc4fa4085445501b85783959af1e6 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 # tools/verify_app_patch.sh --series 会按 0002 → 0003 → 0004 → 0005 的顺序把后续补丁也应用上并跑各自的断言。
+# --- 0006：三个小修复（在 0001–0005 之上应用）---
+# 1. 规则编辑对话框「切换为可视化编辑/文本编辑」按钮与下面输入框之间补 8dp 垂直间距；
+# 2. 连接列表每条的 TCP/UDP 网络标签后追加代理类型标签（TUN/TPROXY/EBPF，取自 metadata.type），
+#    用 primary 色胶囊和网络标签并排；与 network 重复或为空时不显示；
+# 3. Web 界面面板反复返回/进入闪烁 + 内容缺失：
+#    - factory 构造完 WebView 立刻将 alpha 置 0（而不是等 update 重组才设），去掉首帧白底；
+#    - 不再用 INVISIBLE 隐藏——INVISIBLE 会让 Chromium 暂停渲染/合成，SPA 面板首屏资源未落完
+#      即被暂停时会出现「画布空/部分 DOM 缺失」的现象；全程保持 VISIBLE，仅用 alpha 控制显隐；
+#    - 新增「实例缓存」：离开面板时缓存 WebView，下次同 sessionKey 进入直接复用（DOM/JS 状态保留），
+#      不再每次 destroy→new→loadUrl；切面板（sessionKey 变化）时旧实例自动销毁，同时补一个预热空位。
+patch0006_prereq=0001,0002,0003,0004,0005
+patch0006_sha256=d0dee8edabb0df0f19ec14124d70d69ea5caa08b1637bc164ff4bcb254f893cf
