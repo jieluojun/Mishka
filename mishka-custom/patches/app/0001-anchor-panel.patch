@@ -6514,10 +6514,10 @@ index 0000000..537f72b
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 new file mode 100644
-index 0000000..934bf18
+index 0000000..c3bee29
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
-@@ -0,0 +1,552 @@
+@@ -0,0 +1,576 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.animation.core.CubicBezierEasing
@@ -6669,6 +6669,15 @@ index 0000000..934bf18
 +    private var containerTop = 0f
 +    private var containerBottom = 0f
 +    private var scrollBy: ((Float) -> Float)? = null
++    /**
++     * 边缘自动翻滚的卡住记忆：某方向滚到头（上一帧实际消耗≈0）后就不再喂 delta。
++     * 到头还每帧喂，Lazy 的 stretch overscroll 会被反复触发，内容在边界上持续回弹抖动，
++     * 行身段也被拉伸带偏（拖到底部条目到顶部不松手时的回弹 + 虚线框闪烁即此机制）。
++     * 第一帧照旧喂一次（天然的"到头"反馈），之后跳过；手指离开该边缘 / 换向 /
++     * 本次拖动结束即清零。step() 不受影响（照旧每帧跑，冻在半路的行照样追上来）。
++     */
++    private var stuckUp = false
++    private var stuckDown = false
 +    private val tops = HashMap<Int, Float>()
 +    private val heights = HashMap<Int, Float>()
 +    private val handleCoords = HashMap<Int, LayoutCoordinates>()
@@ -6840,6 +6849,8 @@ index 0000000..934bf18
 +        dragging = -1
 +        fingerY = 0f
 +        draggingHeight = 0f
++        stuckUp = false
++        stuckDown = false
 +        val moved = reordered && to >= 0 && to != from
 +        flipSuppressed = true   // 提交帧：键位随数据整体重排，这一帧不做位移动画（下一帧恢复）
 +        resetOrder()            // 视觉顺序已由宿主接住（或本次没换过位）：恢复恒等序，行不会跳
@@ -6899,10 +6910,23 @@ index 0000000..934bf18
 +        val edge = (span * 0.15f).coerceIn(edgeMin, edgeMax)
 +        val up = (containerTop + edge) - fingerY
 +        val down = fingerY - (containerBottom - edge)
-+        if (up <= 0f && down <= 0f) return
++        if (up <= 0f && down <= 0f) {
++            stuckUp = false
++            stuckDown = false
++            return
++        }
++        if (up <= 0f) stuckUp = false
++        if (down <= 0f) stuckDown = false
 +        val depth = maxOf(up, down).coerceIn(0f, edge)
 +        val v = velMin + (depth / edge) * velRange
-+        scroller(if (up > down) -v else v)
++        val goUp = up > down
++        if (!(goUp && stuckUp) && !(!goUp && stuckDown)) {
++            val consumed = scroller(if (goUp) -v else v)
++            // 滚到头后不再喂 delta（见 stuckUp/stuckDown 注释）；第一帧照旧喂一次。
++            if (abs(consumed) < 0.5f) {
++                if (goUp) stuckUp = true else stuckDown = true
++            }
++        }
 +        // 即使已到滚动尽头（scroller 返回 0）也要 step：手指静止 + 列表到头时，
 +        // 跳过 step 会让还没追上手指的行永远冻在半路（松手落点与手指位置对不上，
 +        // 被拖行还可能停在视口外“看不见”）。step 是幂等的（已在手指档位就是空操作），
@@ -21224,7 +21248,7 @@ index d3f9631..91c33aa 100644
              )
              .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp),
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
-index b1b2479..7da18ac 100644
+index b1b2479..7a79eb3 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 @@ -31,6 +31,8 @@ import top.yukonga.mishka.platform.ProfileFileManager
@@ -21298,7 +21322,17 @@ index b1b2479..7da18ac 100644
                          val canSave = controller.isModified && !isSaving && fileManager != null
                          IconButton(
                              enabled = canSave,
-@@ -192,6 +222,25 @@ fun FileManagerEditorScreen(
+@@ -127,6 +157,9 @@ fun FileManagerEditorScreen(
+                                         if (errMsg == null) {
+                                             controller.markSaved(version)
+                                             showToast(context.getString(R.string.file_manager_saved))
++                                            // 手动保存后请求生效：mihomo 只在启动时读一次配置，
++                                            // 不重启的话改动静默不生效（active 才动，没跑就不拉起）。
++                                            subscriptionViewModel?.notifyProfileEdited(uuid)
+                                         } else {
+                                             showToast(context.getString(R.string.file_manager_save_failed, errMsg), long = true)
+                                         }
+@@ -192,6 +225,25 @@ fun FileManagerEditorScreen(
                          .weight(1f),
                  )
              }
@@ -22205,7 +22239,7 @@ index f684c37..4896268 100644
          const val GLOBAL_GROUP = "GLOBAL"
          const val MODE_GLOBAL = "global"
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-index ef9b641..91a7411 100644
+index ef9b641..7dd36e8 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 @@ -2,27 +2,40 @@ package top.yukonga.mishka.viewmodel
@@ -22395,6 +22429,24 @@ index ef9b641..91a7411 100644
      /**
       * 取消当前正在进行的订阅 Pipeline（导入 / 更新 / 编辑 / 复制）。
       *
+@@ -157,6 +297,17 @@ class SubscriptionViewModel(
+         }
+     }
+ 
++    /**
++     * 手动编辑订阅文件保存成功后请求生效。与覆写编辑同一口径：手动保存是显式意图，
++     * 不走「更新后重启」设置（那是给后台自动更新准备的）；只要求改的是 active 订阅——
++     * 改没在跑的订阅时不动正在跑的代理（下次切过去自然读到新内容），代理没跑时也不拉起来
++     * （[ProxyServiceController.restartWhenReady] 负责收敛判断）。
++     */
++    fun notifyProfileEdited(id: String) {
++        if (repository.getActiveId() != id) return
++        serviceController.restartWhenReady(id)
++    }
++
+     /**
+      * 删除订阅。删的若是 active，[onActiveChanged] 要等 DB 与文件都落定后才回调——
+      * `repository.delete` 会静默把 active 挪到剩余第一条，提前回调会让重启拿到刚删掉的 uuid。
 diff --git a/app/src/main/native/mishka_core/runtime_test.go b/app/src/main/native/mishka_core/runtime_test.go
 index df86317..fbb6aa5 100644
 --- a/app/src/main/native/mishka_core/runtime_test.go

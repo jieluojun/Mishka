@@ -161,6 +161,15 @@ assert_contains 'FormHost(doc, ::apply, fileBaseDir) { YamlDoc.parse(controller.
 assert_not_contains 'commit(YamlPatch' \
   app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt \
   'no stale-base commit call sites remain (bug-2 no lost taps)'
+assert_contains 'fun notifyProfileEdited(id: String)' \
+  app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt \
+  'manual profile edits request a restart when active (edits take effect)'
+assert_contains 'subscriptionViewModel?.notifyProfileEdited(uuid)' \
+  app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt \
+  'editor save triggers the restart request (edits take effect)'
+assert_contains 'stuckUp = false' \
+  app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt \
+  'drag auto-scroll stops feeding deltas at the boundary (no bounce loop)'
 assert_contains '0.0.0.0' \
   app/src/main/res/values-zh-rCN/strings.xml \
   'Chinese external-control hint warns about wildcard unauthenticated exposure'
