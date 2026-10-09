@@ -103,10 +103,12 @@ patch0005_blob_new=1769d75b488fc4fa4085445501b85783959af1e6 app/src/main/kotlin/
 #    用 primary 色胶囊和网络标签并排；与 network 重复或为空时不显示。
 patch0006_prereq=0001,0002,0003,0004,0005
 patch0006_sha256=9a7ce3bd7aebef50442fbb2c409fcec9357ebd910d15f7cff75af6741afcac4c
-# --- 0007：字段整理按钮移到文件名左侧（在 0001–0006 之上应用）---
-# Sort 按钮放在返回键之后、config.yaml 文件名之前，保留原来的整理行为；不引入新依赖。
+# --- 0007：字段整理按钮移到文件名左侧 + 回退修改按钮（在 0001–0006 之上应用）---
+# Sort 按钮放在返回键之后、config.yaml 文件名之前，保留原来的整理行为；
+# 紧跟其右侧新增「回退修改」按钮（Undo），仅在编辑器内容与上次打开 / 保存的基线不一致时显示；
+# 点击后恢复到基线并把当前版本记为已保存。不引入新依赖。
 patch0007_prereq=0001,0002,0003,0004,0005,0006
-patch0007_sha256=b3d3ebfaca5a9ed9910c4c5fb52f0f5431725469d2b0d7f1a333a0a8904c9a0a
+patch0007_sha256=7213083a9f9117a4a1e68379ea8bee5a63ec744965efcc34858098d17e74e3fc
 # --- 0008：TPROXY / eBPF 子模式关闭活动配置里的 tun（在 0001–0007 之上应用）---
 # ROOT 的 TPROXY 与 eBPF 两个子模式都不初始化 sing-tun，运行时 override 里也一直是
 # tun.enable=false，但活动配置（明文 config.yaml / 订阅配置）里的 tun 仍会被补成 enable: true，
@@ -132,3 +134,12 @@ patch0009_prereq=0001,0002,0003,0004,0005,0006,0007,0008
 patch0009_sha256=4949daca27f8f0f728d68c4e3da530ffa0b386044412875397d5c48bc2e1e26d
 patch0009_blob_new=89a0fc21c1d02369e859c389e69a1c10b5e63d29 app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt
 patch0009_blob_new=4055f3cc1e20cf48dda4e1ffc2069b635fdfdd9e app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt
+# --- 0010：外部面板 WebView 外网请求改走 mihomo mixed-port（在 0001–0009 之上应用）---
+# 应用自身 UID 被代理规则排除（TPROXY 的 out-bypass-self / VPN 的 addDisallowedApplication），
+# 应用内 WebView 的外网请求一直直连：国外站点测出国内出口 IP、YouTube 等被墙站点测不出延迟；
+# 同机浏览器是另一个 UID，走代理正常。现在 shouldInterceptRequest 对非本机的 GET/HEAD 改由
+# HttpURLConnection(HTTP 127.0.0.1:mixed-port) 拉取并原样回交 WebView（Cookie 双向同步）。
+# 本机地址、非 GET/HEAD、代理未运行时仍直连。仅用 java.net 与平台 android.webkit，不引入新依赖。
+patch0010_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009
+patch0010_sha256=b90822154bac3036e9e92a20f39b5680bf5afdcfbbf122a832b46df762e05751
+patch0010_blob_new=7b082144dff7f7144c953de311749cf7a9c98f37 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyFetcher.kt

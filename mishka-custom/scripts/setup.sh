@@ -15,9 +15,10 @@
 #      0004 字段整理 + 列表排序 / 序号 + 批量测速对齐、
 #      0005 主页面板 / Web 界面（box.app 同款）+ 路由规则匹配值省略号、
 #      0006 规则编辑按钮间距 + 连接页代理类型标签、
-#      0007 字段整理按钮移到标题左侧（沿用平台 WebView API，不加依赖）、
+#      0007 字段整理按钮移到标题左侧 + 右侧「回退修改」按钮（仅内容有改动时显示，不加依赖）、
 #      0008 ROOT TPROXY / eBPF 子模式下把活动配置里的 tun.enable 写死 false（与运行时一致）、
-#      0009 面板改用独立 Activity 承载（换加载方式：不再挂在主界面导航栈里）
+#      0009 面板改用独立 Activity 承载（换加载方式：不再挂在主界面导航栈里）、
+#      0010 外部面板的外网请求改走 mihomo mixed-port（修国外地址测出国内 IP / YouTube 测不出延迟）
 #
 # 回滚：逆序 git apply -R（见 README.md「回滚」）
 set -euo pipefail
@@ -354,7 +355,7 @@ else
   die "修复补丁（0006）打不上：规则编辑 / 连接列表与基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0006\" 看详细原因"
 fi
 
-# 0007：把字段整理按钮放到「config.yaml」标题左侧（文件管理器编辑器）。
+# 0007：把字段整理按钮放到「config.yaml」标题左侧（文件管理器编辑器），右侧加「回退修改」按钮。
 PATCH_0007="$DELIVER/patches/app/0007-config-tidy-toolbar.patch"
 if grep -q 'fun tidyConfig()' "$REPO/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt" 2>/dev/null; then
   ok "字段整理工具栏位置（0007）已应用"
@@ -417,6 +418,22 @@ else
   die "补丁（0009）打不上：PanelActivity / App.kt / AppNavigation.kt / Route.kt 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0009\" 看详细原因"
 fi
 
+# 0010 在 0009 之上：外部面板 WebView 的外网请求改走 mihomo mixed-port（应用自身 UID 被代理规则排除，
+# 直连会测出国内出口、YouTube 测不出延迟）。新增 PanelProxyFetcher.kt，PanelWebView 挂 shouldInterceptRequest。
+PATCH_0010="$DELIVER/patches/app/0010-panel-webview-proxy.patch"
+PANEL_PROXY_REL="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyFetcher.kt"
+if [ -f "$REPO/$PANEL_PROXY_REL" ]; then
+  ok "面板外网请求走代理（0010）已应用"
+elif git -C "$REPO" apply --check "$PATCH_0010" 2>/dev/null; then
+  git -C "$REPO" apply "$PATCH_0010"
+  ok "已应用 patches/app/0010-panel-webview-proxy.patch（面板外网请求走 mihomo mixed-port）"
+elif git -C "$REPO" apply --check --3way "$PATCH_0010" 2>/dev/null; then
+  git -C "$REPO" apply --3way "$PATCH_0010"
+  ok "已应用（3way 合并，注意确认 PanelWebView 的 shouldInterceptRequest）"
+else
+  die "补丁（0010）打不上：PanelWebView 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0010\" 看详细原因"
+fi
+
 # ---------------------------------------------------------------- 6. 总结
 step "6/6 完成"
 say "  仓库状态："
@@ -427,7 +444,7 @@ cat <<EOF
     ./gradlew :app:downloadGeoFiles
     ./gradlew -I $CUSTOM_DIR_NAME/init/no-debug.init.gradle "-Pmihomo.version=alpha-smart-<sha>-with-at" :app:assembleRelease
   回滚：
-    逆序 git apply -R：patches/app/0009 → 0001，再 patches/mihomo/0007 → 0001
+    逆序 git apply -R：patches/app/0010 → 0001，再 patches/mihomo/0007 → 0001
   拉上游更新：
     先按上面回滚 → git pull → 再跑 setup.sh（每步都用 git apply --check 做过幂等判断）
 EOF

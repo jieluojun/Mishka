@@ -1,5 +1,5 @@
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
-index 6190115..181c6d2 100644
+index 6190115..e0f7e9c 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
 @@ -2,6 +2,7 @@ package top.yukonga.mishka.ui.screen.settings
@@ -18,7 +18,31 @@ index 6190115..181c6d2 100644
  import androidx.compose.ui.Modifier
  import androidx.compose.ui.graphics.Color
  import androidx.compose.ui.graphics.graphicsLayer
-@@ -90,6 +92,30 @@ fun FileManagerEditorScreen(
+@@ -50,6 +52,7 @@ import top.yukonga.miuix.kmp.icon.extended.Back
+ import top.yukonga.miuix.kmp.icon.extended.Link
+ import top.yukonga.miuix.kmp.icon.extended.Sort
+ import top.yukonga.miuix.kmp.icon.extended.Tune
++import top.yukonga.miuix.kmp.icon.extended.Undo
+ import top.yukonga.miuix.kmp.icon.extended.Ok
+ import top.yukonga.miuix.kmp.theme.MiuixTheme
+ import top.yukonga.scripta.editor.CodeEditor
+@@ -74,12 +77,15 @@ fun FileManagerEditorScreen(
+     var showAnchorPanel by remember { mutableStateOf(false) }
+     var showFormPanel by remember { mutableStateOf(false) }
+     var contentLoaded by remember(uuid, relativePath) { mutableStateOf(false) }
++    // [mishka-custom] 回退修改的基线：最近一次打开 / 保存成功时编辑器里的文本
++    var savedBaseline by remember(uuid, relativePath) { mutableStateOf("") }
+ 
+     LaunchedEffect(uuid, relativePath, fileManager) {
+         val content = withContext(Dispatchers.IO) {
+             fileManager?.readImportedFile(uuid, relativePath)
+         } ?: ""
+         controller.setDocument(content)
++        savedBaseline = controller.getText()
+         contentLoaded = true
+     }
+     LaunchedEffect(contentLoaded, showConfigFormOnOpen) {
+@@ -90,6 +96,42 @@ fun FileManagerEditorScreen(
      val blurActive = backdrop != null
      val barColor = if (blurActive) Color.Transparent else MiuixTheme.colorScheme.surface
  
@@ -46,10 +70,22 @@ index 6190115..181c6d2 100644
 +        }
 +    }
 +
++    // [mishka-custom] 回退修改：恢复到最近一次打开 / 保存的内容，并把当前版本记为已保存（按钮随之隐藏）
++    fun revertChanges() {
++        val oldLines = controller.getText().split('\n')
++        controller.replaceRange(
++            TextPosition(0, 0),
++            TextPosition(oldLines.lastIndex, oldLines.last().length),
++            savedBaseline,
++        )
++        controller.markSaved(controller.documentVersion)
++        showToast("已回退到上次保存的内容")
++    }
++
      Scaffold(
          topBar = {
              BlurredBar(backdrop = backdrop, blurActive = blurActive) {
-@@ -98,54 +124,33 @@ fun FileManagerEditorScreen(
+@@ -98,54 +140,43 @@ fun FileManagerEditorScreen(
                      title = relativePath,
                      color = barColor,
                      navigationIcon = {
@@ -118,6 +154,16 @@ index 6190115..181c6d2 100644
 +                                        tint = MiuixTheme.colorScheme.onSurface,
 +                                    )
 +                                }
++                                // [mishka-custom] 紧跟整理按钮；内容与基线一致时不显示
++                                if (controller.isModified) {
++                                    IconButton(onClick = { revertChanges() }) {
++                                        Icon(
++                                            imageVector = MiuixIcons.Undo,
++                                            contentDescription = "回退修改",
++                                            tint = MiuixTheme.colorScheme.onSurface,
++                                        )
++                                    }
++                                }
 +                            }
 +                        }
 +                    },
@@ -127,3 +173,19 @@ index 6190115..181c6d2 100644
                              IconButton(onClick = { showFormPanel = true }) {
                                  Icon(
                                      imageVector = MiuixIcons.Tune,
+@@ -169,6 +200,7 @@ fun FileManagerEditorScreen(
+                                 if (fileManager == null) return@onSave
+                                 // 版本号与文本必须同刻捕获：校验期间的继续编辑不能被 markSaved 误吞
+                                 val version = controller.documentVersion
++                                val savedText = controller.getText()
+                                 val newContent = controller.getText(controller.lineEnding)
+                                 // 取被编辑订阅的自定义 UA：校验阶段也走 in-process bridge，需要复用同一 UA
+                                 // 否则 GeoIP/provider 缺失时下载会用默认 UA 触发服务端拦截
+@@ -192,6 +224,7 @@ fun FileManagerEditorScreen(
+                                     err.onSuccess { errMsg ->
+                                         if (errMsg == null) {
+                                             controller.markSaved(version)
++                                            savedBaseline = savedText
+                                             showToast(context.getString(R.string.file_manager_saved))
+                                         } else {
+                                             showToast(context.getString(R.string.file_manager_save_failed, errMsg), long = true)
