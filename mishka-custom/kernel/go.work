@@ -1,0 +1,9 @@
+go 1.25.0
+
+// 内核换成 jieluojun/mihomo 后，mishka_core 自带的 go.sum 覆盖不到新依赖；
+// 工作区模式用本目录的 go.work.sum 补哈希，仓库里的 go.mod / go.sum 一个字节都不用改。
+// 路径由 scripts/setup.sh 按实际内核位置生成（默认 <仓库>/mihomo）。
+use (
+	./app/src/main/native/mishka_core
+	./mihomo
+)

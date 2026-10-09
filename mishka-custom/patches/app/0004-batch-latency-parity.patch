@@ -1,0 +1,221 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+index 9274894..c827044 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+@@ -128,6 +128,11 @@ class MihomoApiClient(
+     /**
+      * 整组测速：一次请求让内核并发测试完整个组。拿不到可信结果时返回空表，
+      * 交给调用方的并发补测。
++     *
++     * 返回表**逐成员保留原值**：`>0` = 测通；`0`（或负值）= 内核明确测过但不通。
++     * 0 必须留着——对齐 mihomo_box 的 testGroupAll：「0 是内核明确测过但不通，
++     * 直接显示失败，不再丢进补测空耗一轮」。过滤掉 0 会让这批节点补测一遍，
++     * 组越大浪费越多，且「隐藏不可用」要等下一次刷新才生效。
+      */
+     suspend fun getGroupDelay(
+         group: String,
+@@ -147,7 +152,7 @@ class MihomoApiClient(
+         val delays = LinkedHashMap<String, Int>(raw.size)
+         for ((name, value) in raw) {
+             val delay = (value as? JsonPrimitive)?.intOrNull ?: continue
+-            if (delay > 0) delays[name] = delay
++            delays[name] = delay
+         }
+         return delays
+     }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
+index 4896268..3713369 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
+@@ -396,14 +396,24 @@ class ProxyViewModel(
+     }
+ 
+     /**
+-     * 整组测速（对齐 mihomo_box 面板 `testGroupAll` 的并发模型）：
++     * 整组测速（逐条对齐 mihomo_box 面板 `testGroupAll`）：
+      *
+      *  ① 快路径：一次 `GET /group/{name}/delay`（`timeout=2s`，总预算 [GROUP_DELAY_BUDGET_MILLIS]）——
+-     *     并发完全发生在**内核内部**，前端只有一个请求在飞，先回来的成员直接落账；
+-     *  ② 补测：组接口没回话的成员（嵌套组、没测通的、内核拒绝组接口时）走 [BATCH_CONCURRENCY]
+-     *     路并发池，每路一次独立请求、单节点超时 [BATCH_TIMEOUT_MILLIS]，测完一路让出一次调度；
+-     *  ③ provider 节点仍走 provider 专属 healthcheck（`/proxies/{name}/delay` 对其返回 404）；
+-     *  ④ 收尾只汇总失败数：成功时延迟数字本身就是反馈，逐节点弹提示会刷屏。
++     *     并发完全发生在**内核内部**，前端只有一个请求在飞。返回的是**逐成员结论**：
++     *     `>0` 测通、`0` 内核测过但不通；两者都当场写进该组延迟（`0` → -1 显示超时），
++     *     所以「先回来的成员先显示」，不必等整批跑完；
++     *  ② 补测：**只有组接口没作答的**成员才进 [BATCH_CONCURRENCY] 路并发池（嵌套组、
++     *     内核拒绝组接口时）。测过但不通的（0）不补测——参考实现的原话：
++     *     「0 是内核明确测过但不通，直接显示失败；不再丢进补测空耗一轮」；
++     *  ③ 不可测的成员不发请求（[isSpeedTestable]，对齐参考实现的 `isProxySpeedTestable`）：
++     *     REJECT / REJECT-DROP / BLOCK / PASS / PASS-RULE / DNS 这些内置策略拨不通也没有意义；
++     *     DIRECT / COMPATIBLE 与普通节点一样要测。单个节点正在测速的也跳过（不重复拨测）；
++     *  ④ 每路结果**当场**回写并摘掉该节点的「测速中」，不等 `awaitAll`（对应参考实现的
++     *     `settleJob` → `paint`）；逐节点 loading 与组头同一时机（[PENDING_HINT_MILLIS]，对齐参考
++     *     实现的 `PENDING_HINT_MS`）点亮，且只点亮「那时还没作答的可测成员」——组接口已经作答的
++     *     成员直接显示结果，不闪 loading；
++     *  ⑤ provider 节点仍走 provider 专属 healthcheck（`/proxies/{name}/delay` 对其返回 404）；
++     *  ⑥ 收尾只汇总失败数：成功时延迟数字本身就是反馈，逐节点弹提示会刷屏。
+      *
+      * 固定了节点的组（URLTest / Fallback 的 `fixed`）跳过 ①：内核的 getGroupDelay 会先
+      * `ForceSet("")` 把用户固定好的节点拔掉（hub/route/groups.go），点一次组测速就悄悄改了
+@@ -425,27 +435,56 @@ class ProxyViewModel(
+         }
+ 
+         viewModelScope.launch {
+-            // 400ms 内回来的结果不亮「测速中」：内核组接口经常不到 1s 就返回，闪一下反而像卡住
++            // 本批标过「测速中」的节点：收尾（含取消 / repo 切换）时要逐个摘掉
++            val marked = LinkedHashSet<String>()
++            // 已经有结论的成员（组接口作答 / 某一路补测跑完）：400ms 的 loading 提示不再点亮它们
++            val settled = HashSet<String>()
++            // 正在单测的节点不重复拨测（对应参考实现 items 收集时的 `testing.has(key)` 过滤）
++            val inFlight = _uiState.value.testingNodes
++            // 组接口已作答的成员（名字 → 结论）；hint 协程在 400ms 时读它决定谁还该亮 loading
++            var answered: Map<String, Int> = emptyMap()
++            // 400ms 内回来的结果不亮「测速中」：内核组接口经常不到 1s 就返回，闪一下反而像卡住。
++            // 与参考实现的 hintTimer 同一时机、同一范围：届时还没作答的可测成员逐个点亮 loading，
++            // 已经作答的成员直接显示结果，不闪
+             val hint = launch {
+                 delay(PENDING_HINT_MILLIS)
+                 setGroupTesting(group, true)
++                val loading = nodes.filter { name ->
++                    name !in inFlight && name !in settled && name !in answered &&
++                        isSpeedTestable(name, target.nodeTypes[name].orEmpty())
++                }
++                if (loading.isNotEmpty()) {
++                    marked.addAll(loading)
++                    setNodesTesting(loading, testing = true)
++                }
+             }
+             try {
+-                val alive = HashSet<String>(nodes.size)
+-
+-                // ① 组测速接口：一次请求，内核内部并发；只回测通的成员
++                // ① 组测速接口：一次请求，内核内部并发；返回逐成员结论（>0 测通、0 测过但不通）
++                val groupDelays = LinkedHashMap<String, Int>()
+                 if (!target.isFixed) {
+-                    val groupDelays = withTimeoutOrNull(GROUP_DELAY_BUDGET_MILLIS) {
++                    val fromGroup = withTimeoutOrNull(GROUP_DELAY_BUDGET_MILLIS) {
+                         repo.getGroupDelay(group, timeout = BATCH_TIMEOUT_MILLIS).getOrNull()
+                     }.orEmpty()
+-                    for ((name, delay) in groupDelays) {
+-                        if (delay > 0 && name in nodes) alive += name
++                    for ((name, delay) in fromGroup) {
++                        if (name in nodes && name !in inFlight) groupDelays[name] = delay
+                     }
+                 }
++                answered = groupDelays
++                if (repository !== repo) return@launch
++                // 结果先落账：可用 / 不可用都立刻显示，不等补测（对应参考实现的 paint）
++                applyBatchDelays(group, groupDelays)
++                // 已作答的成员立即摘掉 loading（hint 可能已经点亮过它们），settled 挡住之后再亮
++                settled.addAll(groupDelays.keys)
++                if (groupDelays.isNotEmpty()) {
++                    marked.removeAll(groupDelays.keys)
++                    setNodesTesting(groupDelays.keys.toList(), testing = false)
++                }
+ 
+-                // ② 并发补测：8 路，一路一个节点；单节点失败是正常结果，不终止整批
++                // ② 补测：只补「组接口没作答的」可测成员；0 是内核判过的不通，不重测
++                val pending = nodes.filter { name ->
++                    name !in answered && name !in inFlight && isSpeedTestable(name, target.nodeTypes[name].orEmpty())
++                }
+                 var failed = 0
+-                val pending = nodes.filter { it !in alive }
+                 if (pending.isNotEmpty()) {
+                     val semaphore = Semaphore(BATCH_CONCURRENCY)
+                     val results = coroutineScope {
+@@ -460,6 +499,15 @@ class ProxyViewModel(
+                                     }
+                                     // 测完一路让出一次调度：不把调度窗口全占满（对应面板的 nextPaint）
+                                     yield()
++                                    // 这一路当场回写、当场摘 loading，不等整批（对应 settleJob → paint）
++                                    if (repository === repo) {
++                                        // 失败（含 503/504 这类「内核测过但不通」）同样落账：落成 -1 显示超时，
++                                        // 和 loadProxies 对 history.delay == 0 的映射保持一致
++                                        applyBatchDelays(group, mapOf(nodeName to (result.getOrNull()?.delay ?: 0)))
++                                        settled.add(nodeName)
++                                        setNodesTesting(listOf(nodeName), testing = false)
++                                        marked.remove(nodeName)
++                                    }
+                                     result
+                                 }
+                             }
+@@ -472,16 +520,67 @@ class ProxyViewModel(
+                 if (failed > 0) {
+                     _delayTestEvents.tryEmit(DelayTestEvent.GroupSummary(group, nodes.size, failed))
+                 }
++                // 收尾回读一次真实状态：延迟写进全局 history，自动选择类组（URLTest / Fallback）
++                // 测完会换节点，选中态要跟着刷新（对应参考实现的 refreshSelectionAfterTest）
+                 loadProxies()
+             } finally {
+                 // 正常结束、repo 切换、被取消都要摘标记，漏掉哪条路径该组就永久转圈
+                 hint.cancel()
++                if (marked.isNotEmpty()) setNodesTesting(marked.toList(), testing = false)
+                 batchTesting.remove(group)
+                 setGroupTesting(group, false)
+             }
+         }
+     }
+ 
++    /**
++     * 批量测速的逐节点回写：把内核刚给出的结论立刻映射到**该组**的延迟表。
++     * `>0` 直接用；`0` / 负值按 [loadProxies] 的口径落成 -1（UI 显示「超时」）。
++     * 只动这一个组的这一份拷贝——其它组引用同一节点时等 [loadProxies] 收尾统一对齐。
++     */
++    private fun applyBatchDelays(group: String, verdicts: Map<String, Int>) {
++        if (verdicts.isEmpty()) return
++        val state = _uiState.value
++        var changed = false
++        val next = state.groups.map { g ->
++            if (g.name != group) return@map g
++            val delays = g.delays.toMutableMap()
++            var touched = false
++            for ((name, delay) in verdicts) {
++                if (name !in g.all) continue
++                delays[name] = if (delay > 0) delay else -1
++                touched = true
++            }
++            if (!touched) return@map g
++            changed = true
++            g.copy(delays = delays.toPersistentMap())
++        }
++        if (changed) _uiState.value = state.copy(groups = next.toPersistentList())
++    }
++
++    /** 批量补测的逐节点「测速中」标记（与单节点测速共用 [ProxyUiState.testingNodes]）。 */
++    private fun setNodesTesting(names: List<String>, testing: Boolean) {
++        if (names.isEmpty()) return
++        val current = _uiState.value.testingNodes
++        val next = (if (testing) current + names else current - names.toSet()).toPersistentSet()
++        if (next != current) {
++            _uiState.value = _uiState.value.copy(testingNodes = next)
++        }
++    }
++
++    /**
++     * 批量测速「可测」判定（对齐 mihomo_box 的 `isProxySpeedTestable`）：
++     * DIRECT / COMPATIBLE 是真实出站，可以测；REJECT / REJECT-DROP / BLOCK / PASS / PASS-RULE /
++     * DNS 这类内置策略发起拨测没有意义（内核也不会给出可用结果），整组测速时直接跳过。
++     * 名字与类型都按 `_` → `-` 归一后比较（参考实现同样处理）。
++     */
++    private fun isSpeedTestable(name: String, type: String): Boolean {
++        val n = name.trim().lowercase().replace('_', '-')
++        val t = type.trim().lowercase().replace('_', '-')
++        if (n == "direct" || t == "direct" || n == "compatible" || t == "compatible") return true
++        return n !in NOT_SPEED_TESTABLE && t !in NOT_SPEED_TESTABLE
++    }
++
+     /** 组测速状态：只有 [PENDING_HINT_MILLIS] 之后还在跑的批次才会被标成「测速中」。 */
+     private fun setGroupTesting(group: String, testing: Boolean) {
+         val current = _uiState.value.testingGroups
+@@ -613,6 +712,10 @@ class ProxyViewModel(
+     }
+ 
+     companion object {
++
++        /** 整组测速直接跳过的内置策略（名字或类型命中即跳过，比较前先 `_` → `-`）。 */
++        private val NOT_SPEED_TESTABLE = setOf("reject", "reject-drop", "block", "pass", "pass-rule", "dns")
++
+         /**
+          * 批量补测的并发路数：与 mihomo_box 面板的 `BATCH_CONCURRENCY` 对齐。
+          * 全量并发（几十路一起发）会把内核压满、滑动展开也跟着卡；太低又退化成挨个测速。

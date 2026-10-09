@@ -1,0 +1,152 @@
+# app 侧补丁基线（导出时生成；按功能切分的系列）
+#   每个补丁相对于它前一个补丁的状态（0001 相对于 upstream dd21ee4），依序号应用。
+#   blob_new：本补丁新增的文件在本补丁之后的 blob；blob_after：本补丁修改的文件在本补丁之后的 blob。
+#   本系列按功能切分，编号与旧系列（0001–0010 旧编号）不对应；旧系列不再发布。
+upstream_commit=dd21ee45c48901b14b7f13e7573c63e1f12abaf2
+
+# --- 0001：锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑按钮间距；maplist 拖动排序；路由规则序号；路由规则匹配值省略号 ---
+patch0001_file=patches/app/0001-anchor-panel.patch
+patch0001_prereq=
+patch0001_sha256=edea04a343e3c2f9f89c9d99e4569e92d1ac9410f09a040c8cc76f5f70f2ad34
+patch0001_blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
+patch0001_blob_new=48b879f20a3cb57945e783d12c8ec262f42a401b app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
+patch0001_blob_new=44c20972a2ecb1d97174a1979fef1df11f1f6a63 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
+patch0001_blob_new=e9d5700a6efdcca0bcdcd43c4f7d540ff6d4b281 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorPanel.kt
+patch0001_blob_new=9fb5450f4beb2cf08f800cc43a184b4a10ad7375 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorScan.kt
+patch0001_blob_new=9d96e65767caa747687516dd449411ea759a969c app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorInheritance.kt
+patch0001_blob_new=d4c65088f0c20b3c08f6c75cfcfff8c926e37087 app/src/main/kotlin/top/yukonga/mishka/custom/forms/AnchorSectionPanel.kt
+patch0001_blob_new=0f17796b42b5fa05a730a54d47d68479c68239ee app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigFormPanel.kt
+patch0001_blob_new=537f72b93dbf41bb2be1ff5df20f01dc2d85327d app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigRefs.kt
+patch0001_blob_new=3654888bffb9794f82416174b718e4d924f20a8b app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
+patch0001_blob_new=5a9388166955dfb6fec9ac46457e90fcc92afe28 app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSortGeometry.kt
+patch0001_blob_new=a2854194c3ab363716f0636e2897cd312f9e83d4 app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt
+patch0001_blob_new=b5001b1bb674c306fdd73d56932802b090f54c19 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
+patch0001_blob_new=033bcf3aa56cf2370827f72b3f642f7accff1f38 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt
+patch0001_blob_new=7bb925407a60819668d99ddab3fc2bb35ed5ef85 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
+patch0001_blob_new=5e9420498dfbb70fa0a01f7d21c0578bf52d2c6d app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormMapListLogic.kt
+patch0001_blob_new=a9121ae3c15048eb3b6a5777aea9b1e7bb05bcec app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt
+patch0001_blob_new=173d3b992059d961fca54613a7103424db34f7fc app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
+patch0001_blob_new=012dd13f58231d9c0a63f6caefee9ed7d0c977e5 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
+patch0001_blob_new=1704d85adc79661ad662f7bfb7499072dd65edd9 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt
+patch0001_blob_new=cae7c569081ee4179e512ba8fb42d77b48c5e554 app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
+patch0001_blob_new=0d66444bfc6d5883e58448db01484653cf42c351 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
+patch0001_blob_new=1796296a18858516030ff9bbe5fbe596a2a46e5e app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
+patch0001_blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
+patch0001_blob_new=0434c16bf9738c5e408ae3d00bde1e953ddeec65 app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
+patch0001_blob_new=934edb341b90e1e1a3c9b37fcd1a8732d3c93fe7 app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt
+patch0001_blob_new=934ab5456a0c2eef9b9c8e8ff52eb8477e9aca88 app/src/main/kotlin/top/yukonga/mishka/service/AndroidProcessResolver.kt
+patch0001_blob_new=1dab4a417e4819d51f82eadee967a669619c3f8f app/src/main/native/mishka_core/safe_paths.go
+patch0001_blob_after=6ecc565923a55fbb53b694964b2c321707ffc0e5 app/build.gradle.kts
+patch0001_blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
+patch0001_blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
+patch0001_blob_after=9274894e957f4c74597c13892228c4d1e2afb811 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+patch0001_blob_after=14ebcdc0fde29fd9aae21d9d09e9186b95ef527c app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
+patch0001_blob_after=9132be8bb1f3fd20208a814c6805e68b500d920c app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
+patch0001_blob_after=d3332ed09e59f2e30b0beca9a6ccb8accd72e401 app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
+patch0001_blob_after=e9179c22727ece600be3a5654bb903eeb8a05c81 app/src/main/kotlin/top/yukonga/mishka/domain/model/ConfigurationOverride.kt
+patch0001_blob_after=82cc70beab268c30bc04d1cda40ee1c98993c25b app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
+patch0001_blob_after=eb3fef81374a5efdb6611a36ecfc7f2a735fe292 app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
+patch0001_blob_after=73d50505c6fe47b9bdad694e8148b10889a99474 app/src/main/kotlin/top/yukonga/mishka/platform/ProxyServiceController.kt
+patch0001_blob_after=bc4e1d9de5625bb5be5ff33d649b553a8564c918 app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
+patch0001_blob_after=44da07197b532d9bc67dbd5b1c5ac32cb44fbc0b app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
+patch0001_blob_after=a757ff17dbd2ad0566fb9f1a425f41d2827cb56d app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
+patch0001_blob_after=dfb7471f34e7ed851839645f455df1dce6ad8aca app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+patch0001_blob_after=cba5286dd36fccc7a9a5b12b515d7991d40e9108 app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+patch0001_blob_after=6329dcc412c1caacf31434c56c4eceb6dcd5c2cc app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
+patch0001_blob_after=e609ff2176b8ccda38ce06cb8c4ed122794ce60a app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
+patch0001_blob_after=cb24b64cc84a7afd283d48a35ff9dbd69cda3c30 app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
+patch0001_blob_after=948ec257a69df036d0b72ccb86dc4c1ec180dbcd app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt
+patch0001_blob_after=bf26706ed9dabfdfc44837595dc17f7812f68c88 app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
+patch0001_blob_after=7e2415da58acbc121233ddf707fd84efffeabd8e app/src/main/kotlin/top/yukonga/mishka/ui/component/TetherInterfaceEditDialog.kt
+patch0001_blob_after=3e42813d7a8a731e7e9b32483b829016fa258748 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+patch0001_blob_after=c5f897059a3970523105e2b323cb757a2f641a09 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/Route.kt
+patch0001_blob_after=4623ff2cbeab1396764a2ba10a02fe48b3d3da9a app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/StatusSection.kt
+patch0001_blob_after=993d9f9110ec36982a82611e3189d36a72aba0cb app/src/main/kotlin/top/yukonga/mishka/ui/screen/overrides/SubscriptionOverridesScreen.kt
+patch0001_blob_after=3eeddd12299063087a9a6a410e0f2458dd26facf app/src/main/kotlin/top/yukonga/mishka/ui/screen/provider/ProviderScreen.kt
+patch0001_blob_after=91c33aa312162e29e21ae88ffafe8d90ed1b5469 app/src/main/kotlin/top/yukonga/mishka/ui/screen/proxy/ProxyScreen.kt
+patch0001_blob_after=7da18acdd4ed9794d6e6ce9ad5a858a4aba9a9fd app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
+patch0001_blob_after=c67bbb63441fd88c1ff3ee30c2af04b544df6aeb app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
+patch0001_blob_after=f4fe9ce13cce83f719a3116402a46055599717e3 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/SettingsScreen.kt
+patch0001_blob_after=eeb582a1cd60330ca660e31a25ee0ad2ef9ab6a9 app/src/main/kotlin/top/yukonga/mishka/ui/screen/subscription/SubscriptionEditScreen.kt
+patch0001_blob_after=74194d3fd23e8ed8bd9e70d06e8d08fcf4ecec22 app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt
+patch0001_blob_after=e0a0abe09c2df43d2af99b52b85f5fb31a1fd875 app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
+patch0001_blob_after=4896268fa110da54fd5f5f8aa75c2165f8da653e app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
+patch0001_blob_after=91a7411f1c2f09ae2c86ca25c789565ba10d0dfd app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
+patch0001_blob_after=a03b6c9eeaeeee436928ba539714caed5fbbbc66 app/src/main/native/mishka_core/runtime.go
+patch0001_blob_after=987a093b9df3b34e3da6a3868c8d9ca1ef1defbd app/src/main/native/mishka_core/runtime_test.go
+patch0001_blob_after=2c11db737a7c10e7b1a78f4d7206e3be97eecd16 app/src/main/native/mishka_core/transform_bridge.go
+patch0001_blob_after=8e3fc15ff691275a2e804fe42b946eeb5caaa755 app/src/main/res/values-ru/strings.xml
+patch0001_blob_after=138732bc29f484db572804f6d01eef5a8b09b138 app/src/main/res/values-zh-rCN/strings.xml
+patch0001_blob_after=8f33921d8a0e784a1ab7a190fb322376976e65ee app/src/main/res/values-zh-rTW/strings.xml
+patch0001_blob_after=1cb982cd341d13bda1c58af0c2a29669f8cf8890 app/src/main/res/values/strings.xml
+
+# --- 0002：内置「免流」配置（可选：打不上只警告） ---
+patch0002_file=patches/app/0002-builtin-mianliu-profile.patch
+patch0002_prereq=0001
+patch0002_sha256=44b4720d789f1c1ec97aec7949d285bd59afc6c35eb25c9acda3613cef0ad089
+patch0002_blob_new=224d785f52f9014e583631db8ac215ee19e2d5a3 app/src/main/res/raw/builtin_mianliu.yaml
+patch0002_blob_after=d607aa405fc20b2442b057ddaf58012caf22c508 app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
+
+# --- 0003：字段整理（ConfigTidy）+ 编辑器工具栏（字段整理按钮位置、回退修改） ---
+patch0003_file=patches/app/0003-config-tidy-toolbar.patch
+patch0003_prereq=0001,0002
+patch0003_sha256=5380bf2d25ce543452ea4447411ba9e952286edb6ee2f719acb2b61bc7a9f595
+patch0003_blob_new=765fec986c7339455d2c8c496dd20b45d25291d9 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ConfigTidy.kt
+patch0003_blob_after=e0f7e9c114e36966ad42fb152ad2221a87cf017f app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/FileManagerEditorScreen.kt
+
+# --- 0004：代理页整组测速对齐 mihomo_box testGroupAll ---
+patch0004_file=patches/app/0004-batch-latency-parity.patch
+patch0004_prereq=0001,0002,0003
+patch0004_sha256=18c240e81d3870c8d7a03532dcbdcb077d7a2d3a1b8e7ab54036e9c1cea0ab17
+patch0004_blob_after=c827044975e5736e28a05a9f30ac83a7c1581201 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+patch0004_blob_after=3713369989fb88136c127a436744189ab9ff82dd app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
+
+# --- 0005：主页面板 / Web 界面（box.app 同款；独立 PanelActivity 承载） ---
+patch0005_file=patches/app/0005-home-web-panel.patch
+patch0005_prereq=0001,0002,0003,0004
+patch0005_sha256=f4928261f67c266fd839ec61cf03675366d2dc0671cf9179b8dabd306000e91a
+patch0005_blob_new=89a0fc21c1d02369e859c389e69a1c10b5e63d29 app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt
+patch0005_blob_new=857c0e78b914c99b043cd4fb4e72413f8b873bb1 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelEntry.kt
+patch0005_blob_new=f04fa489031ead152a0457adcd0fd56f175e6e0d app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+patch0005_blob_new=a031029de0fab172a031522c3fac2d85390c3b2c app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelSheet.kt
+patch0005_blob_new=199e71c370e100dc3c33b9d8802801a447c2d807 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelStore.kt
+patch0005_blob_new=1769d75b488fc4fa4085445501b85783959af1e6 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+patch0005_blob_new=4055f3cc1e20cf48dda4e1ffc2069b635fdfdd9e app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt
+patch0005_blob_after=f85700403ddb80719a0a99f4f8f4b87aed288acb app/src/main/AndroidManifest.xml
+patch0005_blob_after=f9babd6eeed260506c6a851c99a00346c7dd1d3f app/src/main/kotlin/top/yukonga/mishka/App.kt
+patch0005_blob_after=9bdb76c45fc0b1666eb0354bbf4feaafeab94e85 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
+patch0005_blob_after=88af607b56041ba87fba521df348368a0a384959 app/src/main/kotlin/top/yukonga/mishka/ui/navigation/AppNavigation.kt
+patch0005_blob_after=e2ce35ab8a6a99aed023a16c5103476266b46f25 app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/HomeScreen.kt
+patch0005_blob_after=678189b44013d712be103e72a37f2a3d13b30caf app/src/main/kotlin/top/yukonga/mishka/ui/screen/home/QuickEntriesSection.kt
+patch0005_blob_after=69fd8340c5835c99cc831b13d13e184dd262b9e1 app/src/main/res/values-ru/strings.xml
+patch0005_blob_after=76e1a128065176c6658bd13e0eeff2ea53a88dd4 app/src/main/res/values-zh-rCN/strings.xml
+patch0005_blob_after=4617adf9a9fae6d4cb4f9d470e1d6d5f42d04dbd app/src/main/res/values-zh-rTW/strings.xml
+patch0005_blob_after=da905fed653a4c9aeab8b8b01724e01667da1ba8 app/src/main/res/values/strings.xml
+
+# --- 0006：连接列表代理类型标签（TUN/TPROXY/EBPF） ---
+patch0006_file=patches/app/0006-conn-proxy-type-label.patch
+patch0006_prereq=0001,0002,0003,0004,0005
+patch0006_sha256=6d1ef06fe56bd15a41e9f2205640a04c3ed7ea4b5c13a25e1d5c2e29030b1ce5
+patch0006_blob_after=135b8880e3a7bc88463c002931ac7c8a9b84d637 app/src/main/kotlin/top/yukonga/mishka/ui/screen/connection/ConnectionScreen.kt
+
+# --- 0007：TPROXY / eBPF 子模式：活动配置里的 tun.enable 写死 false ---
+patch0007_file=patches/app/0007-root-tproxy-ebpf-disable-profile-tun.patch
+patch0007_prereq=0001,0002,0003,0004,0005,0006
+patch0007_sha256=498eb06fd94df6fa265f05eabafb1a86f93f38cf129eea0c071cace02ad9e3fa
+patch0007_blob_after=d3f37371bd74ea23554cb2edc77b50bb8df16a1f app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt
+patch0007_blob_after=2c69081b2171037e39f37025135e8e1cd88f477e app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+
+# --- 0008：面板外网请求改走 mihomo mixed-port（ProxyController；新增 androidx.webkit 依赖） ---
+patch0008_file=patches/app/0008-panel-webview-proxy.patch
+patch0008_prereq=0001,0002,0003,0004,0005,0006,0007
+patch0008_sha256=4266309e66055275b45e43f0f217aa1e35efffda1efa4f0b6b5157fff00fa208
+patch0008_blob_new=f0d473aee776f31e71f3f24d556ec946a6977780 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyOverride.kt
+patch0008_blob_after=5bc9f305551c922158b1933846ff427946cff2b1 app/build.gradle.kts
+patch0008_blob_after=6cd2fa2514dbd52b09054c03b2e6c83188aabbb1 app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt
+patch0008_blob_after=ea99cf91f82743880c2ccfe9cb70f56ad781e351 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelScreen.kt
+patch0008_blob_after=bb0f4cbdc1591447bc6b4a35fcd742a0e91d8af6 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
+patch0008_blob_after=958724665d9bd95c98f71422ab9822a4b614dc0b app/src/main/res/values-ru/strings.xml
+patch0008_blob_after=24de553fab0cba72a187ebcac3c29b7965865d27 app/src/main/res/values-zh-rCN/strings.xml
+patch0008_blob_after=5237ef636dd6646acdf9e53d15dde694950a4b57 app/src/main/res/values-zh-rTW/strings.xml
+patch0008_blob_after=2793a4b9cd9da278d830bc06c7b5eedbe381ed69 app/src/main/res/values/strings.xml
+patch0008_blob_after=08b31c812015b7cf0c93827cd4346797c38b7fc3 gradle/libs.versions.toml
