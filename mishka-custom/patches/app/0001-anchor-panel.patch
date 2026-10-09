@@ -14516,10 +14516,10 @@ index 0000000..1704d85
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
 new file mode 100644
-index 0000000..c0c519c
+index 0000000..3f181b8
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
-@@ -0,0 +1,1211 @@
+@@ -0,0 +1,1212 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import android.content.pm.ApplicationInfo
@@ -14530,6 +14530,7 @@ index 0000000..c0c519c
 +import androidx.compose.foundation.layout.Row
 +import androidx.compose.foundation.layout.Spacer
 +import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
 +import androidx.compose.foundation.layout.heightIn
 +import androidx.compose.foundation.layout.padding
 +import androidx.compose.foundation.layout.width
