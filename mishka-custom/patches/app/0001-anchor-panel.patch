@@ -7209,10 +7209,10 @@ index 0000000..a285419
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 new file mode 100644
-index 0000000..b5001b1
+index 0000000..99ef548
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
-@@ -0,0 +1,2361 @@
+@@ -0,0 +1,2362 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.background
@@ -8625,6 +8625,7 @@ index 0000000..b5001b1
 +                        },
 +                    )
 +                }
++                Spacer(Modifier.height(8.dp))
 +            }
 +            if (visual) {
 +                BasicComponent(

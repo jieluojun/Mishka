@@ -44,10 +44,10 @@ index 91a7411..d607aa4 100644
      fun showAddDialog() {
 diff --git a/app/src/main/res/raw/builtin_mianliu.yaml b/app/src/main/res/raw/builtin_mianliu.yaml
 new file mode 100644
-index 0000000..224d785
+index 0000000..66df5ce
 --- /dev/null
 +++ b/app/src/main/res/raw/builtin_mianliu.yaml
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,243 @@
 +mixed-port: 7890
 +tproxy-port: 7893
 +bind-address: "*"
@@ -277,14 +277,13 @@ index 0000000..224d785
 +  大陆地址:
 +    <<: *ipcidr
 +    url: "https://v6.gh-proxy.org/https://github.com/DustinWin/ruleset_geodata/releases/download/mihomo-ruleset/cnip.mrs"
-+
 +rules:
 +  - DST-PORT,53,DNS_Hijack
 +  - AND,(NETWORK,UDP),(OR,(DST-PORT,443/3478/5349/19302),(RULE-SET,本机地址)),REJECT
++  # 如果遇到某些软件出现跳点就取消下面注释(大概也许可能应该或许有.用)
 +  #  - DOMAIN-REGEX,(wswup.cdn.huya.com)|(cdnws.api.huya.com)|(p2p)|(stun)|(pcdn)|(mcdn)|(torrent)|(tracker)|(httpdns),REJECT-DROP
 +  - RULE-SET,广告域名,广告出口
 +  - RULE-SET,海外域名,国外出口
-+  - RULE-SET,海外域名,国外出口 
 +  - AND,(NETWORK,UDP),(PROCESS-NAME-REGEX,(com.tencent.tmgp.sgame)|(com.tencent.tmgp.cf)),游戏UDP
 +  - NETWORK,UDP,全部UDP
 +  - RULE-SET,大陆域名,国内出口

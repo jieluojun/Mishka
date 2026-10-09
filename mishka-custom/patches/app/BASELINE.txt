@@ -7,7 +7,7 @@ upstream_commit=dd21ee45c48901b14b7f13e7573c63e1f12abaf2
 # --- 0001：锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑按钮间距；maplist 拖动排序；路由规则序号；路由规则匹配值省略号；应用选择器（搜索兼手动添加、已选置顶、显示清单计数，不新增依赖） ---
 patch0001_file=patches/app/0001-anchor-panel.patch
 patch0001_prereq=
-patch0001_sha256=5d3e4bacd150cdaf793afca280744631cf8b21283049ad01cb7d4ad60b86d16d
+patch0001_sha256=925d54ded51c6b29289defb918b8b5afc294f05aad11751cd24f5556ae9fb2c8
 patch0001_blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 patch0001_blob_new=48b879f20a3cb57945e783d12c8ec262f42a401b app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 patch0001_blob_new=44c20972a2ecb1d97174a1979fef1df11f1f6a63 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
@@ -20,7 +20,7 @@ patch0001_blob_new=537f72b93dbf41bb2be1ff5df20f01dc2d85327d app/src/main/kotlin/
 patch0001_blob_new=3654888bffb9794f82416174b718e4d924f20a8b app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSort.kt
 patch0001_blob_new=5a9388166955dfb6fec9ac46457e90fcc92afe28 app/src/main/kotlin/top/yukonga/mishka/custom/forms/DragSortGeometry.kt
 patch0001_blob_new=a2854194c3ab363716f0636e2897cd312f9e83d4 app/src/main/kotlin/top/yukonga/mishka/custom/forms/EbpfFormLogic.kt
-patch0001_blob_new=b5001b1bb674c306fdd73d56932802b090f54c19 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
+patch0001_blob_new=99ef5489b86ff8c2323b0ece78aacf584da7b9ac app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowFormPages.kt
 patch0001_blob_new=033bcf3aa56cf2370827f72b3f642f7accff1f38 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt
 patch0001_blob_new=7bb925407a60819668d99ddab3fc2bb35ed5ef85 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 patch0001_blob_new=5e9420498dfbb70fa0a01f7d21c0578bf52d2c6d app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormMapListLogic.kt
@@ -83,8 +83,8 @@ patch0001_blob_after=1cb982cd341d13bda1c58af0c2a29669f8cf8890 app/src/main/res/v
 # --- 0002：内置「免流」配置（可选：打不上只警告） ---
 patch0002_file=patches/app/0002-builtin-mianliu-profile.patch
 patch0002_prereq=0001
-patch0002_sha256=44b4720d789f1c1ec97aec7949d285bd59afc6c35eb25c9acda3613cef0ad089
-patch0002_blob_new=224d785f52f9014e583631db8ac215ee19e2d5a3 app/src/main/res/raw/builtin_mianliu.yaml
+patch0002_sha256=37362aa2fde17838af024ca0739f87ead658f44846befbbf4e84e62a30842ced
+patch0002_blob_new=66df5ced156e4fa70e046cefed256beb99e434c6 app/src/main/res/raw/builtin_mianliu.yaml
 patch0002_blob_after=d607aa405fc20b2442b057ddaf58012caf22c508 app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 
 # --- 0003：字段整理（ConfigTidy）+ 编辑器工具栏（字段整理按钮位置、回退修改） ---
