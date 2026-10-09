@@ -163,5 +163,5 @@ patch0009_blob_after=7c3cd1df1cc416c71ca6051c125e3bd522e5b4d3 app/src/main/kotli
 # --- 0010：应用选择器对齐 mihomo_box：搜索兼手动添加、已选置顶、显示清单计数（不新增依赖）
 patch0010_file=patches/app/0010-app-picker-search-pin.patch
 patch0010_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009
-patch0010_sha256=27660cb49dbbe57720cfd4d3d3f78b357d56e585a24bf9423a9985394c55d177
-patch0010_blob_after=84044309c22ac5b79903b995f619df5f8c30128a app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
+patch0010_sha256=dd1f8cda7a02d6d639dd5ad2307cdceeee433d0130e870af688bf863638abafa
+patch0010_blob_after=994e920bbe03810ec2afbb28cf1d31588408d824 app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
