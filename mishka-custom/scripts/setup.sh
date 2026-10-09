@@ -19,7 +19,7 @@
 #      0008 ROOT TPROXY / eBPF 子模式下把活动配置里的 tun.enable 写死 false（与运行时一致）、
 #      0009 面板改用独立 Activity 承载（换加载方式：不再挂在主界面导航栈里）
 #
-# 回滚：scripts/revert-patches.sh --all
+# 回滚：逆序 git apply -R（见 README.md「回滚」）
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,12 +64,11 @@ step "1/6 装配 mishka-custom/"
 if [[ "$DELIVER" != "$REPO/$CUSTOM_DIR_NAME" ]]; then
   target="$REPO/$CUSTOM_DIR_NAME"
   mkdir -p "$target"
-  for d in scripts patches kernel tools init ci app; do
+  for d in scripts patches kernel init; do
     [[ -e "$DELIVER/$d" ]] && cp -r "$DELIVER/$d" "$target/" 2>/dev/null || true
   done
-  cp "$DELIVER"/README.md "$DELIVER"/BUILD.md "$DELIVER"/INSTALL.md "$DELIVER"/CUSTOMIZATION.md "$DELIVER"/VERIFY.md "$target/" 2>/dev/null || true
-  # 变更说明（FIX-*.md / FEATURE-*.md）一起带过去；交付里没有这些文件时静默跳过
-  cp "$DELIVER"/FIX-*.md "$DELIVER"/FEATURE-*.md "$target/" 2>/dev/null || true
+  # 只用得上 README.md（用法 + 提交清单）；包里没有其它 .md，缺了也静默跳过
+  cp "$DELIVER"/README.md "$target/" 2>/dev/null || true
   DELIVER="$target"
   ok "已复制到 $DELIVER"
 else
@@ -261,7 +260,7 @@ else
     git -C "$REPO" apply --3way "$DELIVER/patches/app/0001-anchor-panel.patch"
     ok "已应用（3way 合并，上游可能改过入口文件，注意确认改动）"
   else
-    die "app 补丁打不上：上游 $FMES_REL 可能已改动。用 scripts/apply-patches.sh 看详细报错，或按 CUSTOMIZATION.md 手工加入口"
+    die "app 补丁打不上：上游 $FMES_REL 可能已改动。用 git -C \"$REPO\" apply --check -v \"$DELIVER/patches/app/0001-anchor-panel.patch\" 看详细报错，或按 README.md 手工加入口"
   fi
 fi
 
@@ -424,15 +423,13 @@ say "  仓库状态："
 git -C "$REPO" status --short | sed 's/^/    /' || true
 cat <<EOF
 
-  下一步：
-    bash $DELIVER/scripts/build-release.sh --repo "$REPO"      # 本地出 release APK（只出 release）
-    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO"     # 校验 app 补丁可逆（只验 0001）
-    bash $DELIVER/tools/verify_app_patch.sh --repo "$REPO" --series   # 0001–0009 整套校验
-    bash $DELIVER/tools/verify_mihomo_patches.sh --kernel-dir "$KERNEL_DIR"
+  下一步（详见 $CUSTOM_DIR_NAME/README.md）：
+    ./gradlew :app:downloadGeoFiles
+    ./gradlew -I $CUSTOM_DIR_NAME/init/no-debug.init.gradle "-Pmihomo.version=alpha-smart-<sha>-with-at" :app:assembleRelease
   回滚：
-    bash $DELIVER/scripts/revert-patches.sh --repo "$REPO" --all
+    逆序 git apply -R：patches/app/0009 → 0001，再 patches/mihomo/0007 → 0001
   拉上游更新：
-    bash $DELIVER/scripts/revert-patches.sh --repo "$REPO"   # 还原补丁 → git pull → 再 setup.sh
+    先按上面回滚 → git pull → 再跑 setup.sh（每步都用 git apply --check 做过幂等判断）
 EOF
 
 if ! is_tracked "$REPO" "$CUSTOM_DIR_NAME"; then
