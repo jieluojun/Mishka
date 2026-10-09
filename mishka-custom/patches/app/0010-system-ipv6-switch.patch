@@ -48,10 +48,10 @@ index ea24d23..47cdd07 100644
                  if (!wasRunning) return
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt b/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
 new file mode 100644
-index 0000000..3997ab0
+index 0000000..ad75b59
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,122 @@
 +package top.yukonga.mishka.service
 +
 +import android.content.Context
@@ -117,13 +117,14 @@ index 0000000..3997ab0
 +        val q = RootHelper.escapeShellSingleQuoted(script.absolutePath)
 +        val d = RootHelper.escapeShellSingleQuoted(dir.absolutePath)
 +        val log = RootHelper.escapeShellSingleQuoted(File(dir, "log").absolutePath)
++        // 关态先同步做一次对账（禁用 IPv6 + 接管 APN），返回时即已生效，设置页随后读取到的是新值；
++        // 再拉起后台常驻循环（脚本自己写 pid 文件，被新的循环替换时退出）。
 +        val cmd = if (effective) {
 +            "sh $q once 1 $d >> $log 2>&1\n"
 +        } else {
-+            // 后台常驻：脚本自己写 pid 文件，被新的循环替换时退出；这里只负责拉起
-+            "sh $q watch 0 $d >> $log 2>&1 </dev/null &\n"
++            "sh $q once 0 $d >> $log 2>&1\nsh $q watch 0 $d >> $log 2>&1 </dev/null &\n"
 +        }
-+        val code = RootHelper.runRootScriptHeredoc(cmd, if (effective) 30 else 10)
++        val code = RootHelper.runRootScriptHeredoc(cmd, 30)
 +        Log.i(TAG, "apply enable=$enable effective=$effective exit=$code")
 +        return code == 0
 +    }

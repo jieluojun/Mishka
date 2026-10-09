@@ -163,8 +163,8 @@ patch0009_blob_after=7c3cd1df1cc416c71ca6051c125e3bd522e5b4d3 app/src/main/kotli
 # --- 0010：ROOT 设置 · 系统 IPv6 开关（mihomo_box 逻辑：默认关闭、root 下立即禁用非蜂窝网卡 IPv6、APN 协议改 IPv4、实时读取首选 APN；不新增依赖） ---
 patch0010_file=patches/app/0010-system-ipv6-switch.patch
 patch0010_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009
-patch0010_sha256=fd4231c2ba3552a52401affeaa389074d6d3dac38f670dc667a63378222bc8fa
-patch0010_blob_new=3997ab0d1c8a3caf8dcc95fc87750c9434b86f2f app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
+patch0010_sha256=ff740459203bad3f8c001e963a5f9ae13760c7e8a3d3ae93ac465abc4f394232
+patch0010_blob_new=ad75b59e89f40cde19be483d6e31768f93df1420 app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
 patch0010_blob_new=db7bd6a4c429d0c9bd66f0151d7d35e8103d7aab app/src/main/res/raw/system_ipv6.sh
 patch0010_blob_after=ed24604c26b048c0992e9102cddcf226914ea5e1 app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 patch0010_blob_after=47cdd0721e76285a4200f0eeee000569465eb8a0 app/src/main/kotlin/top/yukonga/mishka/service/BootReceiver.kt
