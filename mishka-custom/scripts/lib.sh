@@ -96,6 +96,9 @@ app_feature_applied() {
     0006) grep -q 'val proxyType = meta.type.trim().uppercase()' "$repo/$CONN_REL" 2>/dev/null ;;
     0007) grep -q 'forceTunDisabled' "$repo/$APRC_REL" 2>/dev/null ;;
     0008) [[ -f "$repo/$CUSTOM_REL/panel/PanelProxyOverride.kt" ]] ;;
+    0009) [[ -f "$repo/$CUSTOM_REL/runtime/TproxyAppFilter.kt" ]] \
+          && grep -q 'ROOT_TPROXY_APP_MODE_ACTIVE' "$repo/$APP_PKG_REL/service/MishkaRootService.kt" 2>/dev/null ;;
+    0010) grep -q 'AppPickerSectionTitle' "$repo/$CUSTOM_REL/forms/P3FormEditors.kt" 2>/dev/null ;;
     *) return 1 ;;
   esac
 }

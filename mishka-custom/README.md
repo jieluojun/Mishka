@@ -4,13 +4,13 @@
 `patches/mihomo/BASELINE.txt`）。本包只含「打补丁 + 编译」用得上的东西。
 
 app 补丁是**按功能切分**的系列：每个补丁对应一个功能，原先「修正上一个补丁」的改动已并入它所修正的功能。
-编号 0001–0008 与旧系列（0001–0010）不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
+编号 0001–0010 与旧系列（0001–0010）不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
 
 ## 包里有什么
 
 | 路径 | 用途 |
 | --- | --- |
-| `patches/app/0001…0008-*.patch` | app 侧补丁，按序号依次叠加（前置关系见 `patches/app/BASELINE.txt`） |
+| `patches/app/0001…0010-*.patch` | app 侧补丁，按序号依次叠加（前置关系见 `patches/app/BASELINE.txt`） |
 | `patches/app/BASELINE.txt` | app 补丁的基线 commit、每个补丁的 sha256、前置与涉及的 blob |
 | `patches/mihomo/0001…0007-*.patch` | 内核补丁，按序号依次应用 |
 | `patches/mihomo/BASELINE.txt` | 内核补丁的基线 commit 与 sha256 |
@@ -35,7 +35,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库> [--kernel-dir <内核
 2. 内核：准备一份 jieluojun/mihomo(Alpha) 到补丁基线 commit，应用 `patches/mihomo/*.patch`
    （`--kernel-dir` 可以放仓库外）；
 3. 写 `go.work` + `go.work.sum`；
-4. 依次应用 app 补丁 `0001 → 0008`（其中 0002「内置免流」可选，打不上只警告）。
+4. 依次应用 app 补丁 `0001 → 0010`（其中 0002「内置免流」可选，打不上只警告）。
 
 常用参数：`--skip-kernel` 只打 app 补丁、`--ci` 非交互（配 Actions）、`--force` 脏工作区也继续、
 `--refresh-sum` 重算 go.work.sum、`--help` 看全部。
@@ -88,7 +88,7 @@ sha="$(git -C mihomo rev-parse --short=8 HEAD)"
 逆序还原，再拉更新、重跑装配：
 
 ```bash
-# app 补丁：0008 → 0001（用 [0-9][0-9][0-9][0-9]-* 匹配，与 setup.sh 一致）
+# app 补丁：0010 → 0001（用 [0-9][0-9][0-9][0-9]-* 匹配，与 setup.sh 一致）
 for p in $(ls -r mishka-custom/patches/app/[0-9][0-9][0-9][0-9]-*.patch); do git apply -R "$p"; done
 # 内核补丁：0007 → 0001（在内核目录里执行）
 git pull
@@ -107,12 +107,16 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 0006 | 连接列表代理类型标签（TUN/TPROXY/EBPF，取 `metadata.type`） |
 | 0007 | TPROXY / eBPF 子模式：把活动配置里的 `tun.enable` 写死 `false`（与运行时一致） |
 | 0008 | 面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP、YouTube 测不出延迟）：WebView 代理用 `androidx.webkit` 的 `ProxyController` 整体覆盖（GET/POST/WebSocket/CONNECT 都经 mihomo，域名由 mihomo 解析）；页面在覆盖生效后才加载；代理没接上时顶部给出提示。新增依赖 |
+| 0009 | Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：TPROXY 模式改用 TUN 页的「仅代理以下应用 / 排除以下应用」（白名单优先，都未设置则全部代理；未设置时沿用分应用代理页），UID 按 `tun.include-android-user` 展开，名单应用的 UID 每 10 分钟重解析，变化才重装规则 |
+| 0010 | 应用选择器对齐 mihomo_box：搜索框兼作手动添加（输入完整包名后点「添加」或回车，未安装的包名同样保留）；已选应用置顶为「已选择 (N)」，其余为「其他应用 (M)」；标题显示清单计数，确定按钮显示已选数量 |
 
 ## 依赖变更
 
 **0008 新增依赖** `androidx.webkit:webkit:1.17.1`（`gradle/libs.versions.toml` 加版本与库条目，
 `app/build.gradle.kts` 加一行 `implementation`）。0001–0007 没有新增依赖；0008 是第一个。
 回滚 0008 会把这一行一并撤掉。
+
+**0009、0010 不新增依赖**：0009 只改 Kotlin 与运行时逻辑，0010 只改选择器界面，二者都不引入新库。
 
 ## 从旧系列升级
 
@@ -122,6 +126,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 仓库里装的是 | 怎么办 |
 | --- | --- |
 | 上一版交付（0001–0009 + 合并版 0010，即本系列现在的 0008） | 状态与本系列最终态逐字节相同，直接重跑 `setup.sh`，8 个补丁都会判定为「已在仓库里」。 |
+| 上一版交付（0001–0008，即加入 0009、0010 之前的系列） | 直接重跑 `setup.sh`：0001–0008 已在仓库里会跳过，只追加 0009、0010。 |
 | 最初的旧系列（0001–0009 + 旧 0010，仓库里有 `PanelProxyFetcher.kt`） | 从原始包取出旧 0010，`git apply -R` 撤回，回到 0001–0009 的状态，本系列可直接接上。步骤见下。 |
 | 其它中间状态 | 先还原到 dd21ee4 基线，再装本系列。 |
 
