@@ -4,10 +4,10 @@
 #   本系列按功能切分，编号与旧系列（0001–0010 旧编号）不对应；旧系列不再发布。
 upstream_commit=dd21ee45c48901b14b7f13e7573c63e1f12abaf2
 
-# --- 0001：锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑按钮间距；maplist 拖动排序；路由规则序号；路由规则匹配值省略号 ---
+# --- 0001：锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑按钮间距；maplist 拖动排序；路由规则序号；路由规则匹配值省略号；应用选择器（搜索兼手动添加、已选置顶、显示清单计数，不新增依赖） ---
 patch0001_file=patches/app/0001-anchor-panel.patch
 patch0001_prereq=
-patch0001_sha256=edea04a343e3c2f9f89c9d99e4569e92d1ac9410f09a040c8cc76f5f70f2ad34
+patch0001_sha256=d5b2d0ae56885bdf397c73a6f3801acc102b0191bc0a9ec3011afbaf93e15b32
 patch0001_blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
 patch0001_blob_new=48b879f20a3cb57945e783d12c8ec262f42a401b app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorDialogs.kt
 patch0001_blob_new=44c20972a2ecb1d97174a1979fef1df11f1f6a63 app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorEdit.kt
@@ -28,7 +28,7 @@ patch0001_blob_new=a9121ae3c15048eb3b6a5777aea9b1e7bb05bcec app/src/main/kotlin/
 patch0001_blob_new=173d3b992059d961fca54613a7103424db34f7fc app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 patch0001_blob_new=012dd13f58231d9c0a63f6caefee9ed7d0c977e5 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
 patch0001_blob_new=1704d85adc79661ad662f7bfb7499072dd65edd9 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt
-patch0001_blob_new=cae7c569081ee4179e512ba8fb42d77b48c5e554 app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
+patch0001_blob_new=c0c519c13d3a5f49fbffcbb3336a85a6cae9e4f0 app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
 patch0001_blob_new=0d66444bfc6d5883e58448db01484653cf42c351 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProviderFileOps.kt
 patch0001_blob_new=1796296a18858516030ff9bbe5fbe596a2a46e5e app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 patch0001_blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
@@ -160,8 +160,17 @@ patch0009_blob_after=a5b5c664f0d51734c50233c945a1b8dc6f52be1a app/src/main/kotli
 patch0009_blob_after=70ec0356797777114a1acd2d1aa341d81b9e8f07 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 patch0009_blob_after=7c3cd1df1cc416c71ca6051c125e3bd522e5b4d3 app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 
-# --- 0010：应用选择器对齐 mihomo_box：搜索兼手动添加、已选置顶、显示清单计数（不新增依赖）
-patch0010_file=patches/app/0010-app-picker-search-pin.patch
+# --- 0010：ROOT 设置 · 系统 IPv6 开关（mihomo_box 逻辑：默认关闭、root 下立即禁用非蜂窝网卡 IPv6、APN 协议改 IPv4、实时读取首选 APN；不新增依赖） ---
+patch0010_file=patches/app/0010-system-ipv6-switch.patch
 patch0010_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009
-patch0010_sha256=dd1f8cda7a02d6d639dd5ad2307cdceeee433d0130e870af688bf863638abafa
-patch0010_blob_after=994e920bbe03810ec2afbb28cf1d31588408d824 app/src/main/kotlin/top/yukonga/mishka/custom/forms/P3FormEditors.kt
+patch0010_sha256=fd4231c2ba3552a52401affeaa389074d6d3dac38f670dc667a63378222bc8fa
+patch0010_blob_new=3997ab0d1c8a3caf8dcc95fc87750c9434b86f2f app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
+patch0010_blob_new=db7bd6a4c429d0c9bd66f0151d7d35e8103d7aab app/src/main/res/raw/system_ipv6.sh
+patch0010_blob_after=ed24604c26b048c0992e9102cddcf226914ea5e1 app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
+patch0010_blob_after=47cdd0721e76285a4200f0eeee000569465eb8a0 app/src/main/kotlin/top/yukonga/mishka/service/BootReceiver.kt
+patch0010_blob_after=8b1cf690e035fb12d95df5f7368e9c96e850a9a3 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
+patch0010_blob_after=144582538307c4ed8c7865d92c877c66d5a9b0c1 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
+patch0010_blob_after=d53e4804d6c5a28055ed3313136df8a97ff77a73 app/src/main/res/values/strings.xml
+patch0010_blob_after=456891ab0c2effb4ac876176a79f87c86319414e app/src/main/res/values-zh-rCN/strings.xml
+patch0010_blob_after=9364d6b35314813f5b4d309cfebd4566faa28833 app/src/main/res/values-zh-rTW/strings.xml
+patch0010_blob_after=ee9c288220c7195e27d4898cbfbd623efb1fa4c4 app/src/main/res/values-ru/strings.xml

@@ -12,7 +12,7 @@
 #   3. 写 go.work + go.work.sum（内核换了分支后缺的依赖哈希都在这，仓库自带的 go.mod/go.sum 不动）
 #   4. 应用 app 侧补丁 patches/app/0001…0010（按功能切分，依序应用；每个先判断是否已在仓库里）：
 #      0001 锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复、规则编辑间距、
-#           maplist 拖动排序、路由规则序号、路由规则匹配值省略号
+#           maplist 拖动排序、路由规则序号、路由规则匹配值省略号；应用选择器（搜索兼手动添加、已选置顶、显示计数）
 #      0002 内置「免流」配置（可选：打不上只警告）
 #      0003 字段整理 + 编辑器工具栏（字段整理按钮位置、回退修改；不加依赖）
 #      0004 代理页整组测速对齐（mihomo_box 同款）
@@ -22,7 +22,7 @@
 #      0008 面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP / YouTube 测不出延迟）：
 #           WebView 代理用 androidx.webkit 的 ProxyController 整体覆盖；新增 androidx.webkit 依赖
 #      0009 Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：白名单 / 黑名单取自 TUN 页，UID 周期重解析
-#      0010 应用选择器对齐 mihomo_box：搜索兼手动添加、已选置顶、显示计数（不新增依赖）
+#      0010 ROOT 设置新增「系统」分组：系统 IPv6 开关（默认关闭，root 下立即生效，实时显示首选 APN 协议）
 #
 # 回滚：逆序 git apply -R（见 README.md「回滚」）
 set -euo pipefail
@@ -261,7 +261,7 @@ if [[ -f "$REPO/$CUSTOM_REL/panel/PanelProxyFetcher.kt" ]]; then
   die "检测到旧系列的 0010（PanelProxyFetcher.kt）：本系列按功能重新切分，不能直接叠加。请先撤回旧 0010：
       unzip -p <原始交付包 mishka-custom-20261009.zip> mishka-custom/patches/app/0010-panel-webview-proxy.patch > /tmp/old-0010.patch
       git -C \"$REPO\" apply -R /tmp/old-0010.patch
-  撤回后仓库回到 0001–0009 的状态，本系列可直接接在其后；提交（或加 --force）后再重跑本脚本。
+  撤回后仓库应回到旧 0009 的状态。本系列的 0001 已包含应用选择器改动：若仓库里没有这部分改动，0001 会打不上，届时还原到 dd21ee4 基线。提交（或加 --force）后再重跑本脚本。
   若 git apply -R 失败，说明仓库里的改动不是原样的，请先还原到 dd21ee4 基线。"
 fi
 APP_PATCHES=(
@@ -274,7 +274,7 @@ APP_PATCHES=(
   0007-root-tproxy-ebpf-disable-profile-tun.patch
   0008-panel-webview-proxy.patch
   0009-tproxy-app-filter.patch
-  0010-app-picker-search-pin.patch
+  0010-system-ipv6-switch.patch
 )
 for pname in "${APP_PATCHES[@]}"; do
   num="${pname:0:4}"

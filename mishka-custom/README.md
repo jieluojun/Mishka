@@ -4,7 +4,7 @@
 `patches/mihomo/BASELINE.txt`）。本包只含「打补丁 + 编译」用得上的东西。
 
 app 补丁是**按功能切分**的系列：每个补丁对应一个功能，原先「修正上一个补丁」的改动已并入它所修正的功能。
-编号 0001–0010 与旧系列（0001–0010）不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
+编号 0001–0010 与旧系列编号不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
 
 ## 包里有什么
 
@@ -99,7 +99,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 
 | # | 内容 |
 | --- | --- |
-| 0001 | 锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑对话框的按钮间距；maplist 拖动排序（DNS「按域名分流解析」等）；路由规则序号；路由规则匹配值省略号 |
+| 0001 | 锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑对话框的按钮间距；maplist 拖动排序（DNS「按域名分流解析」等）；路由规则序号；路由规则匹配值省略号；应用选择器：搜索框兼作手动添加（输入完整包名后点「添加」或回车，未安装的包名同样保留），已选应用置顶为「已选择 (N)」、其余为「其他应用 (M)」，标题显示清单计数，确定按钮显示已选数量 |
 | 0002 | 内置「免流」配置（`res/raw/builtin_mianliu.yaml`，可选） |
 | 0003 | 字段整理（`ConfigTidy`，按官方字段顺序重排，注释与块式写法原样保留）+ 编辑器工具栏：字段整理按钮放到文件名左侧，右侧「回退修改」按钮（仅内容有改动时显示） |
 | 0004 | 代理页整组测速对齐 mihomo_box 的 `testGroupAll`（组接口的 0 值结论不重测、不可测策略不发请求、每路结果当场回写） |
@@ -108,7 +108,25 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 0007 | TPROXY / eBPF 子模式：把活动配置里的 `tun.enable` 写死 `false`（与运行时一致） |
 | 0008 | 面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP、YouTube 测不出延迟）：WebView 代理用 `androidx.webkit` 的 `ProxyController` 整体覆盖（GET/POST/WebSocket/CONNECT 都经 mihomo，域名由 mihomo 解析）；页面在覆盖生效后才加载；代理没接上时顶部给出提示。新增依赖 |
 | 0009 | Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：TPROXY 模式改用 TUN 页的「仅代理以下应用 / 排除以下应用」（白名单优先，都未设置则全部代理；未设置时沿用分应用代理页），UID 按 `tun.include-android-user` 展开，名单应用的 UID 每 10 分钟重解析，变化才重装规则 |
-| 0010 | 应用选择器对齐 mihomo_box：搜索框兼作手动添加（输入完整包名后点「添加」或回车，未安装的包名同样保留）；已选应用置顶为「已选择 (N)」，其余为「其他应用 (M)」；标题显示清单计数，确定按钮显示已选数量 |
+| 0010 | ROOT 设置新增「系统」分组，下设「系统 IPv6」开关（移植 mihomo_box 的系统 IPv6 逻辑）：默认关闭；ROOT 可用即立即禁用 Wi-Fi 等非蜂窝网卡的 IPv6（lo / 蜂窝 / 热点下游豁免），上网 APN（跳过 IMS）协议改为 IPv4；开启时恢复 IPv6 并还原 APN；关态下每 5 秒对账一次（60 秒冷却）；打开设置页时读取一次首选 APN 的协议，切换开关成功后再读一次。 |
+
+## 系统 IPv6 开关（0010）
+
+位置：ROOT 设置 → 「系统」分组 → 「系统 IPv6」。逻辑对齐 mihomo_box 的 `system_ipv6_sync` / APN 子系统：
+
+| 状态 | 行为 |
+| --- | --- |
+| 关（默认） | 非蜂窝网卡（wlan 等）写 `disable_ipv6=1`，并关闭 RA / autoconf；上网 APN（`preferapn`，跳过 IMS 承载）的 `protocol` / `roaming_protocol` 改为 `IP`，原值记入 `files/system_ipv6/apn.state` |
+| 开 | `disable_ipv6` 归 0，恢复 RA / autoconf，按状态文件还原 APN 协议，并停止常驻循环 |
+
+- **立即执行**：应用启动时若 ROOT 可用，按开关期望值执行（默认即立即禁用）；开机 / 应用升级由 `BootReceiver` 再执行一次。
+- **常驻对账**：关态下 root 进程每 5 秒检查一次，飞行模式或切网后被 netd 放回的网卡会被重新禁用；同一网卡 60 秒内最多追打一次。
+- **APN 状态**：打开设置页时经 root 读取一次首选 APN，显示协议（仅 IPv4 / IPv4/IPv6 等）与漫游协议；切换开关成功后会重新读取。离开页面不再查询，也没有手动刷新按钮。
+- **不碰 IMS**：蜂窝网卡不写内核 `disable_ipv6`，只改 APN 协议，VoLTE 与短信不受影响。
+- **eBPF 豁免（与 mihomo_box 的差异）**：mihomo_box 只在「eBPF 角色 ipv6 生效」时保持 IPv6；本模块在 ROOT eBPF 模式下一律保持系统 IPv6 开启，不解析配置。
+- **未覆盖**：脚本依赖 APN 数据库可写与 `svc` 命令；多卡 / 定制 ROM 上查不到首选 APN 时，设置页会提示，可手动把 APN 协议设为 IPv4。
+
+源码：`app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt`、`app/src/main/res/raw/system_ipv6.sh`。
 
 ## 依赖变更
 
@@ -116,30 +134,24 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 `app/build.gradle.kts` 加一行 `implementation`）。0001–0007 没有新增依赖；0008 是第一个。
 回滚 0008 会把这一行一并撤掉。
 
-**0009、0010 不新增依赖**：0009 只改 Kotlin 与运行时逻辑，0010 只改选择器界面，二者都不引入新库。
+**0009、0010 不新增依赖**：0009 只改 Kotlin 与运行时逻辑；0010 只用 Android 自带的 `su`、`content`、`svc`、`ndc` 命令，不引入新库。
 
 ## 从旧系列升级
 
 旧系列（旧编号 0001–0010）的补丁不再随包发布，原件在原始交付包 `mishka-custom-20261009.zip` 里。
-按旧系列装过的仓库，先看它现在是什么状态：
+本系列原第 0010 号补丁（应用选择器）已并入第 0001 号，所以升级前先看仓库现在是什么状态：
 
 | 仓库里装的是 | 怎么办 |
 | --- | --- |
-| 上一版交付（0001–0009 + 合并版 0010，即本系列现在的 0008） | 状态与本系列最终态逐字节相同，直接重跑 `setup.sh`，8 个补丁都会判定为「已在仓库里」。 |
-| 上一版交付（0001–0008，即加入 0009、0010 之前的系列） | 直接重跑 `setup.sh`：0001–0008 已在仓库里会跳过，只追加 0009、0010。 |
-| 最初的旧系列（0001–0009 + 旧 0010，仓库里有 `PanelProxyFetcher.kt`） | 从原始包取出旧 0010，`git apply -R` 撤回，回到 0001–0009 的状态，本系列可直接接上。步骤见下。 |
-| 其它中间状态 | 先还原到 dd21ee4 基线，再装本系列。 |
+| 上一版交付（本系列 0001–0009 全部装上） | 直接重跑 `setup.sh`：0001–0009 判定为「已在仓库里」，只追加 0010。 |
+| 本系列 0001–0010 全部装上 | 与最终态逐字节相同，直接重跑 `setup.sh`，10 个补丁都会判定为「已在仓库里」。 |
+| 其它任何中间状态（只装到 0001–0008 之一、或旧系列） | 先还原到 dd21ee4 基线，再装本系列。 |
 
-最初的旧系列那一行的步骤：
+还原前先确认仓库里没有要保留的改动（`git status`）。还原到基线的做法：
 
 ```bash
-unzip -p mishka-custom-20261009.zip mishka-custom/patches/app/0010-panel-webview-proxy.patch > /tmp/old-0010.patch
-sha256sum /tmp/old-0010.patch    # 应为 b90822154bac3036e9e92a20f39b5680bf5afdcfbbf122a832b46df762e05751
-git -C <Mishka 仓库> apply -R /tmp/old-0010.patch
-bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库> --force
+git -C <Mishka 仓库> checkout dd21ee4    # 或先 git stash 保存改动
+bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 ```
 
-撤回之后，如果 0001–0009 已经提交，工作区检查只会看到这次撤回的改动；可以先 `git commit -am "撤回旧 0010"` 再重跑，
-不带 `--force`。如果 0001–0009 还没提交，就直接用 `--force` 重跑，不要为了过检查去提交未经确认的改动。
-
-`git apply -R` 失败，说明仓库里的改动不是原样的，这时请先还原到 dd21ee4 基线，不要硬做。
+`git apply -R` 失败，说明仓库里的改动不是原样的，同样请先还原到 dd21ee4 基线，不要硬做。
