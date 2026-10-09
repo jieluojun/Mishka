@@ -18,7 +18,7 @@
 #      0007 字段整理按钮移到标题左侧 + 右侧「回退修改」按钮（仅内容有改动时显示，不加依赖）、
 #      0008 ROOT TPROXY / eBPF 子模式下把活动配置里的 tun.enable 写死 false（与运行时一致）、
 #      0009 面板改用独立 Activity 承载（换加载方式：不再挂在主界面导航栈里）、
-#      0010 外部面板的外网请求改走 mihomo mixed-port（修国外地址测出国内 IP / YouTube 测不出延迟）
+#      0010 外部面板的外网请求经 ProxyController 走 mihomo mixed-port（修国外地址测出国内 IP / YouTube 测不出延迟；新增 androidx.webkit 依赖）
 #
 # 回滚：逆序 git apply -R（见 README.md「回滚」）
 set -euo pipefail
@@ -418,10 +418,10 @@ else
   die "补丁（0009）打不上：PanelActivity / App.kt / AppNavigation.kt / Route.kt 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0009\" 看详细原因"
 fi
 
-# 0010 在 0009 之上：外部面板 WebView 的外网请求改走 mihomo mixed-port（应用自身 UID 被代理规则排除，
-# 直连会测出国内出口、YouTube 测不出延迟）。新增 PanelProxyFetcher.kt，PanelWebView 挂 shouldInterceptRequest。
+# 0010 在 0009 之上：外部面板 WebView 的外网请求经 ProxyController 走 mihomo mixed-port（应用自身 UID 被代理规则排除，
+# 直连会测出国内出口、YouTube 测不出延迟）。新增 PanelProxyOverride.kt，并引入 androidx.webkit 依赖（用户已批准）。
 PATCH_0010="$DELIVER/patches/app/0010-panel-webview-proxy.patch"
-PANEL_PROXY_REL="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyFetcher.kt"
+PANEL_PROXY_REL="app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyOverride.kt"
 if [ -f "$REPO/$PANEL_PROXY_REL" ]; then
   ok "面板外网请求走代理（0010）已应用"
 elif git -C "$REPO" apply --check "$PATCH_0010" 2>/dev/null; then
@@ -429,7 +429,7 @@ elif git -C "$REPO" apply --check "$PATCH_0010" 2>/dev/null; then
   ok "已应用 patches/app/0010-panel-webview-proxy.patch（面板外网请求走 mihomo mixed-port）"
 elif git -C "$REPO" apply --check --3way "$PATCH_0010" 2>/dev/null; then
   git -C "$REPO" apply --3way "$PATCH_0010"
-  ok "已应用（3way 合并，注意确认 PanelWebView 的 shouldInterceptRequest）"
+  ok "已应用（3way 合并，注意确认 PanelWebView 的 produceState 与 PanelProxyOverride.kt）"
 else
   die "补丁（0010）打不上：PanelWebView 与预期基线不一致，用 git -C \"$REPO\" apply --check -v \"$PATCH_0010\" 看详细原因"
 fi

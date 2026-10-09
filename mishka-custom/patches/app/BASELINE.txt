@@ -134,12 +134,13 @@ patch0009_prereq=0001,0002,0003,0004,0005,0006,0007,0008
 patch0009_sha256=4949daca27f8f0f728d68c4e3da530ffa0b386044412875397d5c48bc2e1e26d
 patch0009_blob_new=89a0fc21c1d02369e859c389e69a1c10b5e63d29 app/src/main/kotlin/top/yukonga/mishka/PanelActivity.kt
 patch0009_blob_new=4055f3cc1e20cf48dda4e1ffc2069b635fdfdd9e app/src/main/kotlin/top/yukonga/mishka/ui/theme/MishkaTheme.kt
-# --- 0010：外部面板 WebView 外网请求改走 mihomo mixed-port（在 0001–0009 之上应用）---
+# --- 0010：外部面板的外网请求改走 mihomo mixed-port（ProxyController，在 0001–0009 之上应用）---
 # 应用自身 UID 被代理规则排除（TPROXY 的 out-bypass-self / VPN 的 addDisallowedApplication），
 # 应用内 WebView 的外网请求一直直连：国外站点测出国内出口 IP、YouTube 等被墙站点测不出延迟；
-# 同机浏览器是另一个 UID，走代理正常。现在 shouldInterceptRequest 对非本机的 GET/HEAD 改由
-# HttpURLConnection(HTTP 127.0.0.1:mixed-port) 拉取并原样回交 WebView（Cookie 双向同步）。
-# 本机地址、非 GET/HEAD、代理未运行时仍直连。仅用 java.net 与平台 android.webkit，不引入新依赖。
+# 同机浏览器是另一个 UID，走代理正常。现在用 androidx.webkit ProxyController.setProxyOverride
+# 给进程内 WebView 设 127.0.0.1:<mixed-port> 代理（本机地址直连），覆盖 GET 以外的 POST / PUT 等请求。
+# 新增依赖 androidx.webkit:webkit:1.16.0（经用户明确批准，放宽了此前「不新增依赖」的规则）。
+# PanelWebView 在覆盖生效前不创建 / 加载 WebView（produceState 等待 ensure）。
 patch0010_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009
-patch0010_sha256=b90822154bac3036e9e92a20f39b5680bf5afdcfbbf122a832b46df762e05751
-patch0010_blob_new=7b082144dff7f7144c953de311749cf7a9c98f37 app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyFetcher.kt
+patch0010_sha256=2b1623d91c9587091c7fcff885d5f32c98334be32645a6edd3478e4fa4841c12
+patch0010_blob_new=b7f2dfc7b6c321cb78791da24c452e4aabb919ed app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyOverride.kt

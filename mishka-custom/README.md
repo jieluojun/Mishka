@@ -96,4 +96,4 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 0007 | 字段整理按钮移到文件名左侧，右侧「回退修改」按钮（仅内容有改动时显示） |
 | 0008 | ROOT TPROXY / eBPF 子模式：把活动配置里的 `tun.enable` 写死 `false`（与运行时一致） |
 | 0009 | 面板改用独立 Activity 承载（换掉原来的加载方式） |
-| 0010 | 面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP、YouTube 测不出延迟） |
+| 0010 | 面板外网请求（含 POST 等）经 ProxyController 走 mihomo mixed-port（修国外地址测出国内 IP、YouTube 测不出延迟）；**新增 `androidx.webkit:1.16.0` 依赖** |

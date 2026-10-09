@@ -1,182 +1,178 @@
-diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyFetcher.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyFetcher.kt
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 6ecc565..65bc5f6 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -26,6 +26,7 @@ dependencies {
+     implementation(libs.androidx.activity)
+     implementation(libs.androidx.core.splashscreen)
+     implementation(libs.androidx.profileinstaller)
++    implementation(libs.androidx.webkit)
+     implementation(libs.material.icons.extended)
+     implementation(libs.hiddenapibypass)
+     implementation(libs.quickie.bundled)
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyOverride.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyOverride.kt
 new file mode 100644
-index 0000000..7b08214
+index 0000000..b7f2dfc
 --- /dev/null
-+++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyFetcher.kt
-@@ -0,0 +1,159 @@
++++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelProxyOverride.kt
+@@ -0,0 +1,110 @@
 +package top.yukonga.mishka.custom.panel
 +
++import android.content.Context
 +import android.util.Log
-+import android.webkit.CookieManager
-+import android.webkit.WebResourceRequest
-+import android.webkit.WebResourceResponse
-+import kotlinx.coroutines.runBlocking
++import androidx.core.content.ContextCompat
++import androidx.webkit.ProxyConfig
++import androidx.webkit.ProxyController
++import androidx.webkit.WebViewFeature
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.CancellableContinuation
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.coroutines.suspendCancellableCoroutine
++import kotlinx.coroutines.withContext
++import kotlinx.coroutines.withTimeoutOrNull
 +import org.koin.core.context.GlobalContext
 +import top.yukonga.mishka.data.repository.SubscriptionProxyResolver
-+import java.io.IOException
-+import java.net.HttpURLConnection
-+import java.net.InetSocketAddress
-+import java.net.Proxy
++import top.yukonga.mishka.platform.ProxyServiceBridge
 +import java.net.URI
-+import java.net.URL
++import java.util.concurrent.Executor
++import kotlin.coroutines.resume
 +
 +/**
-+ * 外部面板（WebView）的外网请求改走 mihomo mixed-port。
++ * 外部面板（WebView）的代理覆盖：让面板里的外网请求经 mihomo mixed-port 出站。
 + *
-+ * 问题：Mishka 自身 UID 在 TPROXY 下被 `out-bypass-self` 直连放行，VPN 下 `addDisallowedApplication`
-+ * 把自己排除在外，所以应用内 WebView 的外网请求全部直连——国外站点解析成国内 IP、YouTube 等被墙站点测不出延迟。
-+ * 浏览器是另一个 UID，走代理正常。
++ * 背景：Mishka 自身 UID 被代理规则排除（TPROXY 的 out-bypass-self / VPN 的 addDisallowedApplication），
++ * 应用内 WebView 的请求一直直连——国外站点测出国内出口、YouTube 测不出延迟。浏览器是另一个 UID，走代理正常。
 + *
-+ * 做法：`WebViewClient.shouldInterceptRequest` 里，对「非本机」的 GET/HEAD 请求改由
-+ * `HttpURLConnection(Proxy HTTP 127.0.0.1:mixed-port)` 拉取，再把响应原样交还 WebView。
-+ * 与 [SubscriptionProxyResolver] 的既有用法一致（订阅更新 / 规则延迟 / 图标下载都走同一个本机端口）。
++ * 做法：`androidx.webkit.ProxyController.setProxyOverride` 给进程内所有 WebView 设一条代理规则
++ * `127.0.0.1:<mixed-port>`，本机地址（localhost / 127.* / [::1] / external-controller 主机）不走代理。
++ * 这是唯一能覆盖 GET 之外（POST / PUT 等）请求的途径：平台 `shouldInterceptRequest` 拿不到请求体。
 + *
-+ * 不拦截（返回 null，WebView 照常直连）的情况：
-+ *  - 本机地址（127.0.0.1 / localhost / ::1 / 0.0.0.0）：外部面板自身与 external-controller 都在这里；
-+ *  - 非 GET/HEAD（WebResourceRequest 拿不到请求体，POST 无法安全转发）；
-+ *  - 代理未运行或拿不到 mixed-port；
-+ *  - 代理请求出错（回退直连，行为与修复前一致）。
-+ *
-+ * Cookie：请求侧补 CookieManager 里的 Cookie；响应侧 Set-Cookie 写回 CookieManager，登录态不丢。
++ * 行为：
++ *  - 代理未运行、拿不到 mixed-port、或 WebView provider 不支持 PROXY_OVERRIDE → 清除覆盖 / 不设置，页面直连（与修复前一致）；
++ *  - 端口变化时在下次进入面板时重设（[appliedRule] 对比）；
++ *  - 设置是异步的：[ensure] 等待 listener 回调（超时 [APPLY_TIMEOUT_MS] 后放行，不阻塞页面）；
++ *    调用方要在 ensure 返回后再创建 / 加载 WebView，否则首屏请求可能抢在代理设置之前发出。
 + */
-+internal object PanelProxyFetcher {
++internal object PanelProxyOverride {
 +
-+    private const val TAG = "PanelProxyFetcher"
++    private const val TAG = "PanelProxyOverride"
 +
-+    /** 代理地址缓存时长：避免每个子资源都去查一次 mihomo API。 */
-+    private const val PROXY_TTL_MS = 5_000L
++    /** 等待 setProxyOverride 回调的上限：超时仍放行页面（直连兜底），不让面板卡死。 */
++    private const val APPLY_TIMEOUT_MS = 3_000L
 +
-+    private const val CONNECT_TIMEOUT_MS = 15_000
-+    private const val READ_TIMEOUT_MS = 30_000
++    private val mutex = Mutex()
 +
-+    private val LOCAL_HOSTS = setOf("127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0")
-+
-+    /** 转发请求时不回传的头：Host / Connection 由 HttpURLConnection 自己管理。 */
-+    private val SKIP_REQUEST_HEADERS = setOf("host", "connection", "content-length", "keep-alive")
-+
-+    /** 响应里不回传的头：HttpURLConnection 已解分块，保留会让 WebView 误解析。 */
-+    private val SKIP_RESPONSE_HEADERS = setOf("transfer-encoding", "connection", "keep-alive", "set-cookie")
-+
++    /** 当前已生效的代理规则（"127.0.0.1:port"）；空串表示已清除 / 未设置。 */
 +    @Volatile
-+    private var cachedProxyUrl: String? = null
-+
-+    @Volatile
-+    private var cachedAt: Long = 0L
-+
-+    @Volatile
-+    private var cachedValid = false
++    private var appliedRule: String? = null
 +
 +    private val resolver: SubscriptionProxyResolver by lazy {
 +        GlobalContext.get().get<SubscriptionProxyResolver>()
 +    }
 +
-+    /** WebView 的 shouldInterceptRequest 调用入口（后台线程）。返回 null 表示由 WebView 直连。 */
-+    fun intercept(request: WebResourceRequest): WebResourceResponse? {
-+        val uri = request.url ?: return null
-+        val scheme = uri.scheme.orEmpty()
-+        if (scheme != "http" && scheme != "https") return null
-+        val host = uri.host.orEmpty().lowercase()
-+        if (host.isEmpty() || host in LOCAL_HOSTS) return null
-+        val method = request.method.orEmpty().uppercase()
-+        if (method != "GET" && method != "HEAD") return null
++    /**
++     * 确保面板 WebView 的代理覆盖与当前 mihomo 状态一致。返回 true 表示可以开始加载页面
++     * （无论是否设置成功，失败都按直连处理）。
++     */
++    suspend fun ensure(context: Context): Boolean = mutex.withLock {
++        if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
++            Log.i(TAG, "WebView provider 不支持 PROXY_OVERRIDE，面板直连")
++            return@withLock true
++        }
++        val proxyUrl = withContext(Dispatchers.IO) {
++            runCatching { resolver.resolve(requireUserToggle = false) }.getOrNull()
++        }
++        val port = proxyUrl?.let { runCatching { URI(it).port }.getOrDefault(-1) } ?: -1
++        val rule = if (port in 1..65535) "127.0.0.1:$port" else ""
++        if (rule == appliedRule) return@withLock true
 +
-+        val proxy = currentProxy() ?: return null
-+        return runCatching { fetch(request, uri.toString(), method, proxy) }
-+            .onFailure { Log.w(TAG, "proxy fetch failed, fallback direct: ${it.message}") }
-+            .getOrNull()
++        val executor = ContextCompat.getMainExecutor(context)
++        val ok = if (rule.isEmpty()) clearOverride(executor) else setOverride(executor, rule)
++        if (ok) appliedRule = rule
++        Log.i(TAG, "面板代理覆盖 rule='$rule' ok=$ok")
++        true
 +    }
 +
-+    private fun currentProxy(): Proxy? {
-+        val now = System.currentTimeMillis()
-+        val url = if (cachedValid && now - cachedAt < PROXY_TTL_MS) {
-+            cachedProxyUrl
-+        } else {
-+            val resolved = runCatching { runBlocking { resolver.resolve(requireUserToggle = false) } }
-+                .getOrNull()
-+            cachedProxyUrl = resolved
-+            cachedAt = now
-+            cachedValid = true
-+            resolved
-+        } ?: return null
-+        val port = runCatching { URI(url).port }.getOrDefault(-1)
-+        if (port <= 0) return null
-+        return Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port))
++    private suspend fun setOverride(executor: Executor, rule: String): Boolean {
++        val controllerHost = ProxyServiceBridge.state.value.externalController
++            .substringBeforeLast(':')
++            .takeIf { it.isNotBlank() && it != "0.0.0.0" }
++        return awaitListener { done ->
++            val builder = ProxyConfig.Builder()
++                .addProxyRule(rule)
++                .addBypassRule("localhost")
++                .addBypassRule("127.*")
++                .addBypassRule("[::1]")
++            controllerHost?.let { builder.addBypassRule(it) }
++            ProxyController.getInstance().setProxyOverride(builder.build(), executor, done)
++        }
 +    }
 +
-+    private fun fetch(
-+        request: WebResourceRequest,
-+        url: String,
-+        method: String,
-+        proxy: Proxy,
-+    ): WebResourceResponse? {
-+        val cookieManager = CookieManager.getInstance()
-+        val conn = (URL(url).openConnection(proxy) as HttpURLConnection).apply {
-+            requestMethod = method
-+            connectTimeout = CONNECT_TIMEOUT_MS
-+            readTimeout = READ_TIMEOUT_MS
-+            instanceFollowRedirects = true
-+            request.requestHeaders?.forEach { (name, value) ->
-+                if (name.lowercase() !in SKIP_REQUEST_HEADERS) setRequestProperty(name, value)
-+            }
-+            if (getRequestProperty("Cookie").isNullOrBlank()) {
-+                cookieManager.getCookie(url)?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Cookie", it) }
-+            }
++    private suspend fun clearOverride(executor: Executor): Boolean =
++        awaitListener { done ->
++            ProxyController.getInstance().clearProxyOverride(executor, done)
 +        }
 +
-+        val code = conn.responseCode
-+        if (code <= 0) {
-+            conn.disconnect()
-+            return null
-+        }
-+        val stream = try {
-+            conn.inputStream
-+        } catch (_: IOException) {
-+            conn.errorStream ?: run {
-+                conn.disconnect()
-+                return null
++    /** 把 listener 风格的 API 包成挂起函数；超时或调用抛异常都返回 false。 */
++    private suspend fun awaitListener(call: (Runnable) -> Unit): Boolean = withTimeoutOrNull(APPLY_TIMEOUT_MS) {
++        suspendCancellableCoroutine<Boolean> { cont: CancellableContinuation<Boolean> ->
++            runCatching {
++                call(Runnable { if (cont.isActive) cont.resume(true) })
++            }.onFailure {
++                Log.w(TAG, "setProxyOverride 调用失败：${it.message}")
++                if (cont.isActive) cont.resume(false)
 +            }
 +        }
-+
-+        val headers = LinkedHashMap<String, String>()
-+        conn.headerFields?.forEach { (name, values) ->
-+            if (name == null || values.isNullOrEmpty()) return@forEach
-+            val lower = name.lowercase()
-+            if (lower == "set-cookie") {
-+                values.forEach { cookieManager.setCookie(url, it) }
-+            } else if (lower !in SKIP_RESPONSE_HEADERS) {
-+                headers[name] = values.joinToString(", ")
-+            }
-+        }
-+
-+        val contentType = conn.contentType.orEmpty()
-+        val mime = contentType.substringBefore(';').trim().ifBlank { "application/octet-stream" }
-+        val charset = Regex("charset=\"?([^\";\\s]+)", RegexOption.IGNORE_CASE)
-+            .find(contentType)?.groupValues?.get(1)
-+
-+        return WebResourceResponse(
-+            mime,
-+            charset,
-+            code,
-+            conn.responseMessage.orEmpty().ifBlank { "OK" },
-+            headers,
-+            stream,
-+        )
-+    }
++    } ?: false
 +}
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
-index 1769d75..4b39633 100644
+index 1769d75..0e82600 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/panel/PanelWebView.kt
-@@ -372,6 +372,12 @@ fun PanelWebView(
-                 }.getOrDefault(false)
-             }
+@@ -36,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.key
+ import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.produceState
+ import androidx.compose.runtime.remember
+ import androidx.compose.runtime.rememberCoroutineScope
+ import androidx.compose.runtime.rememberUpdatedState
+@@ -493,12 +494,16 @@ fun PanelWebView(
  
-+            // [mishka-custom] 外网请求改走 mihomo mixed-port（应用自身 UID 被代理规则排除，直连会得到国内出口）；
-+            // 本机地址 / 非 GET·HEAD / 代理未运行时返回 null，WebView 照常直连。见 PanelProxyFetcher
-+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-+                return request?.let { PanelProxyFetcher.intercept(it) }
-+            }
-+
-             override fun onPageCommitVisible(view: WebView?, url: String?) {
-                 // 防白闪的关键帧：真实内容已提交，可以露出来了
-                 contentVisible.value = true
+     // key 照 box.app：isDark / sessionKey 变化都重建实例（换面板、换深浅色）
+     key(isDark, sessionKey) {
++        // [mishka-custom] 代理覆盖（ProxyController）生效前不创建 / 加载 WebView，避免首屏请求抢在代理设置之前发出
++        val proxyReady by produceState(initialValue = false) {
++            value = PanelProxyOverride.ensure(context)
++        }
+         Box(
+             modifier = modifier
+                 .fillMaxSize()
+                 .background(if (isDark) ComposeColor.Black else ComposeColor.White),
+         ) {
+-            AndroidView(
++            if (proxyReady) AndroidView(
+                 factory = { ctx ->
+                     // 先取到面板入口 URL：apply 的 receiver 是 WebView，它自己就有个
+                     // getUrl() 属性，里面裸写 `url` 会被它遮蔽成「当前页地址」
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+index 9dbaea8..13527a2 100644
+--- a/gradle/libs.versions.toml
++++ b/gradle/libs.versions.toml
+@@ -5,6 +5,7 @@ androidx-benchmark = "1.5.0"
+ androidx-lifecycle = "2.11.0"
+ androidx-navigationevent = "1.1.2"
+ androidx-profileinstaller = "1.4.1"
++androidx-webkit = "1.16.0"
+ androidx-splashscreen = "1.2.0"
+ androidx-test-junit = "1.3.0"
+ androidx-uiautomator = "2.4.0"
+@@ -31,6 +32,7 @@ androidx-lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-co
+ androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle" }
+ androidx-navigationevent = { module = "androidx.navigationevent:navigationevent-compose", version.ref = "androidx-navigationevent" }
+ androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "androidx-profileinstaller" }
++androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "androidx-webkit" }
+ androidx-room3-compiler = { module = "androidx.room3:room3-compiler", version.ref = "room3" }
+ androidx-room3-runtime = { module = "androidx.room3:room3-runtime", version.ref = "room3" }
+ androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
