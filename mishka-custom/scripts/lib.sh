@@ -84,7 +84,7 @@ app_feature_applied() {
   local repo="$1" num="$2"
   local fmes="$repo/$FMES_REL"
   case "$num" in
-    # 0001 是合并版：锚点面板 + 可视化编辑器（含 maplist 拖动排序、路由规则序号、匹配值省略号、应用选择器），五个标记都在才算已装
+    # 0001：锚点面板 + 可视化编辑器（含 maplist 拖动排序、路由规则序号、匹配值省略号、应用选择器），五个标记都在才算已装
     0001) [[ -f "$repo/$CUSTOM_REL/anchor/AnchorPanel.kt" ]] && grep -q 'MishkaAnchorPanel' "$fmes" 2>/dev/null \
           && grep -q '拖动中按 order 实时换位' "$repo/$CUSTOM_REL/forms/P3FormEditors.kt" 2>/dev/null \
           && grep -q 'RuleIndexBadge' "$repo/$CUSTOM_REL/forms/FlowFormPages.kt" 2>/dev/null \
@@ -93,18 +93,21 @@ app_feature_applied() {
     0002) grep -q 'importBuiltinMianliuOnce' "$repo/$VM_REL" 2>/dev/null ;;
     0003) [[ -f "$repo/$CUSTOM_REL/forms/ConfigTidy.kt" ]] && grep -q 'fun tidyConfig()' "$fmes" 2>/dev/null ;;
     0004) grep -q 'refreshSelectionAfterTest' "$repo/$PROXY_VM_REL" 2>/dev/null ;;
-    0005) [[ -f "$repo/$CUSTOM_REL/panel/PanelWebView.kt" && -f "$repo/$APP_PKG_REL/PanelActivity.kt" ]] ;;
+    # 0005：主页面板 + 面板外网代理（PanelProxyOverride.kt）都在才算已装
+    0005) [[ -f "$repo/$CUSTOM_REL/panel/PanelWebView.kt" && -f "$repo/$APP_PKG_REL/PanelActivity.kt" ]] \
+          && [[ -f "$repo/$CUSTOM_REL/panel/PanelProxyOverride.kt" ]] ;;
     0006) grep -q 'val proxyType = meta.type.trim().uppercase()' "$repo/$CONN_REL" 2>/dev/null ;;
     0007) grep -q 'forceTunDisabled' "$repo/$APRC_REL" 2>/dev/null ;;
-    0008) [[ -f "$repo/$CUSTOM_REL/panel/PanelProxyOverride.kt" ]] ;;
-    0009) [[ -f "$repo/$CUSTOM_REL/runtime/TproxyAppFilter.kt" ]] \
+    0008) [[ -f "$repo/$CUSTOM_REL/runtime/TproxyAppFilter.kt" ]] \
           && grep -q 'ROOT_TPROXY_APP_MODE_ACTIVE' "$repo/$APP_PKG_REL/service/MishkaRootService.kt" 2>/dev/null ;;
-    0010) [[ -f "$repo/$APP_PKG_REL/service/SystemIpv6.kt" ]] \
-          && grep -q 'ROOT_SYSTEM_IPV6' "$repo/$APP_PKG_REL/platform/PlatformStorage.kt" 2>/dev/null ;;
-    0011) grep -q 'include("arm64-v8a", "armeabi-v7a")' "$repo/app/build.gradle.kts" 2>/dev/null ;;
-    0012) grep -q 'const val MIN_SDK = 26' "$repo/buildSrc/src/main/kotlin/ProjectConfig.kt" 2>/dev/null ;;
-    0013) grep -q 'ebpfTakesOverIpv6' "$repo/$APP_PKG_REL/service/SystemIpv6.kt" 2>/dev/null ;;
-    0014) grep -q 'apn_drift_check' "$repo/app/src/main/res/raw/system_ipv6.sh" 2>/dev/null ;;
+    # 0009（系统 IPv6）：标记都在才算已装（含 eBPF 接管判断、APN 校验、网卡与 APN 分开处理）
+    0009) [[ -f "$repo/$APP_PKG_REL/service/SystemIpv6.kt" ]] \
+          && grep -q 'ROOT_SYSTEM_IPV6' "$repo/$APP_PKG_REL/platform/PlatformStorage.kt" 2>/dev/null \
+          && grep -q 'ebpfTakesOverIpv6' "$repo/$APP_PKG_REL/service/SystemIpv6.kt" 2>/dev/null \
+          && grep -q 'apn_drift_check' "$repo/app/src/main/res/raw/system_ipv6.sh" 2>/dev/null \
+          && grep -q 'IFACE_WANT' "$repo/app/src/main/res/raw/system_ipv6.sh" 2>/dev/null ;;
+    0010) grep -q 'include("arm64-v8a", "armeabi-v7a")' "$repo/app/build.gradle.kts" 2>/dev/null ;;
+    0011) grep -q 'const val MIN_SDK = 26' "$repo/buildSrc/src/main/kotlin/ProjectConfig.kt" 2>/dev/null ;;
     *) return 1 ;;
   esac
 }

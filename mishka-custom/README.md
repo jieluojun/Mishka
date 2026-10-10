@@ -3,14 +3,14 @@
 上游 app：YuKongA/Mishka（app 补丁基线 `dd21ee4`）；内核：jieluojun/mihomo @ Alpha（基线见
 `patches/mihomo/BASELINE.txt`）。本包只含「打补丁 + 编译」用得上的东西。
 
-app 补丁是**按功能切分**的系列：每个补丁对应一个功能，原先「修正上一个补丁」的改动已并入它所修正的功能。
-编号 0001–0010 与旧系列编号不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
+app 补丁是**按功能切分**的系列：每个补丁对应一个功能；修正某个功能的改动不单独成补丁，而是随该功能的补丁一起发布。
+编号 0001–0011 与旧系列编号不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
 
 ## 包里有什么
 
 | 路径 | 用途 |
 | --- | --- |
-| `patches/app/0001…0014-*.patch` | app 侧补丁，按序号依次叠加（前置关系见 `patches/app/BASELINE.txt`） |
+| `patches/app/0001…0011-*.patch` | app 侧补丁，按序号依次叠加（前置关系见 `patches/app/BASELINE.txt`） |
 | `patches/app/BASELINE.txt` | app 补丁的基线 commit、每个补丁的 sha256、前置与涉及的 blob |
 | `patches/mihomo/0001…0007-*.patch` | 内核补丁，按序号依次应用 |
 | `patches/mihomo/BASELINE.txt` | 内核补丁的基线 commit 与 sha256 |
@@ -35,7 +35,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库> [--kernel-dir <内核
 2. 内核：准备一份 jieluojun/mihomo(Alpha) 到补丁基线 commit，应用 `patches/mihomo/*.patch`
    （`--kernel-dir` 可以放仓库外）；
 3. 写 `go.work` + `go.work.sum`；
-4. 依次应用 app 补丁 `0001 → 0014`（其中 0002「内置免流」可选，打不上只警告）。
+4. 依次应用 app 补丁 `0001 → 0011`（其中 0002「内置免流」可选，打不上只警告）。
 
 常用参数：`--skip-kernel` 只打 app 补丁、`--ci` 非交互（配 Actions）、`--force` 脏工作区也继续、
 `--refresh-sum` 重算 go.work.sum、`--help` 看全部。
@@ -88,7 +88,7 @@ sha="$(git -C mihomo rev-parse --short=8 HEAD)"
 逆序还原，再拉更新、重跑装配：
 
 ```bash
-# app 补丁：0014 → 0001（用 [0-9][0-9][0-9][0-9]-* 匹配，与 setup.sh 一致）
+# app 补丁：0011 → 0001（用 [0-9][0-9][0-9][0-9]-* 匹配，与 setup.sh 一致）
 for p in $(ls -r mishka-custom/patches/app/[0-9][0-9][0-9][0-9]-*.patch); do git apply -R "$p"; done
 # 内核补丁：0007 → 0001（在内核目录里执行）
 git pull
@@ -103,53 +103,50 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 0002 | 内置「免流」配置（`res/raw/builtin_mianliu.yaml`，可选） |
 | 0003 | 字段整理（`ConfigTidy`，按官方字段顺序重排，注释与块式写法原样保留）+ 编辑器工具栏：字段整理按钮放到文件名左侧，右侧「回退修改」按钮（仅内容有改动时显示） |
 | 0004 | 代理页整组测速对齐 mihomo_box 的 `testGroupAll`（组接口的 0 值结论不重测、不可测策略不发请求、每路结果当场回写） |
-| 0005 | 主页面板 / Web 界面（box.app 同款）：主页「工具」下方入口，内嵌 WebView 打开内核 external-controller 的面板；独立 `PanelActivity` 承载；WebView 预热 |
+| 0005 | 主页面板 / Web 界面（box.app 同款）：主页「工具」下方入口，内嵌 WebView 打开内核 external-controller 的面板；独立 `PanelActivity` 承载；WebView 预热。另含面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP、YouTube 测不出延迟）：WebView 代理用 `androidx.webkit` 的 `ProxyController` 整体覆盖（GET/POST/WebSocket/CONNECT 都经 mihomo，域名由 mihomo 解析）；页面在覆盖生效后才加载；代理没接上时顶部给出提示。新增依赖 |
 | 0006 | 连接列表代理类型标签（TUN/TPROXY/EBPF，取 `metadata.type`） |
 | 0007 | TPROXY / eBPF 子模式：把活动配置里的 `tun.enable` 写死 `false`（与运行时一致） |
-| 0008 | 面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP、YouTube 测不出延迟）：WebView 代理用 `androidx.webkit` 的 `ProxyController` 整体覆盖（GET/POST/WebSocket/CONNECT 都经 mihomo，域名由 mihomo 解析）；页面在覆盖生效后才加载；代理没接上时顶部给出提示。新增依赖 |
-| 0009 | Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：TPROXY 模式改用 TUN 页的「仅代理以下应用 / 排除以下应用」（白名单优先，都未设置则全部代理；未设置时沿用分应用代理页），UID 按 `tun.include-android-user` 展开，名单应用的 UID 每 10 分钟重解析，变化才重装规则 |
-| 0010 | ROOT 设置新增「系统」分组，下设「系统 IPv6」开关（移植 mihomo_box 的系统 IPv6 逻辑）：默认关闭；ROOT 可用即立即禁用 Wi-Fi 等非蜂窝网卡的 IPv6（lo / 蜂窝 / 热点下游豁免），上网 APN（跳过 IMS）协议改为 IPv4；开启时恢复 IPv6 并还原 APN；关态下每 5 秒对账一次（60 秒冷却）；打开设置页时读取一次首选 APN 的协议，切换开关成功后再读一次。 |
-| 0011 | 支持 32 位 `armeabi-v7a`：内核与 APK 在 arm64-v8a 之外同时构建 armeabi-v7a（Go `GOARCH=arm`、`GOARM=7`，NDK `armv7a-linux-androideabi` 工具链；`splits.abi` 每个 ABI 各出一个 APK）。CI 构建耗时约翻倍 |
-| 0012 | 最低支持 Android 8（API 26，原 Android 12 / API 31）：`MIN_SDK` 31 → 26，同时给 API 29/30/31+ 的调用加 `SDK_INT` 守卫：`VpnService.Builder.setMetered` / `setHttpProxy`（API 29，低版本跳过系统代理）、`Os.fcntlInt`（API 30，低版本改用 JNI `nativeClearCloexec`）、三参 `startForeground`（API 29）、`setForegroundServiceBehavior`（API 31）、`canScheduleExactAlarms`（API 31，低版本直接精确调度）、`NetworkCallback(flags)` 与 `transportInfo`（API 31，低版本用无参回调 + WifiManager 回退取 SSID）、`POST_NOTIFICATIONS`（API 33，已有守卫）。Go / NDK 的 clang wrapper 随 minSdk 变为 `android26`。 |
-| 0013 | eBPF 接管 IPv6 时才强制保持系统 IPv6 开启：读取活动配置的 eBPF 监听器（`listeners[].local.ipv6` / `shared.ipv6`），任一不为 false 即视为接管，此时系统 IPv6 保持开启并在设置页提示；都为 false（或未配置 eBPF 监听器）时，系统 IPv6 按开关关闭。ROOT 启动 eBPF 子模式时也会按活动配置重新对账。配置读取失败或为 age 密文时保守保持开启。 |
-| 0014 | 系统 IPv6 关闭时的 APN 处理加固：`content update` 写入后重新查询同一行，以实际协议值判定成功（不再依赖 content 输出文字），失败时记录实际结果；关态每 60 秒校验首选 APN，被运营商或系统写回 IPv4/IPv6 时自动重新接管。 |
+| 0008 | Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：TPROXY 模式改用 TUN 页的「仅代理以下应用 / 排除以下应用」（白名单优先，都未设置则全部代理；未设置时沿用分应用代理页），UID 按 `tun.include-android-user` 展开，名单应用的 UID 每 10 分钟重解析，变化才重装规则 |
+| 0009 | ROOT 设置新增「系统」分组，下设「系统 IPv6」开关（移植 mihomo_box 的系统 IPv6 逻辑）：默认关闭；ROOT 可用即立即禁用 Wi-Fi 等非蜂窝网卡的 IPv6（lo / 蜂窝 / 热点下游豁免），上网 APN（跳过 IMS）协议改为 IPv4；开启时恢复 IPv6 并还原 APN；打开设置页时读取一次首选 APN 的协议，切换开关成功后再读一次。eBPF 模式下：活动配置的 eBPF 监听器（`listeners[].local.ipv6` / `shared.ipv6`）任一不为 false 即接管 IPv6，此时网卡侧（wlan 等）保持 IPv6 开启并在设置页提示；上网 APN 仍随开关改为 IPv4。都为 false 时系统 IPv6 按开关走，启动 eBPF 时重新对账。APN 写入后重新查询同一行，以实际协议值判定成功；关态每 60 秒校验首选 APN，被写回 IPv4/IPv6 时自动重新接管。 |
+| 0010 | 支持 32 位 `armeabi-v7a`：内核与 APK 在 arm64-v8a 之外同时构建 armeabi-v7a（Go `GOARCH=arm`、`GOARM=7`，NDK `armv7a-linux-androideabi` 工具链；`splits.abi` 每个 ABI 各出一个 APK）。CI 构建耗时约翻倍 |
+| 0011 | 最低支持 Android 8（API 26，原 Android 12 / API 31）：`MIN_SDK` 31 → 26，同时给 API 29/30/31+ 的调用加 `SDK_INT` 守卫：`VpnService.Builder.setMetered` / `setHttpProxy`（API 29，低版本跳过系统代理）、`Os.fcntlInt`（API 30，低版本改用 JNI `nativeClearCloexec`）、三参 `startForeground`（API 29）、`setForegroundServiceBehavior`（API 31）、`canScheduleExactAlarms`（API 31，低版本直接精确调度）、`NetworkCallback(flags)` 与 `transportInfo`（API 31，低版本用无参回调 + WifiManager 回退取 SSID）、`POST_NOTIFICATIONS`（API 33，已有守卫）。Go / NDK 的 clang wrapper 随 minSdk 变为 `android26`。 |
 
-## 系统 IPv6 开关（0010）
+## 系统 IPv6 开关（0009）
 
 位置：ROOT 设置 → 「系统」分组 → 「系统 IPv6」。逻辑对齐 mihomo_box 的 `system_ipv6_sync` / APN 子系统：
 
 | 状态 | 行为 |
 | --- | --- |
-| 关（默认） | 非蜂窝网卡（wlan 等）写 `disable_ipv6=1`，并关闭 RA / autoconf；上网 APN（`preferapn`，跳过 IMS 承载）的 `protocol` / `roaming_protocol` 改为 `IP`，原值记入 `files/system_ipv6/apn.state` |
+| 关（默认） | 非蜂窝网卡（wlan 等）写 `disable_ipv6=1`，并关闭 RA / autoconf（eBPF 接管 IPv6 时不写，见下文）；上网 APN（`preferapn`，跳过 IMS 承载）的 `protocol` / `roaming_protocol` 改为 `IP`，原值记入 `files/system_ipv6/apn.state` |
 | 开 | `disable_ipv6` 归 0，恢复 RA / autoconf，按状态文件还原 APN 协议，并停止常驻循环 |
 
 - **立即执行**：应用启动时若 ROOT 可用，按开关期望值执行（默认即立即禁用）；开机 / 应用升级由 `BootReceiver` 再执行一次。
 - **常驻对账**：关态下 root 进程每 5 秒检查一次，飞行模式或切网后被 netd 放回的网卡会被重新禁用；同一网卡 60 秒内最多追打一次。
 - **APN 状态**：打开设置页时经 root 读取一次首选 APN，显示协议（仅 IPv4 / IPv4/IPv6 等）与漫游协议；切换开关成功后会重新读取。离开页面不再查询，也没有手动刷新按钮。
 - **不碰 IMS**：蜂窝网卡不写内核 `disable_ipv6`，只改 APN 协议，VoLTE 与短信不受影响。
-- **eBPF 豁免（与 mihomo_box 的差异）**：mihomo_box 只在「eBPF 角色 ipv6 生效」时保持 IPv6；本模块在 ROOT eBPF 模式下一律保持系统 IPv6 开启，不解析配置。
+- **eBPF 接管 IPv6**：活动配置里任一 eBPF 监听器的 `local.ipv6` / `shared.ipv6` 不为 false 即视为接管。此时网卡侧（wlan 等）保持 IPv6 开启（内核需要 fd53::/64 本地路由），但上网 APN 仍随开关：开关关时改为 IPv4，开关开时还原（只影响蜂窝，IMS 承载不动）。配置读不到或为 age 密文时按接管处理。
 - **未覆盖**：脚本依赖 APN 数据库可写与 `svc` 命令；多卡 / 定制 ROM 上查不到首选 APN 时，设置页会提示，可手动把 APN 协议设为 IPv4。
 
 源码：`app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt`、`app/src/main/res/raw/system_ipv6.sh`。
 
 ## 依赖变更
 
-**0008 新增依赖** `androidx.webkit:webkit:1.17.1`（`gradle/libs.versions.toml` 加版本与库条目，
-`app/build.gradle.kts` 加一行 `implementation`）。0001–0007 没有新增依赖；0008 是第一个。
-回滚 0008 会把这一行一并撤掉。
+**0005 新增依赖** `androidx.webkit:webkit:1.17.1`（`gradle/libs.versions.toml` 加版本与库条目，
+`app/build.gradle.kts` 加一行 `implementation`）。0001–0004 没有新增依赖；0005 是第一个。
+回滚 0005 会把这一行一并撤掉。
 
-**0009、0010、0011、0012、0013、0014 不新增依赖**：0009 只改 Kotlin 与运行时逻辑；0010 只用 Android 自带的 `su`、`content`、`svc`、`ndc` 命令，不引入新库。
+**0006–0011 不新增依赖**：0008 只改 Kotlin 与运行时逻辑；0009 只用 Android 自带的 `su`、`content`、`svc`、`ndc` 命令，不引入新库。
 
 ## 从旧系列升级
 
 旧系列（旧编号 0001–0010）的补丁不再随包发布，原件在原始交付包 `mishka-custom-20261009.zip` 里。
-本系列原第 0010 号补丁（应用选择器）已并入第 0001 号，所以升级前先看仓库现在是什么状态：
+升级前先看仓库现在是什么状态（判定依据是各补丁的标记，与编号无关）：
 
 | 仓库里装的是 | 怎么办 |
 | --- | --- |
-| 上一版交付（本系列 0001–0009 全部装上） | 直接重跑 `setup.sh`：0001–0009 判定为「已在仓库里」，只追加 0010、0011、0012、0013、0014。 |
-| 本系列 0001–0014 全部装上 | 与最终态逐字节相同，直接重跑 `setup.sh`，14 个补丁都会判定为「已在仓库里」。 |
-| 其它任何中间状态（只装到 0001–0008 之一、或旧系列） | 先还原到 dd21ee4 基线，再装本系列。 |
+| 已装满本系列全部 11 个补丁（与最终态逐字节相同） | 直接重跑 `setup.sh`，11 个补丁都会判定为「已在仓库里」。 |
+| 装过修复前的 0009（系统 IPv6 旧版，没有 `IFACE_WANT` 标记） | 先还原到 dd21ee4 基线，再重跑 `setup.sh`。 |
+| 只装到其中一部分（包括旧版的中间状态） | 先还原到 dd21ee4 基线，再装本系列。 |
 
 还原前先确认仓库里没有要保留的改动（`git status`）。还原到基线的做法：
 
