@@ -1,0 +1,63 @@
+diff --git a/app/src/main/res/raw/system_ipv6.sh b/app/src/main/res/raw/system_ipv6.sh
+index db7bd6a..ed02ebd 100644
+--- a/app/src/main/res/raw/system_ipv6.sh
++++ b/app/src/main/res/raw/system_ipv6.sh
+@@ -91,27 +91,41 @@ apn_reattach() {
+ }
+ 
+ # 「系统 IPv6=关」：上网 APN 协议改为 IP（幂等；只写漂移的行；跳过 IMS）
++# 写入后不信任 content 的输出文字，而是重新查询同一行，以实际值为准。
+ apn_apply() {
+   _rows=$(apn_rows)
+   if [ -z "$_rows" ]; then
+     log "WARN 未查询到首选 APN，未改写（可手动把 APN 协议设为 IPv4，效果相同）"
+     return 1
+   fi
+-  _changed=0
++  _changed=0; _fail=0
+   while IFS='|' read -r _id _apn _p _r _t; do
+     [ -n "$_id" ] || continue
+     case "$_t" in *ims*) log "跳过 IMS 承载 id=$_id apn=$_apn"; continue ;; esac
+     if [ "$_p" = "IP" ] && [ "$_r" = "IP" ]; then continue; fi
+     grep -q "^$_id|" "$APN_STATE" 2>/dev/null || echo "$_id|$_apn|$_p|$_r" >> "$APN_STATE"
+     _res=$(content update --uri content://telephony/carriers --where "_id=$_id" --bind protocol:s:IP --bind roaming_protocol:s:IP 2>&1)
+-    case "$_res" in
+-      *Updated*|*updated*) log "id=$_id apn=$_apn: $_p/$_r -> IP/IP"; _changed=1 ;;
+-      *) log "WARN id=$_id 写库失败: $_res" ;;
++    _now=$(apn_rows | grep "^$_id|" | head -1)
++    case "$_now" in
++      *"|IP|IP|"*) log "id=$_id apn=$_apn: $_p/$_r -> IP/IP（已校验）"; _changed=1 ;;
++      *) log "WARN id=$_id apn=$_apn 写入后仍为 [$_now]，content 输出：$_res"; _fail=1 ;;
+     esac
+   done <<APN_ROWS_END
+ $_rows
+ APN_ROWS_END
+   [ "$_changed" = "1" ] && apn_reattach
++  [ "$_fail" = "0" ]
++}
++
++# 关态周期校验：首选 APN 若被系统或运营商写回 IPv4/IPv6，则重新接管（每 60 秒一次，见 watch 循环）
++apn_drift_check() {
++  _rows=$(apn_rows)
++  [ -n "$_rows" ] || return 0
++  _bad=$(echo "$_rows" | awk -F'|' '$1 != "" && $5 !~ /ims/ && ($3 != "IP" || $4 != "IP") {print $1}')
++  if [ -n "$_bad" ]; then
++    log "APN 协议漂移（id=$(echo $_bad | tr '\n' ' ')），重新接管"
++    apn_apply
++  fi
+   return 0
+ }
+ 
+@@ -263,8 +277,12 @@ case "$MODE" in
+     echo "$$" > "$PID_FILE"
+     log "常驻对账启动（pid $$，${IPV6_TICK}s 一拍）"
+     # 被新的 watch / once 替换（PID 文件变化）时退出
++    _tick=0
+     while [ "$(cat "$PID_FILE" 2>/dev/null)" = "$$" ]; do
+       sync_once
++      _tick=$((_tick + 1))
++      # 关态每 12 拍（约 60 秒）校验一次 APN；开态不做
++      if [ "$WANT" = "0" ] && [ $((_tick % 12)) -eq 0 ]; then apn_drift_check; fi
+       sleep "$IPV6_TICK"
+     done
+     ;;

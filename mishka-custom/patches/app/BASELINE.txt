@@ -204,3 +204,9 @@ patch0013_sha256=fcbe305bf51660a61ed76d92ca7c97993a8f881adf5ff083a21c644346c66d3
 patch0013_blob_after=e568cc937989cb147c2e44b15fb7d61e3f223634 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 patch0013_blob_after=51c3c9f272b363310c6660914ed0bc820c6961d5 app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
 patch0013_blob_after=8edfbe44af3c11e3215e256884f7eaff26159026 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
+
+# --- 0014：系统 IPv6 关闭时 APN 写入后按实际值校验（不信任 content 输出文字）；关态每 60 秒校验首选 APN 并纠正漂移（system_ipv6.sh）
+patch0014_file=patches/app/0014-apn-verify-drift.patch
+patch0014_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012,0013
+patch0014_sha256=f58c0ab0efb2b821d931c8e23dbe0202bde7406e63d03dde386f21d0bab4af2c
+patch0014_blob_after=ed02ebd47be8c16fb3d29dbfb0dfb62da9f94b2d app/src/main/res/raw/system_ipv6.sh

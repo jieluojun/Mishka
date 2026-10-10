@@ -10,7 +10,7 @@ app 补丁是**按功能切分**的系列：每个补丁对应一个功能，原
 
 | 路径 | 用途 |
 | --- | --- |
-| `patches/app/0001…0013-*.patch` | app 侧补丁，按序号依次叠加（前置关系见 `patches/app/BASELINE.txt`） |
+| `patches/app/0001…0014-*.patch` | app 侧补丁，按序号依次叠加（前置关系见 `patches/app/BASELINE.txt`） |
 | `patches/app/BASELINE.txt` | app 补丁的基线 commit、每个补丁的 sha256、前置与涉及的 blob |
 | `patches/mihomo/0001…0007-*.patch` | 内核补丁，按序号依次应用 |
 | `patches/mihomo/BASELINE.txt` | 内核补丁的基线 commit 与 sha256 |
@@ -35,7 +35,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库> [--kernel-dir <内核
 2. 内核：准备一份 jieluojun/mihomo(Alpha) 到补丁基线 commit，应用 `patches/mihomo/*.patch`
    （`--kernel-dir` 可以放仓库外）；
 3. 写 `go.work` + `go.work.sum`；
-4. 依次应用 app 补丁 `0001 → 0013`（其中 0002「内置免流」可选，打不上只警告）。
+4. 依次应用 app 补丁 `0001 → 0014`（其中 0002「内置免流」可选，打不上只警告）。
 
 常用参数：`--skip-kernel` 只打 app 补丁、`--ci` 非交互（配 Actions）、`--force` 脏工作区也继续、
 `--refresh-sum` 重算 go.work.sum、`--help` 看全部。
@@ -88,7 +88,7 @@ sha="$(git -C mihomo rev-parse --short=8 HEAD)"
 逆序还原，再拉更新、重跑装配：
 
 ```bash
-# app 补丁：0013 → 0001（用 [0-9][0-9][0-9][0-9]-* 匹配，与 setup.sh 一致）
+# app 补丁：0014 → 0001（用 [0-9][0-9][0-9][0-9]-* 匹配，与 setup.sh 一致）
 for p in $(ls -r mishka-custom/patches/app/[0-9][0-9][0-9][0-9]-*.patch); do git apply -R "$p"; done
 # 内核补丁：0007 → 0001（在内核目录里执行）
 git pull
@@ -112,6 +112,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 0011 | 支持 32 位 `armeabi-v7a`：内核与 APK 在 arm64-v8a 之外同时构建 armeabi-v7a（Go `GOARCH=arm`、`GOARM=7`，NDK `armv7a-linux-androideabi` 工具链；`splits.abi` 每个 ABI 各出一个 APK）。CI 构建耗时约翻倍 |
 | 0012 | 最低支持 Android 8（API 26，原 Android 12 / API 31）：`MIN_SDK` 31 → 26，同时给 API 29/30/31+ 的调用加 `SDK_INT` 守卫：`VpnService.Builder.setMetered` / `setHttpProxy`（API 29，低版本跳过系统代理）、`Os.fcntlInt`（API 30，低版本改用 JNI `nativeClearCloexec`）、三参 `startForeground`（API 29）、`setForegroundServiceBehavior`（API 31）、`canScheduleExactAlarms`（API 31，低版本直接精确调度）、`NetworkCallback(flags)` 与 `transportInfo`（API 31，低版本用无参回调 + WifiManager 回退取 SSID）、`POST_NOTIFICATIONS`（API 33，已有守卫）。Go / NDK 的 clang wrapper 随 minSdk 变为 `android26`。 |
 | 0013 | eBPF 接管 IPv6 时才强制保持系统 IPv6 开启：读取活动配置的 eBPF 监听器（`listeners[].local.ipv6` / `shared.ipv6`），任一不为 false 即视为接管，此时系统 IPv6 保持开启并在设置页提示；都为 false（或未配置 eBPF 监听器）时，系统 IPv6 按开关关闭。ROOT 启动 eBPF 子模式时也会按活动配置重新对账。配置读取失败或为 age 密文时保守保持开启。 |
+| 0014 | 系统 IPv6 关闭时的 APN 处理加固：`content update` 写入后重新查询同一行，以实际协议值判定成功（不再依赖 content 输出文字），失败时记录实际结果；关态每 60 秒校验首选 APN，被运营商或系统写回 IPv4/IPv6 时自动重新接管。 |
 
 ## 系统 IPv6 开关（0010）
 
@@ -137,7 +138,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 `app/build.gradle.kts` 加一行 `implementation`）。0001–0007 没有新增依赖；0008 是第一个。
 回滚 0008 会把这一行一并撤掉。
 
-**0009、0010、0011、0012、0013 不新增依赖**：0009 只改 Kotlin 与运行时逻辑；0010 只用 Android 自带的 `su`、`content`、`svc`、`ndc` 命令，不引入新库。
+**0009、0010、0011、0012、0013、0014 不新增依赖**：0009 只改 Kotlin 与运行时逻辑；0010 只用 Android 自带的 `su`、`content`、`svc`、`ndc` 命令，不引入新库。
 
 ## 从旧系列升级
 
@@ -146,8 +147,8 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 
 | 仓库里装的是 | 怎么办 |
 | --- | --- |
-| 上一版交付（本系列 0001–0009 全部装上） | 直接重跑 `setup.sh`：0001–0009 判定为「已在仓库里」，只追加 0010、0011、0012、0013。 |
-| 本系列 0001–0013 全部装上 | 与最终态逐字节相同，直接重跑 `setup.sh`，13 个补丁都会判定为「已在仓库里」。 |
+| 上一版交付（本系列 0001–0009 全部装上） | 直接重跑 `setup.sh`：0001–0009 判定为「已在仓库里」，只追加 0010、0011、0012、0013、0014。 |
+| 本系列 0001–0014 全部装上 | 与最终态逐字节相同，直接重跑 `setup.sh`，14 个补丁都会判定为「已在仓库里」。 |
 | 其它任何中间状态（只装到 0001–0008 之一、或旧系列） | 先还原到 dd21ee4 基线，再装本系列。 |
 
 还原前先确认仓库里没有要保留的改动（`git status`）。还原到基线的做法：
