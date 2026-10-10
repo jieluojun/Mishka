@@ -47,32 +47,34 @@ index ea24d23..47cdd07 100644
                  val wasRunning = storage.getString(StorageKeys.SERVICE_WAS_RUNNING, "false") == "true"
                  if (!wasRunning) return
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 70ec035..e568cc9 100644
+index 70ec035..9f93e4d 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-@@ -425,6 +425,11 @@ class MishkaRootService : Service() {
-                 }
+@@ -406,6 +406,9 @@ class MishkaRootService : Service() {
+                 return@launch
              }
  
-+            // eBPF 模式：系统 IPv6 按活动配置是否接管 IPv6 重新对账（在 mihomo 启动前完成）
-+            if (submode == Submode.Ebpf) {
-+                SystemIpv6.onRootReady(this@MishkaRootService, storage)
-+            }
++            // 系统 IPv6 开关联动活动订阅的 IPv6 开关：必须在复制到 runtime/ 之前写入，mihomo 启动时才生效
++            SystemIpv6.syncConfigFile(this@MishkaRootService, SystemIpv6.isEnabled(storage))
 +
-             // 4. 装配 override.run.json
-             // secret / external-controller 走 CLI flag 不进 JSON；配置文件解析值已在启动前优先解析
-             // 仅 TUN submode 且用户选 PROXY 时才探测 xt_TPROXY 为 RootTetherHijacker 开 tproxy-port 入站；
+             // 3.5 准备 runtime/{uuid}/ 沙箱：从 imported/{uuid}/ 复制，mihomo 在此以 root 写入
+             //     不污染 imported/，保证更新/删除始终在 app UID 下工作
+             if (subscriptionId != null) {
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt b/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
 new file mode 100644
-index 0000000..61a86a0
+index 0000000..ba7771c
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,187 @@
 +package top.yukonga.mishka.service
 +
 +import android.content.Context
 +import android.util.Log
 +import top.yukonga.mishka.R
++import top.yukonga.mishka.custom.forms.FormValues
++import top.yukonga.mishka.custom.forms.YamlDoc
++import top.yukonga.mishka.custom.forms.YamlNode
++import top.yukonga.mishka.custom.forms.YamlPatch
 +import top.yukonga.mishka.platform.PlatformStorage
 +import top.yukonga.mishka.platform.StorageKeys
 +import java.io.File
@@ -83,6 +85,8 @@ index 0000000..61a86a0
 + * - 关（默认）：非蜂窝网卡（wlan 等；lo / 蜂窝 / 热点下游除外）写 disable_ipv6=1，并关闭 RA / autoconf；
 + *   上网 APN（preferapn，跳过 IMS 承载）的 protocol / roaming_protocol 改为 IP，原值记入状态文件；
 + * - 开：disable_ipv6 归 0、恢复 RA / autoconf，按状态文件还原 APN 协议；
++ *   开关同时联动活动订阅 config.yaml 里的 IPv6 开关（顶层 ipv6、dns.ipv6、eBPF 监听器的 local / shared.ipv6），
++ *   需重启代理生效；加密订阅无法改写，跳过；
 + * - 关态下 root 常驻对账循环每 5 秒检查一次（飞行模式 / 切网后 netd 会把值放回去），漂移追打有 60 秒冷却；
 + * - 脚本见 res/raw/system_ipv6.sh；状态与日志在应用私有目录 files/system_ipv6/。
 + */
@@ -126,12 +130,13 @@ index 0000000..61a86a0
 +     * @return root 执行是否成功
 +     */
 +    fun apply(context: Context, enable: Boolean): Boolean {
++        val configSynced = syncConfigFile(context, enable)
 +        val script = ensureScript(context)
 +        val dir = stateDir(context)
 +        val q = RootHelper.escapeShellSingleQuoted(script.absolutePath)
 +        val d = RootHelper.escapeShellSingleQuoted(dir.absolutePath)
 +        val log = RootHelper.escapeShellSingleQuoted(File(dir, "log").absolutePath)
-+        // 关态先同步做一次对账（禁用 IPv6 + 接管 APN），返回时即已生效，设置页随后读取到的是新值；
++        // 关态先同步做一次对账（禁用 IPv6 + 改写 APN），返回时即已生效，设置页随后读取到的是新值；
 +        // 再拉起后台常驻循环（脚本自己写 pid 文件，被新的循环替换时退出）。
 +        val cmd = if (enable) {
 +            "sh $q once 1 $d >> $log 2>&1\n"
@@ -139,8 +144,72 @@ index 0000000..61a86a0
 +            "sh $q once 0 $d >> $log 2>&1\nsh $q watch 0 $d >> $log 2>&1 </dev/null &\n"
 +        }
 +        val code = RootHelper.runRootScriptHeredoc(cmd, 30)
-+        Log.i(TAG, "apply enable=$enable exit=$code")
++        Log.i(TAG, "apply enable=$enable config=$configSynced exit=$code")
 +        return code == 0
++    }
++
++    /**
++     * 把开关写进活动订阅的 config.yaml：顶层 ipv6 必写（缺省即内核默认开启）；dns.ipv6 与 eBPF 监听器的
++     * local / shared.ipv6 只在所在块已存在时写，不为没有配置的功能凭空新增配置段。
++     * 原子替换；加密订阅（age）或无活动订阅时跳过，返回 false。
++     * 启动 ROOT 代理时在复制到 runtime/ 之前调用一次，保证 mihomo 读到的副本与开关一致。
++     */
++    fun syncConfigFile(context: Context, enable: Boolean): Boolean {
++        val id = PlatformStorage(context).getString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "").ifEmpty { null }
++        if (id == null) {
++            Log.i(TAG, "syncConfigFile: no active subscription, skipped")
++            return false
++        }
++        val file = ProfileFileOps.getSubscriptionConfigFile(context, id)
++        if (!file.isFile || file.length() == 0L) {
++            Log.w(TAG, "syncConfigFile: config.yaml missing or empty, skipped")
++            return false
++        }
++        return try {
++            val text = file.readText(Charsets.UTF_8)
++            if (text.trimStart().startsWith("-----BEGIN AGE ENCRYPTED FILE-----")) {
++                Log.w(TAG, "syncConfigFile: age-encrypted subscription, IPv6 switches not rewritten")
++                return false
++            }
++            val (newText, changed) = setConfigIpv6(text, enable)
++            if (newText != text) {
++                val tmp = File(file.parentFile, "config.yaml.ipv6.tmp")
++                tmp.writeText(newText, Charsets.UTF_8)
++                if (!tmp.renameTo(file)) {
++                    tmp.delete()
++                    throw java.io.IOException("rename config.yaml.ipv6.tmp failed")
++                }
++            }
++            Log.i(TAG, "syncConfigFile enable=$enable changed=$changed")
++            true
++        } catch (e: Exception) {
++            Log.w(TAG, "syncConfigFile failed: ${e.message}")
++            false
++        }
++    }
++
++    /** 返回改写后的 YAML 与实际改动的键（用于日志）。 */
++    private fun setConfigIpv6(text: String, enable: Boolean): Pair<String, List<String>> {
++        var doc = YamlDoc.parse(text)
++        val changed = mutableListOf<String>()
++        doc = YamlPatch.setValue(doc, listOf("ipv6"), enable)
++        changed += "ipv6"
++        if (doc.get(listOf("dns"))?.kind == YamlNode.Kind.MAP) {
++            doc = YamlPatch.setValue(doc, listOf("dns", "ipv6"), enable)
++            changed += "dns.ipv6"
++        }
++        val count = doc.get(listOf("listeners"))
++            ?.takeIf { it.kind == YamlNode.Kind.SEQ }?.items?.size ?: 0
++        for (index in 0 until count) {
++            val type = FormValues.readRaw(doc, listOf("listeners", index, "type"))
++            if (type?.equals("ebpf", ignoreCase = true) != true) continue
++            for (role in listOf("local", "shared")) {
++                if (doc.get(listOf("listeners", index, role))?.kind != YamlNode.Kind.MAP) continue
++                doc = YamlPatch.setValue(doc, listOf("listeners", index, role, "ipv6"), enable)
++                changed += "listeners[$index].$role.ipv6"
++            }
++        }
++        return doc.dump() to changed
 +    }
 +
 +    /** 应用启动 / 开机后调用：ROOT 可用时按期望值立即生效（默认关闭 → 立即禁用系统 IPv6）。 */
@@ -298,7 +367,7 @@ index c67bbb6..985b275 100644
                      Modifier
 diff --git a/app/src/main/res/raw/system_ipv6.sh b/app/src/main/res/raw/system_ipv6.sh
 new file mode 100644
-index 0000000..9ffdc2f
+index 0000000..a58edd1
 --- /dev/null
 +++ b/app/src/main/res/raw/system_ipv6.sh
 @@ -0,0 +1,295 @@
@@ -421,13 +490,13 @@ index 0000000..9ffdc2f
 +  [ "$_fail" = "0" ]
 +}
 +
-+# 关态周期校验：首选 APN 若被系统或运营商写回 IPv4/IPv6，则重新接管（每 60 秒一次，见 watch 循环）
++# 关态周期校验：首选 APN 若被系统或运营商写回 IPv4/IPv6，则重新改写（每 60 秒一次，见 watch 循环）
 +apn_drift_check() {
 +  _rows=$(apn_rows)
 +  [ -n "$_rows" ] || return 0
 +  _bad=$(echo "$_rows" | awk -F'|' '$1 != "" && $5 !~ /ims/ && ($3 != "IP" || $4 != "IP") {print $1}')
 +  if [ -n "$_bad" ]; then
-+    log "APN 协议漂移（id=$(echo $_bad | tr '\n' ' ')），重新接管"
++    log "APN 协议漂移（id=$(echo $_bad | tr '\n' ' ')），重新改写"
 +    apn_apply
 +  fi
 +  return 0
@@ -506,7 +575,7 @@ index 0000000..9ffdc2f
 +  fi
 +  [ "$_need" = "1" ] || return 0
 +
-+  # 蜂窝侧：关 → 接管 APN（翻转或网络变化都复查）；开 → 翻转时还原
++  # 蜂窝侧：关 → 改写 APN（翻转或网络变化都复查）；开 → 翻转时还原
 +  if [ "$WANT" = "0" ]; then
 +    if [ "$_flip" = "1" ] || [ "$_netchg" = "1" ]; then apn_apply; fi
 +  else
@@ -598,7 +667,7 @@ index 0000000..9ffdc2f
 +esac
 +exit 0
 diff --git a/app/src/main/res/values-ru/strings.xml b/app/src/main/res/values-ru/strings.xml
-index 9587246..a022981 100644
+index 9587246..c346380 100644
 --- a/app/src/main/res/values-ru/strings.xml
 +++ b/app/src/main/res/values-ru/strings.xml
 @@ -446,6 +446,14 @@
@@ -607,8 +676,8 @@ index 9587246..a022981 100644
      <string name="root_attach_force_reapply_summary">Диагностика: повторно применять правила iptables при каждом подключении приложения к работающему mihomo. Включайте только если правила раздачи пропадают после переподключения.</string>
 +    <string name="root_section_system">Система</string>
 +    <string name="root_system_ipv6_title">Системный IPv6</string>
-+    <string name="root_system_ipv6_summary_off">Выкл. (по умолчанию): отключает IPv6 на не сотовых интерфейсах (Wi-Fi) и переводит протокол APN интернета на IPv4. IMS-звонки и SMS не затрагиваются.</string>
-+    <string name="root_system_ipv6_summary_on">Вкл.: системный IPv6 восстановлен, протокол APN интернета возвращён.</string>
++    <string name="root_system_ipv6_summary_off">Выкл. (по умолчанию): отключает IPv6 на не сотовых интерфейсах (Wi-Fi) и переводит протокол APN интернета на IPv4. IPv6-переключатели в активной конфигурации тоже выключаются. IMS-звонки и SMS не затрагиваются. Изменения конфигурации применяются после перезапуска прокси.</string>
++    <string name="root_system_ipv6_summary_on">Вкл.: системный IPv6 восстановлен, протокол APN интернета возвращён, IPv6-переключатели в конфигурации включены. Изменения конфигурации применяются после перезапуска прокси.</string>
 +    <string name="root_system_ipv6_apn_line">Основная APN «%1$s»: протокол %2$s, роуминг %3$s</string>
 +    <string name="root_system_ipv6_apn_none">Основная APN не найдена (можно вручную установить протокол APN на IPv4)</string>
 +    <string name="root_system_ipv6_no_root">Требуется root-доступ</string>
@@ -617,7 +686,7 @@ index 9587246..a022981 100644
      <!-- Network Settings -->
      <string name="network_settings_title">Параметры переопределения</string>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index 24de553..1a4482c 100644
+index 24de553..25157b4 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -444,6 +444,14 @@
@@ -626,8 +695,8 @@ index 24de553..1a4482c 100644
      <string name="root_attach_force_reapply_summary">诊断开关：每次应用重新连接到正在运行的 mihomo 时强制重建 iptables 规则。仅当重连后热点规则丢失时开启。</string>
 +    <string name="root_section_system">系统</string>
 +    <string name="root_system_ipv6_title">系统 IPv6</string>
-+    <string name="root_system_ipv6_summary_off">已关闭（默认）：Wi-Fi 等非蜂窝网卡禁用 IPv6，上网 APN 协议改为仅 IPv4；不影响 IMS 高清通话与短信</string>
-+    <string name="root_system_ipv6_summary_on">已开启：恢复系统 IPv6，并还原上网 APN 协议</string>
++    <string name="root_system_ipv6_summary_off">已关闭（默认）：Wi-Fi 等非蜂窝网卡禁用 IPv6，上网 APN 协议改为仅 IPv4，配置文件中的 IPv6 开关同时关闭；不影响 IMS 高清通话与短信。配置变更需重启代理生效</string>
++    <string name="root_system_ipv6_summary_on">已开启：恢复系统 IPv6，还原上网 APN 协议，配置文件中的 IPv6 开关同时开启。配置变更需重启代理生效</string>
 +    <string name="root_system_ipv6_apn_line">首选 APN「%1$s」：协议 %2$s，漫游 %3$s</string>
 +    <string name="root_system_ipv6_apn_none">未读取到首选 APN（可手动把 APN 协议设为 IPv4，效果相同）</string>
 +    <string name="root_system_ipv6_no_root">需要 ROOT 权限</string>
@@ -636,7 +705,7 @@ index 24de553..1a4482c 100644
      <!-- Network Settings -->
      <string name="network_settings_title">覆写设置</string>
 diff --git a/app/src/main/res/values-zh-rTW/strings.xml b/app/src/main/res/values-zh-rTW/strings.xml
-index 5237ef6..f0eae8a 100644
+index 5237ef6..81fb4d8 100644
 --- a/app/src/main/res/values-zh-rTW/strings.xml
 +++ b/app/src/main/res/values-zh-rTW/strings.xml
 @@ -444,6 +444,14 @@
@@ -645,8 +714,8 @@ index 5237ef6..f0eae8a 100644
      <string name="root_attach_force_reapply_summary">診斷開關：每次應用程式重新連線到執行中的 mihomo 時強制重建 iptables 規則。僅在重連後熱點規則遺失時開啟。</string>
 +    <string name="root_section_system">系統</string>
 +    <string name="root_system_ipv6_title">系統 IPv6</string>
-+    <string name="root_system_ipv6_summary_off">已關閉（預設）：Wi-Fi 等非蜂窩網卡停用 IPv6，上網 APN 協議改為僅 IPv4；不影響 IMS 高清通話與簡訊</string>
-+    <string name="root_system_ipv6_summary_on">已開啟：恢復系統 IPv6，並還原上網 APN 協議</string>
++    <string name="root_system_ipv6_summary_off">已關閉（預設）：Wi-Fi 等非蜂窩網卡停用 IPv6，上網 APN 協議改為僅 IPv4，設定檔中的 IPv6 開關同時關閉；不影響 IMS 高清通話與簡訊。設定變更需重啟代理生效</string>
++    <string name="root_system_ipv6_summary_on">已開啟：恢復系統 IPv6，並還原上網 APN 協議，設定檔中的 IPv6 開關同時開啟。設定變更需重啟代理生效</string>
 +    <string name="root_system_ipv6_apn_line">首選 APN「%1$s」：協議 %2$s，漫遊 %3$s</string>
 +    <string name="root_system_ipv6_apn_none">未讀取到首選 APN（可手動把 APN 協議設為 IPv4，效果相同）</string>
 +    <string name="root_system_ipv6_no_root">需要 ROOT 權限</string>
@@ -655,7 +724,7 @@ index 5237ef6..f0eae8a 100644
      <!-- Network Settings -->
      <string name="network_settings_title">覆寫設定</string>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index 2793a4b..034588b 100644
+index 2793a4b..11e4ac9 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -446,6 +446,14 @@
@@ -664,8 +733,8 @@ index 2793a4b..034588b 100644
      <string name="root_attach_force_reapply_summary">Diagnostic: re-apply iptables rules every time the app reattaches to a running mihomo. Leave off unless tether rules disappear after reconnect.</string>
 +    <string name="root_section_system">System</string>
 +    <string name="root_system_ipv6_title">System IPv6</string>
-+    <string name="root_system_ipv6_summary_off">Off (default): disables IPv6 on non-cellular interfaces such as Wi-Fi and sets the internet APN protocol to IPv4 only. IMS calls and SMS are not affected.</string>
-+    <string name="root_system_ipv6_summary_on">On: system IPv6 is restored and the internet APN protocol is reverted.</string>
++    <string name="root_system_ipv6_summary_off">Off (default): disables IPv6 on non-cellular interfaces such as Wi-Fi and sets the internet APN protocol to IPv4 only. The IPv6 switches in the active config are turned off too. IMS calls and SMS are not affected. Restart the proxy to apply config changes.</string>
++    <string name="root_system_ipv6_summary_on">On: system IPv6 is restored, the internet APN protocol is reverted, and the IPv6 switches in the active config are turned on. Restart the proxy to apply config changes.</string>
 +    <string name="root_system_ipv6_apn_line">Preferred APN "%1$s": protocol %2$s, roaming %3$s</string>
 +    <string name="root_system_ipv6_apn_none">No preferred APN found (you can set the APN protocol to IPv4 manually)</string>
 +    <string name="root_system_ipv6_no_root">Root permission required</string>
