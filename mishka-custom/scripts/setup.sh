@@ -10,7 +10,7 @@
 #   2. 内核：在 <仓库>/mihomo 放一份 jieluojun/mihomo(Alpha)，checkout 到补丁基线 commit，
 #      校验并应用 patches/mihomo/*.patch（用 --kernel-dir 可以放到仓库外）
 #   3. 写 go.work + go.work.sum（内核换了分支后缺的依赖哈希都在这，仓库自带的 go.mod/go.sum 不动）
-#   4. 应用 app 侧补丁 patches/app/0001…0012（按功能切分，依序应用；每个先判断是否已在仓库里）：
+#   4. 应用 app 侧补丁 patches/app/0001…0013（按功能切分，依序应用；每个先判断是否已在仓库里）：
 #      0001 锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复、规则编辑间距、
 #           maplist 拖动排序、路由规则序号、路由规则匹配值省略号；应用选择器（搜索兼手动添加、已选置顶、显示计数）
 #      0002 内置「免流」配置（可选：打不上只警告）
@@ -25,6 +25,7 @@
 #      0010 ROOT 设置新增「系统」分组：系统 IPv6 开关（默认关闭，root 下立即生效，实时显示首选 APN 协议）
 #      0011 支持 32 位 armeabi-v7a：与 arm64-v8a 同时构建内核与 APK（GOARCH=arm、GOARM=7）
 #      0012 最低支持 Android 8（API 26）：MIN_SDK 31 → 26；API 29/30/31+ 调用加 SDK_INT 守卫，低版本走替代实现
+#      0013 eBPF 接管 IPv6 时才强制保持系统 IPv6 开启；eBPF 不接管 IPv6 时系统 IPv6 由开关决定
 #
 # 回滚：逆序 git apply -R（见 README.md「回滚」）
 set -euo pipefail
@@ -256,7 +257,7 @@ EOF
 fi
 
 # ---------------------------------------------------------------- 5. app 侧补丁（10 个功能补丁，依序）
-step "5/6 app 侧补丁（patches/app/0001…0012，按功能切分，依序应用）"
+step "5/6 app 侧补丁（patches/app/0001…0013，按功能切分，依序应用）"
 # 按旧系列（旧编号 0001–0010）装过的仓库：面板相关文件停在旧系列的中间状态，和本系列对不上，
 # 不能直接叠加。停下来让人先还原到 dd21ee4 基线，不静默保留旧实现。
 if [[ -f "$REPO/$CUSTOM_REL/panel/PanelProxyFetcher.kt" ]]; then
@@ -279,6 +280,7 @@ APP_PATCHES=(
   0010-system-ipv6-switch.patch
   0011-armeabi-v7a.patch
   0012-minsdk-26.patch
+  0013-ebpf-ipv6-takeover.patch
 )
 for pname in "${APP_PATCHES[@]}"; do
   num="${pname:0:4}"
@@ -310,7 +312,7 @@ cat <<EOF
     ./gradlew :app:downloadGeoFiles
     ./gradlew -I $CUSTOM_DIR_NAME/init/no-debug.init.gradle "-Pmihomo.version=alpha-smart-<sha>-with-at" :app:assembleRelease
   回滚：
-    逆序 git apply -R：patches/app/0012 → 0001，再 patches/mihomo/0007 → 0001
+    逆序 git apply -R：patches/app/0013 → 0001，再 patches/mihomo/0007 → 0001
   拉上游更新：
     先按上面回滚 → git pull → 再跑 setup.sh（每步都用 git apply --check 做过幂等判断）
 EOF

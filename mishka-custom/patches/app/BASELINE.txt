@@ -196,3 +196,11 @@ patch0012_blob_after=4099e08ce4a1cbbec644059a8df10c63321aeedf app/src/main/kotli
 patch0012_blob_after=f11b6a95a2f6f6ceee37ff0230b03e9d03e8623a app/src/main/kotlin/top/yukonga/mishka/service/ProfileWorker.kt
 patch0012_blob_after=728e8a3eb0049376f591df0c9a949f8c76c25966 app/src/main/kotlin/top/yukonga/mishka/service/WifiPolicyMonitorService.kt
 patch0012_blob_after=6cfea9dbf7a0815d9bfb5c0e9e548974e4eafba8 buildSrc/src/main/kotlin/ProjectConfig.kt
+
+# --- 0013：eBPF 接管 IPv6 时才强制保持系统 IPv6 开启；不接管时系统 IPv6 由开关决定（SystemIpv6.ebpfTakesOverIpv6 读取活动配置；MishkaRootService 启动 eBPF 时重新对账；设置页 eBPF 提示按接管状态显示）
+patch0013_file=patches/app/0013-ebpf-ipv6-takeover.patch
+patch0013_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011,0012
+patch0013_sha256=fcbe305bf51660a61ed76d92ca7c97993a8f881adf5ff083a21c644346c66d38
+patch0013_blob_after=e568cc937989cb147c2e44b15fb7d61e3f223634 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+patch0013_blob_after=51c3c9f272b363310c6660914ed0bc820c6961d5 app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
+patch0013_blob_after=8edfbe44af3c11e3215e256884f7eaff26159026 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt

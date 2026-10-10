@@ -1,0 +1,130 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+index 70ec035..e568cc9 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+@@ -425,6 +425,11 @@ class MishkaRootService : Service() {
+                 }
+             }
+ 
++            // eBPF 模式：系统 IPv6 按活动配置是否接管 IPv6 重新对账（在 mihomo 启动前完成）
++            if (submode == Submode.Ebpf) {
++                SystemIpv6.onRootReady(this@MishkaRootService, storage)
++            }
++
+             // 4. 装配 override.run.json
+             // secret / external-controller 走 CLI flag 不进 JSON；配置文件解析值已在启动前优先解析
+             // 仅 TUN submode 且用户选 PROXY 时才探测 xt_TPROXY 为 RootTetherHijacker 开 tproxy-port 入站；
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt b/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
+index ad75b59..51c3c9f 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
+@@ -3,6 +3,9 @@ package top.yukonga.mishka.service
+ import android.content.Context
+ import android.util.Log
+ import top.yukonga.mishka.R
++import top.yukonga.mishka.custom.forms.FormValues
++import top.yukonga.mishka.custom.forms.YamlDoc
++import top.yukonga.mishka.custom.forms.YamlNode
+ import top.yukonga.mishka.platform.PlatformStorage
+ import top.yukonga.mishka.platform.StorageKeys
+ import java.io.File
+@@ -56,8 +59,9 @@ object SystemIpv6 {
+      * @return root 执行是否成功
+      */
+     fun apply(context: Context, enable: Boolean): Boolean {
+-        // eBPF 模式下内核需要 fd53::/64 本地路由，禁用协议栈会导致启动失败：保持系统 IPv6 开启
+-        val effective = enable || isEbpfMode(context)
++        // eBPF 接管 IPv6 时内核需要 fd53::/64 本地路由，禁用协议栈会导致启动失败：保持系统 IPv6 开启；
++        // eBPF 不接管 IPv6（local / shared 的 ipv6 都为 false）时，系统 IPv6 完全由开关决定
++        val effective = enable || (isEbpfMode(context) && ebpfTakesOverIpv6(context))
+         val script = ensureScript(context)
+         val dir = stateDir(context)
+         val q = RootHelper.escapeShellSingleQuoted(script.absolutePath)
+@@ -75,7 +79,48 @@ object SystemIpv6 {
+         return code == 0
+     }
+ 
+-    /** 当前是否为 ROOT eBPF 模式（此时系统 IPv6 不会被禁用）。 */
++    /**
++     * 活动配置的 eBPF 是否接管 IPv6：任一 ebpf 监听器的 local.ipv6 / shared.ipv6 不为 false。
++     * 与 mihomo 一致：未写 ipv6 视为开启；app 注入的默认监听器写的是 false。
++     * 配置读不到、解析失败或为 age 密文时保守返回 true（保持系统 IPv6 开启，与旧行为一致）。
++     */
++    fun ebpfTakesOverIpv6(context: Context): Boolean {
++        val subscriptionId = PlatformStorage(context).getString(StorageKeys.ROOT_ACTIVE_SUBSCRIPTION_ID, "").ifEmpty { null }
++        val file = if (subscriptionId == null) {
++            File(ConfigGenerator.getWorkDir(context), "config.yaml")
++        } else {
++            ProfileFileOps.getSubscriptionConfigFile(context, subscriptionId)
++        }
++        if (!file.isFile || file.length() == 0L) return true
++        return try {
++            val text = file.readText(Charsets.UTF_8)
++            if (text.trimStart().startsWith("-----BEGIN AGE ENCRYPTED FILE-----")) return true
++            val doc = YamlDoc.parse(text)
++            val listeners = doc.get(listOf("listeners"))
++            if (listeners == null || doc.isNullText(listeners)) return false
++            if (listeners.kind != YamlNode.Kind.SEQ) return true
++            val indices = listeners.items.indices.filter { index ->
++                FormValues.readRaw(doc, listOf("listeners", index, "type"))?.equals("ebpf", ignoreCase = true) == true
++            }
++            // 没有 ebpf 监听器时 app 会注入默认监听器（ipv6 = false），即不接管
++            indices.any { index ->
++                ipv6Allowed(FormValues.readRaw(doc, listOf("listeners", index, "local", "ipv6"))) ||
++                    ipv6Allowed(FormValues.readRaw(doc, listOf("listeners", index, "shared", "ipv6")))
++            }
++        } catch (e: Exception) {
++            Log.w(TAG, "ebpfTakesOverIpv6 failed, keep system IPv6 on: ${e.message}")
++            true
++        }
++    }
++
++    /** 未写或 null 视为开启（mihomo 内核默认）；只有显式 false 类值才视为不接管。 */
++    private fun ipv6Allowed(raw: String?): Boolean =
++        when (raw?.trim()?.lowercase()) {
++            "false", "no", "off", "0" -> false
++            else -> true
++        }
++
++    /** 当前是否为 ROOT eBPF 模式。 */
+     fun isEbpfMode(context: Context): Boolean =
+         PlatformStorage(context).getString(StorageKeys.TUN_MODE, "vpn") == "root_ebpf"
+ 
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
+index 1445825..8edfbe4 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
+@@ -153,6 +153,8 @@ fun RootSettingsScreen(
+     val systemScope = rememberCoroutineScope()
+     var systemIpv6 by remember { mutableStateOf(SystemIpv6.isEnabled(storage)) }
+     var apnRows by remember { mutableStateOf<List<SystemIpv6.ApnRow>?>(null) }
++    // eBPF 模式下活动配置是否接管 IPv6：接管时系统 IPv6 保持开启，开关不生效
++    var ebpfTakeover by remember { mutableStateOf(false) }
+     val ipv6OffText = stringResource(R.string.root_system_ipv6_summary_off)
+     val ipv6OnText = stringResource(R.string.root_system_ipv6_summary_on)
+     val ipv6EbpfText = stringResource(R.string.root_system_ipv6_ebpf_note)
+@@ -163,6 +165,7 @@ fun RootSettingsScreen(
+     LaunchedEffect(hasRoot) {
+         if (!hasRoot) return@LaunchedEffect
+         apnRows = withContext(Dispatchers.IO) { SystemIpv6.readPreferApn(context) }
++        ebpfTakeover = withContext(Dispatchers.IO) { SystemIpv6.isEbpfMode(context) && SystemIpv6.ebpfTakesOverIpv6(context) }
+     }
+     val preferredApn = apnRows?.firstOrNull { !it.isIms }
+     val apnLine: String? = when {
+@@ -180,7 +183,7 @@ fun RootSettingsScreen(
+     } else {
+         listOfNotNull(
+             if (systemIpv6) ipv6OnText else ipv6OffText,
+-            if (!systemIpv6 && SystemIpv6.isEbpfMode(context)) ipv6EbpfText else null,
++            if (!systemIpv6 && ebpfTakeover) ipv6EbpfText else null,
+             apnLine,
+         ).joinToString("\n")
+     }
+@@ -389,6 +392,7 @@ fun RootSettingsScreen(
+                                         systemIpv6 = value
+                                         storage.putString(StorageKeys.ROOT_SYSTEM_IPV6, value.toString())
+                                         apnRows = withContext(Dispatchers.IO) { SystemIpv6.readPreferApn(context) }
++                                        ebpfTakeover = withContext(Dispatchers.IO) { SystemIpv6.isEbpfMode(context) && SystemIpv6.ebpfTakesOverIpv6(context) }
+                                     } else {
+                                         showToast(ipv6ApplyFailedText)
+                                     }
