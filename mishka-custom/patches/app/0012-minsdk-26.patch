@@ -1,0 +1,278 @@
+diff --git a/README.md b/README.md
+index 6c44f93..022042b 100644
+--- a/README.md
++++ b/README.md
+@@ -5,7 +5,7 @@
+ **基于 [miuix](https://github.com/miuix-kotlin-multiplatform/miuix) 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的 Android 代理客户端**
+ 
+ [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
+-[![minSdk](https://img.shields.io/badge/minSdk-31-3DDC84?logo=android&logoColor=white)](#)
++[![minSdk](https://img.shields.io/badge/minSdk-26-3DDC84?logo=android&logoColor=white)](#)
+ [![License](https://img.shields.io/badge/License-GPL--3.0-blue)](LICENSE)
+ 
+ </div>
+diff --git a/app/src/main/cpp/process_helper.c b/app/src/main/cpp/process_helper.c
+index a9ab198..0ae7173 100644
+--- a/app/src/main/cpp/process_helper.c
++++ b/app/src/main/cpp/process_helper.c
+@@ -185,3 +185,23 @@ Java_top_yukonga_mishka_service_ProcessHelper_nativeWaitpid(
+         remainingUs -= stepUs;
+     }
+ }
++
++/**
++ * 清除 fd 的 FD_CLOEXEC，使其能被 fork+exec 出的子进程（mihomo）继承。
++ * 供 API 26-29 使用（android.system.Os.fcntlInt 自 API 30 才存在）。
++ * 成功返回 true。
++ */
++JNIEXPORT jboolean JNICALL
++Java_top_yukonga_mishka_service_ProcessHelper_nativeClearCloexec(
++        JNIEnv *env, jclass clazz, jint fd) {
++    int flags = fcntl(fd, F_GETFD);
++    if (flags < 0) {
++        LOGE("F_GETFD failed fd=%d errno=%d", fd, errno);
++        return JNI_FALSE;
++    }
++    if (fcntl(fd, F_SETFD, flags & ~FD_CLOEXEC) < 0) {
++        LOGE("F_SETFD failed fd=%d errno=%d", fd, errno);
++        return JNI_FALSE;
++    }
++    return JNI_TRUE;
++}
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/platform/WifiPolicyController.kt b/app/src/main/kotlin/top/yukonga/mishka/platform/WifiPolicyController.kt
+index 3f369dd..458d080 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/platform/WifiPolicyController.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/platform/WifiPolicyController.kt
+@@ -92,7 +92,10 @@ object AndroidWifiPolicy {
+             return null
+         }
+         callbackSsid?.let { return it }
+-        normalizeSsid((capabilities.transportInfo as? WifiInfo)?.ssid)?.let { return it }
++        // transportInfo 自 API 31 起才存在；低版本直接走下面的 WifiManager 回退
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++            normalizeSsid((capabilities.transportInfo as? WifiInfo)?.ssid)?.let { return it }
++        }
+         @Suppress("DEPRECATION")
+         val fallback = (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
+             ?.connectionInfo
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+index cba5286..750d893 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+@@ -3,6 +3,7 @@ package top.yukonga.mishka.service
+ import android.annotation.SuppressLint
+ import android.content.Intent
+ import android.net.VpnService
++import android.os.Build
+ import android.os.ParcelFileDescriptor
+ import android.system.Os
+ import android.system.OsConstants
+@@ -264,11 +265,12 @@ class MishkaTunService : VpnService() {
+                         }
+                     }
+ 
+-                    // 伪装为非计量网络，否则 Google Play 等应用在蜂窝下拒绝走 VPN
+-                    setMetered(false)
++                    // 伪装为非计量网络，否则 Google Play 等应用在蜂窝下拒绝走 VPN（API 29+）
++                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
+ 
++                    // 系统 HTTP 代理设置自 API 29 起可用，更低版本跳过
+                     val systemProxy = storage.getString(StorageKeys.VPN_SYSTEM_PROXY, "true") == "true"
+-                    if (systemProxy) {
++                    if (systemProxy && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                         val port = userOverride.mixedPort ?: 7890
+                         setHttpProxy(
+                             android.net.ProxyInfo.buildDirectProxy(
+@@ -311,11 +313,16 @@ class MishkaTunService : VpnService() {
+             // 清除失败视为致命：继续启动必然 silent failure（mihomo TUN init 拿到无效 fd 仍不会退出）
+             try {
+                 val pfd = ParcelFileDescriptor.adoptFd(fd)
+-                val flags = Os.fcntlInt(pfd.fileDescriptor, OsConstants.F_GETFD, 0)
+-                Log.i(TAG, "fd=$fd flags before: $flags")
+-                Os.fcntlInt(pfd.fileDescriptor, OsConstants.F_SETFD, flags and OsConstants.FD_CLOEXEC.inv())
+-                val flagsAfter = Os.fcntlInt(pfd.fileDescriptor, OsConstants.F_GETFD, 0)
+-                Log.i(TAG, "fd=$fd flags after: $flagsAfter")
++                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
++                    val flags = Os.fcntlInt(pfd.fileDescriptor, OsConstants.F_GETFD, 0)
++                    Log.i(TAG, "fd=$fd flags before: $flags")
++                    Os.fcntlInt(pfd.fileDescriptor, OsConstants.F_SETFD, flags and OsConstants.FD_CLOEXEC.inv())
++                    val flagsAfter = Os.fcntlInt(pfd.fileDescriptor, OsConstants.F_GETFD, 0)
++                    Log.i(TAG, "fd=$fd flags after: $flagsAfter")
++                } else {
++                    // Os.fcntlInt 自 API 30 才存在，API 26-29 走 JNI 直接调用 fcntl
++                    check(ProcessHelper.nativeClearCloexec(fd)) { "fcntl(F_SETFD) failed on fd=$fd" }
++                }
+                 pfd.detachFd() // 释放所有权，防止 GC 关闭 fd
+             } catch (e: Exception) {
+                 Log.e(TAG, "Failed to clear O_CLOEXEC on fd=$fd, aborting: $e")
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/NotificationHelper.kt b/app/src/main/kotlin/top/yukonga/mishka/service/NotificationHelper.kt
+index b2a39bd..db8756a 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/NotificationHelper.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/NotificationHelper.kt
+@@ -6,6 +6,7 @@ import android.app.NotificationManager
+ import android.app.PendingIntent
+ import android.content.Context
+ import android.content.Intent
++import android.os.Build
+ import top.yukonga.mishka.MainActivity
+ import top.yukonga.mishka.R
+ import top.yukonga.mishka.service.NotificationHelper.PROFILE_PROGRESS_ID_BASE
+@@ -113,7 +114,7 @@ object NotificationHelper {
+             .setContentIntent(pendingIntent)
+             .setOngoing(true)
+             .setCategory(Notification.CATEGORY_SERVICE)
+-            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
++            .applyForegroundImmediate()
+             .build()
+     }
+ 
+@@ -158,7 +159,7 @@ object NotificationHelper {
+             .setOnlyAlertOnce(true)
+             .setShowWhen(false)
+             .setCategory(Notification.CATEGORY_SERVICE)
+-            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
++            .applyForegroundImmediate()
+             .build()
+     }
+ 
+@@ -179,7 +180,7 @@ object NotificationHelper {
+             .setOngoing(true)
+             .setOnlyAlertOnce(true)
+             .setCategory(Notification.CATEGORY_SERVICE)
+-            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
++            .applyForegroundImmediate()
+             .build()
+     }
+ 
+@@ -214,7 +215,7 @@ object NotificationHelper {
+             .setSmallIcon(R.drawable.ic_launcher_foreground)
+             .setOngoing(true)
+             .setOnlyAlertOnce(true)
+-            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
++            .applyForegroundImmediate()
+             .build()
+     }
+ 
+@@ -279,3 +280,11 @@ object NotificationHelper {
+         return id
+     }
+ }
++
++/** API 31+ 才有 setForegroundServiceBehavior；更低版本保持原样（FGS 本就立即显示） */
++private fun Notification.Builder.applyForegroundImmediate(): Notification.Builder =
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++        setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
++    } else {
++        this
++    }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ProcessHelper.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ProcessHelper.kt
+index c7dad12..13c5c70 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/ProcessHelper.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/ProcessHelper.kt
+@@ -28,4 +28,7 @@ object ProcessHelper {
+ 
+     /** 等待子进程结束，最多 [timeoutMs]。返回退出码；被信号终止返回 128+signo；超时返回 -1 */
+     external fun nativeWaitpid(pid: Int, timeoutMs: Int): Int
++
++    /** 清除 fd 的 FD_CLOEXEC（API 26-29 替代 Os.fcntlInt）。成功返回 true */
++    external fun nativeClearCloexec(fd: Int): Boolean
+ }
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileUpdateScheduler.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileUpdateScheduler.kt
+index 4099e08..f610eed 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileUpdateScheduler.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileUpdateScheduler.kt
+@@ -4,6 +4,7 @@ import android.app.AlarmManager
+ import android.app.PendingIntent
+ import android.content.Context
+ import android.content.Intent
++import android.os.Build
+ import android.net.Uri
+ import android.util.Log
+ import kotlinx.coroutines.CoroutineScope
+@@ -98,7 +99,8 @@ class ProfileUpdateScheduler(
+          * 并依赖 [ProfileReceiver] 的 catch + re-arm 兜底。
+          */
+         fun scheduleAlarm(alarmManager: AlarmManager, triggerAt: Long, pi: PendingIntent) {
+-            if (alarmManager.canScheduleExactAlarms()) {
++            // canScheduleExactAlarms 自 API 31 起才存在；更低版本无需权限，直接精确调度
++            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()) {
+                 alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+             } else {
+                 alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileWorker.kt b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileWorker.kt
+index f11b6a9..57171df 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/ProfileWorker.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/ProfileWorker.kt
+@@ -4,6 +4,7 @@ import android.app.NotificationManager
+ import android.app.Service
+ import android.content.Intent
+ import android.content.pm.ServiceInfo
++import android.os.Build
+ import android.os.IBinder
+ import android.util.Log
+ import kotlinx.coroutines.CoroutineScope
+@@ -50,11 +51,17 @@ class ProfileWorker : Service() {
+     override fun onCreate() {
+         super.onCreate()
+         try {
+-            startForeground(
+-                NotificationHelper.NOTIFICATION_ID_PROFILE_WORKER,
+-                NotificationHelper.buildProfileWorkerNotification(this),
+-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+-            )
++            val notification = NotificationHelper.buildProfileWorkerNotification(this)
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
++                startForeground(
++                    NotificationHelper.NOTIFICATION_ID_PROFILE_WORKER,
++                    notification,
++                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
++                )
++            } else {
++                // 三参数 startForeground 自 API 29 起才存在，API 26-28 使用两参数版本
++                startForeground(NotificationHelper.NOTIFICATION_ID_PROFILE_WORKER, notification)
++            }
+         } catch (e: Exception) {
+             Log.e(TAG, "startForeground failed", e)
+             foregroundFailed = true
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/WifiPolicyMonitorService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/WifiPolicyMonitorService.kt
+index 728e8a3..251e85a 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/service/WifiPolicyMonitorService.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/service/WifiPolicyMonitorService.kt
+@@ -63,10 +63,23 @@ class WifiPolicyMonitorService : Service() {
+         }
+     }
+ 
++    private inner class LegacyWifiNetworkCallback : ConnectivityManager.NetworkCallback() {
++
++        override fun onAvailable(network: Network) = scheduleEvaluate()
++
++        override fun onLost(network: Network) = scheduleEvaluate()
++    }
++
+     // 同步 getNetworkCapabilities 返回的 SSID 一律被系统打码，
+     // 只有带 FLAG_INCLUDE_LOCATION_INFO 注册的 callback 能拿到真实值
+     private val networkCallback: ConnectivityManager.NetworkCallback =
+-        WifiNetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO)
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++            WifiNetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO)
++        } else {
++            // NetworkCallback(flags) 与 transportInfo 均自 API 31 起才存在；低版本退化为无参回调，
++            // SSID 由 AndroidWifiPolicy.currentSsid 的 WifiManager 回退提供
++            LegacyWifiNetworkCallback()
++        }
+ 
+     override fun onBind(intent: Intent?): IBinder? = null
+ 
+diff --git a/buildSrc/src/main/kotlin/ProjectConfig.kt b/buildSrc/src/main/kotlin/ProjectConfig.kt
+index 6cfea9d..bb777fa 100644
+--- a/buildSrc/src/main/kotlin/ProjectConfig.kt
++++ b/buildSrc/src/main/kotlin/ProjectConfig.kt
+@@ -7,7 +7,7 @@ object ProjectConfig {
+ 
+     object Android {
+         const val TARGET_SDK = 37
+-        const val MIN_SDK = 31
++        const val MIN_SDK = 26
+         const val COMPILE_SDK = 37
+         const val COMPILE_SDK_MINOR = 2
+     }

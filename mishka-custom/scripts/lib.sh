@@ -101,6 +101,8 @@ app_feature_applied() {
           && grep -q 'ROOT_TPROXY_APP_MODE_ACTIVE' "$repo/$APP_PKG_REL/service/MishkaRootService.kt" 2>/dev/null ;;
     0010) [[ -f "$repo/$APP_PKG_REL/service/SystemIpv6.kt" ]] \
           && grep -q 'ROOT_SYSTEM_IPV6' "$repo/$APP_PKG_REL/platform/PlatformStorage.kt" 2>/dev/null ;;
+    0011) grep -q 'include("arm64-v8a", "armeabi-v7a")' "$repo/app/build.gradle.kts" 2>/dev/null ;;
+    0012) grep -q 'const val MIN_SDK = 26' "$repo/buildSrc/src/main/kotlin/ProjectConfig.kt" 2>/dev/null ;;
     *) return 1 ;;
   esac
 }

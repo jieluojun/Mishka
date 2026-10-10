@@ -1,0 +1,36 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 5bc9f30..d82cc4b 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -112,7 +112,7 @@ android {
+             isEnable = true
+             isUniversalApk = false
+             reset()
+-            include("arm64-v8a")
++            include("arm64-v8a", "armeabi-v7a")
+         }
+     }
+ }
+@@ -226,7 +226,8 @@ val mihomoVersion = providers.gradleProperty("mihomo.version").orElse("dev").get
+ val mihomoVersionPath = "github.com/metacubex/mihomo/constant.Version"
+ val ndkDirectoryProvider = androidComponents.sdkComponents.ndkDirectory
+ 
+-val supportedAbis = listOf("arm64-v8a")
++// 32 位 armeabi-v7a 与 arm64-v8a 一起构建（每个 ABI 各出一个 APK，见 splits.abi）
++val supportedAbis = listOf("arm64-v8a", "armeabi-v7a")
+ 
+ // libmihomo.so 同时承担两个职责：
+ //  1. 订阅导入 JNI 路径（libmishka_jni.so dlopen + dlsym mishkaFetchAndValid 等）
+diff --git a/buildSrc/src/main/kotlin/GoBuildTask.kt b/buildSrc/src/main/kotlin/GoBuildTask.kt
+index b5ffea6..c169196 100644
+--- a/buildSrc/src/main/kotlin/GoBuildTask.kt
++++ b/buildSrc/src/main/kotlin/GoBuildTask.kt
+@@ -122,6 +122,8 @@ abstract class GoBuildTask : DefaultTask() {
+ 
+             environment("GOOS", "android")
+             environment("GOARCH", goArch)
++            // armeabi-v7a 固定 ARMv7（与 NDK 的 armv7a-linux-androideabi 目标一致），不依赖 Go 的默认值
++            if (goArch == "arm") environment("GOARM", "7")
+             environment("CGO_ENABLED", if (cgoEnabled.get()) "1" else "0")
+ 
+             if (cgoEnabled.get()) {

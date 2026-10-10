@@ -174,3 +174,25 @@ patch0010_blob_after=d53e4804d6c5a28055ed3313136df8a97ff77a73 app/src/main/res/v
 patch0010_blob_after=456891ab0c2effb4ac876176a79f87c86319414e app/src/main/res/values-zh-rCN/strings.xml
 patch0010_blob_after=9364d6b35314813f5b4d309cfebd4566faa28833 app/src/main/res/values-zh-rTW/strings.xml
 patch0010_blob_after=ee9c288220c7195e27d4898cbfbd623efb1fa4c4 app/src/main/res/values-ru/strings.xml
+
+# --- 0011：支持 32 位 armeabi-v7a（app/build.gradle.kts 的 ABI 列表与 splits；buildSrc GoBuildTask 固定 GOARM=7）
+patch0011_file=patches/app/0011-armeabi-v7a.patch
+patch0011_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009,0010
+patch0011_sha256=0be155caafc19069fb5709687b9da1832e633c3d052c78f486e642dbc6d5b6df
+patch0011_blob_after=d82cc4bec6a4ffd728508eef98712c10b2fc5a54 app/build.gradle.kts
+patch0011_blob_after=c169196746e0f636b8e84fd9fdac710bb37fbe07 buildSrc/src/main/kotlin/GoBuildTask.kt
+
+# --- 0012：最低支持 Android 8（API 26）：MIN_SDK 31 → 26；API 29/30/31+ 调用加 SDK_INT 守卫，低版本走替代实现（系统代理跳过、JNI fcntl、无参 NetworkCallback + WifiManager 回退）
+patch0012_file=patches/app/0012-minsdk-26.patch
+patch0012_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011
+patch0012_sha256=33e978ab2edc493b4ae235a19bd4869d88322a71a1ac6a12c47e67dbf68ecad2
+patch0012_blob_after=6c44f932d7d28406bf1bd6e5d308f1719e51eb9b README.md
+patch0012_blob_after=a9ab1987a721fa6129282cbee4630f7a503c56e5 app/src/main/cpp/process_helper.c
+patch0012_blob_after=3f369dd884226811c66d6ed213cd2e73619c2e16 app/src/main/kotlin/top/yukonga/mishka/platform/WifiPolicyController.kt
+patch0012_blob_after=fa04d6948a826a842400a01f433bae18d4f7a796 app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+patch0012_blob_after=b2a39bdcc68fb26c38b3089e0351e5e53b29e765 app/src/main/kotlin/top/yukonga/mishka/service/NotificationHelper.kt
+patch0012_blob_after=c7dad12fe55339fecfad710c73a60ba26a130376 app/src/main/kotlin/top/yukonga/mishka/service/ProcessHelper.kt
+patch0012_blob_after=4099e08ce4a1cbbec644059a8df10c63321aeedf app/src/main/kotlin/top/yukonga/mishka/service/ProfileUpdateScheduler.kt
+patch0012_blob_after=f11b6a95a2f6f6ceee37ff0230b03e9d03e8623a app/src/main/kotlin/top/yukonga/mishka/service/ProfileWorker.kt
+patch0012_blob_after=728e8a3eb0049376f591df0c9a949f8c76c25966 app/src/main/kotlin/top/yukonga/mishka/service/WifiPolicyMonitorService.kt
+patch0012_blob_after=6cfea9dbf7a0815d9bfb5c0e9e548974e4eafba8 buildSrc/src/main/kotlin/ProjectConfig.kt

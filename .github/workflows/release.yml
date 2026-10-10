@@ -7,7 +7,7 @@
 #
 # 它做的事：拉代码 → 备好 scripta → 装 JDK 21 / Go / Gradle → 用 mishka-custom/scripts/setup.sh
 # 换上 jieluojun/mihomo(Alpha) 内核并打好补丁 → 只跑 :app:assembleRelease → 上传 APK；
-# 打 tag（v*）时再附到 Release 上。**全程不碰 debug 变体。**
+# 打 tag（v*）时再附到 Release 上。两个 ABI（arm64-v8a、armeabi-v7a）各出一个 APK。**全程不碰 debug 变体。**
 #
 # 签名：仓库 secrets 里有 KEYSTORE_BASE64 / KEYSTORE_PASS / KEY_ALIAS / KEY_PASSWORD 就用你的 keystore；
 #       没有则用固定参数的 Android debug 风格 keystore 兜底（能直接装、能覆盖升级，但密钥是公开的，
@@ -197,20 +197,30 @@ jobs:
           ./gradlew -I mishka-custom/init/no-debug.init.gradle "-Pmihomo.version=$ver" :app:assembleRelease
 
       - name: 收集产物
-        id: apk
         run: |
           set -euo pipefail
-          apk="$(find app/build/outputs/apk/release -name '*.apk' | head -1)"
-          [ -n "$apk" ] || { echo "::error::没找到 APK"; exit 1; }
-          echo "path=$apk" >> "$GITHUB_OUTPUT"
-          ls -lh "$apk"
-          sha256sum "$apk"
+          dir=app/build/outputs/apk/release
+          for abi in arm64-v8a armeabi-v7a; do
+            apk="$(find "$dir" -maxdepth 1 -name "*${abi}*.apk" | head -1)"
+            [ -n "$apk" ] || { echo "::error::没找到 ${abi} 的 APK（检查 app/build.gradle.kts 的 splits.abi 与 supportedAbis）"; exit 1; }
+            ls -lh "$apk"
+            sha256sum "$apk"
+          done
 
-      - name: Upload APK
+      - name: Upload APK（arm64-v8a）
         uses: actions/upload-artifact@v7
         with:
-          name: Mishka-custom-release
-          path: ${{ steps.apk.outputs.path }}
+          name: Mishka-custom-release-arm64-v8a
+          path: app/build/outputs/apk/release/*arm64-v8a*.apk
+          if-no-files-found: error
+          archive: false
+
+      - name: Upload APK（armeabi-v7a）
+        uses: actions/upload-artifact@v7
+        with:
+          name: Mishka-custom-release-armeabi-v7a
+          path: app/build/outputs/apk/release/*armeabi-v7a*.apk
+          if-no-files-found: error
           archive: false
 
       - name: Attach to Release（仅打 tag 时）
@@ -219,10 +229,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          apk="${{ steps.apk.outputs.path }}"
+          apks=(app/build/outputs/apk/release/*arm64-v8a*.apk app/build/outputs/apk/release/*armeabi-v7a*.apk)
           tag="${GITHUB_REF_NAME}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$apk" --clobber
+            gh release upload "$tag" "${apks[@]}" --clobber
           else
-            gh release create "$tag" "$apk" --title "$tag" --generate-notes
+            gh release create "$tag" "${apks[@]}" --title "$tag" --generate-notes
           fi
