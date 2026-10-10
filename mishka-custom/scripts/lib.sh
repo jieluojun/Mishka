@@ -100,12 +100,11 @@ app_feature_applied() {
     0007) grep -q 'forceTunDisabled' "$repo/$APRC_REL" 2>/dev/null ;;
     0008) [[ -f "$repo/$CUSTOM_REL/runtime/TproxyAppFilter.kt" ]] \
           && grep -q 'ROOT_TPROXY_APP_MODE_ACTIVE' "$repo/$APP_PKG_REL/service/MishkaRootService.kt" 2>/dev/null ;;
-    # 0009（系统 IPv6）：标记都在才算已装（含 eBPF 接管判断、APN 校验、网卡与 APN 分开处理）
+    # 0009（系统 IPv6）：标记都在才算已装（含 APN 写入与还原的实际值校验）
     0009) [[ -f "$repo/$APP_PKG_REL/service/SystemIpv6.kt" ]] \
           && grep -q 'ROOT_SYSTEM_IPV6' "$repo/$APP_PKG_REL/platform/PlatformStorage.kt" 2>/dev/null \
-          && grep -q 'ebpfTakesOverIpv6' "$repo/$APP_PKG_REL/service/SystemIpv6.kt" 2>/dev/null \
           && grep -q 'apn_drift_check' "$repo/app/src/main/res/raw/system_ipv6.sh" 2>/dev/null \
-          && grep -q 'IFACE_WANT' "$repo/app/src/main/res/raw/system_ipv6.sh" 2>/dev/null ;;
+          && grep -Fq '$_p/$_r（已校验）' "$repo/app/src/main/res/raw/system_ipv6.sh" 2>/dev/null ;;
     0010) grep -q 'include("arm64-v8a", "armeabi-v7a")' "$repo/app/build.gradle.kts" 2>/dev/null ;;
     0011) grep -q 'const val MIN_SDK = 26' "$repo/buildSrc/src/main/kotlin/ProjectConfig.kt" 2>/dev/null ;;
     *) return 1 ;;

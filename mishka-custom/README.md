@@ -107,7 +107,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 0006 | 连接列表代理类型标签（TUN/TPROXY/EBPF，取 `metadata.type`） |
 | 0007 | TPROXY / eBPF 子模式：把活动配置里的 `tun.enable` 写死 `false`（与运行时一致） |
 | 0008 | Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：TPROXY 模式改用 TUN 页的「仅代理以下应用 / 排除以下应用」（白名单优先，都未设置则全部代理；未设置时沿用分应用代理页），UID 按 `tun.include-android-user` 展开，名单应用的 UID 每 10 分钟重解析，变化才重装规则 |
-| 0009 | ROOT 设置新增「系统」分组，下设「系统 IPv6」开关（移植 mihomo_box 的系统 IPv6 逻辑）：默认关闭；ROOT 可用即立即禁用 Wi-Fi 等非蜂窝网卡的 IPv6（lo / 蜂窝 / 热点下游豁免），上网 APN（跳过 IMS）协议改为 IPv4；开启时恢复 IPv6 并还原 APN；打开设置页时读取一次首选 APN 的协议，切换开关成功后再读一次。eBPF 模式下：活动配置的 eBPF 监听器（`listeners[].local.ipv6` / `shared.ipv6`）任一不为 false 即接管 IPv6，此时网卡侧（wlan 等）保持 IPv6 开启并在设置页提示；上网 APN 仍随开关改为 IPv4。都为 false 时系统 IPv6 按开关走，启动 eBPF 时重新对账。APN 写入后重新查询同一行，以实际协议值判定成功；关态每 60 秒校验首选 APN，被写回 IPv4/IPv6 时自动重新接管。 |
+| 0009 | ROOT 设置新增「系统」分组，下设「系统 IPv6」开关（移植 mihomo_box 的系统 IPv6 逻辑）：默认关闭；ROOT 可用即立即禁用 Wi-Fi 等非蜂窝网卡的 IPv6（lo / 蜂窝 / 热点下游豁免），上网 APN（跳过 IMS）协议改为 IPv4；开启时恢复 IPv6 并还原 APN；打开设置页时读取一次首选 APN 的协议，切换开关成功后再读一次。eBPF 模式下：活动配置的 eBPF 监听器（`listeners[].local.ipv6` / `shared.ipv6`）任一不为 false 即接管 IPv6，开关对接管同样生效：关闭时网卡与 APN 都会被改写，设置页不做例外提示；启动 eBPF 时重新对账。APN 写入后重新查询同一行，以实际协议值判定成功；关态每 60 秒校验首选 APN，被写回 IPv4/IPv6 时自动重新接管。 |
 | 0010 | 支持 32 位 `armeabi-v7a`：内核与 APK 在 arm64-v8a 之外同时构建 armeabi-v7a（Go `GOARCH=arm`、`GOARM=7`，NDK `armv7a-linux-androideabi` 工具链；`splits.abi` 每个 ABI 各出一个 APK）。CI 构建耗时约翻倍 |
 | 0011 | 最低支持 Android 8（API 26，原 Android 12 / API 31）：`MIN_SDK` 31 → 26，同时给 API 29/30/31+ 的调用加 `SDK_INT` 守卫：`VpnService.Builder.setMetered` / `setHttpProxy`（API 29，低版本跳过系统代理）、`Os.fcntlInt`（API 30，低版本改用 JNI `nativeClearCloexec`）、三参 `startForeground`（API 29）、`setForegroundServiceBehavior`（API 31）、`canScheduleExactAlarms`（API 31，低版本直接精确调度）、`NetworkCallback(flags)` 与 `transportInfo`（API 31，低版本用无参回调 + WifiManager 回退取 SSID）、`POST_NOTIFICATIONS`（API 33，已有守卫）。Go / NDK 的 clang wrapper 随 minSdk 变为 `android26`。 |
 
@@ -117,14 +117,14 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 
 | 状态 | 行为 |
 | --- | --- |
-| 关（默认） | 非蜂窝网卡（wlan 等）写 `disable_ipv6=1`，并关闭 RA / autoconf（eBPF 接管 IPv6 时不写，见下文）；上网 APN（`preferapn`，跳过 IMS 承载）的 `protocol` / `roaming_protocol` 改为 `IP`，原值记入 `files/system_ipv6/apn.state` |
+| 关（默认） | 非蜂窝网卡（wlan 等）写 `disable_ipv6=1`，并关闭 RA / autoconf；上网 APN（`preferapn`，跳过 IMS 承载）的 `protocol` / `roaming_protocol` 改为 `IP`，原值记入 `files/system_ipv6/apn.state` |
 | 开 | `disable_ipv6` 归 0，恢复 RA / autoconf，按状态文件还原 APN 协议，并停止常驻循环 |
 
 - **立即执行**：应用启动时若 ROOT 可用，按开关期望值执行（默认即立即禁用）；开机 / 应用升级由 `BootReceiver` 再执行一次。
 - **常驻对账**：关态下 root 进程每 5 秒检查一次，飞行模式或切网后被 netd 放回的网卡会被重新禁用；同一网卡 60 秒内最多追打一次。
 - **APN 状态**：打开设置页时经 root 读取一次首选 APN，显示协议（仅 IPv4 / IPv4/IPv6 等）与漫游协议；切换开关成功后会重新读取。离开页面不再查询，也没有手动刷新按钮。
 - **不碰 IMS**：蜂窝网卡不写内核 `disable_ipv6`，只改 APN 协议，VoLTE 与短信不受影响。
-- **eBPF 接管 IPv6**：活动配置里任一 eBPF 监听器的 `local.ipv6` / `shared.ipv6` 不为 false 即视为接管。此时网卡侧（wlan 等）保持 IPv6 开启（内核需要 fd53::/64 本地路由），但上网 APN 仍随开关：开关关时改为 IPv4，开关开时还原（只影响蜂窝，IMS 承载不动）。配置读不到或为 age 密文时按接管处理。
+- **eBPF 与开关**：开关对 eBPF 接管 IPv6 的情况同样生效，不论活动配置里 eBPF 监听器的 `ipv6` 是否为 false。注意：原代码注释记录，eBPF 接管需要 fd53::/64 本地路由，关闭系统 IPv6 可能导致 eBPF 启动失败；遇到此情况打开开关即可恢复。
 - **未覆盖**：脚本依赖 APN 数据库可写与 `svc` 命令；多卡 / 定制 ROM 上查不到首选 APN 时，设置页会提示，可手动把 APN 协议设为 IPv4。
 
 源码：`app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt`、`app/src/main/res/raw/system_ipv6.sh`。
@@ -145,7 +145,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 仓库里装的是 | 怎么办 |
 | --- | --- |
 | 已装满本系列全部 11 个补丁（与最终态逐字节相同） | 直接重跑 `setup.sh`，11 个补丁都会判定为「已在仓库里」。 |
-| 装过修复前的 0009（系统 IPv6 旧版，没有 `IFACE_WANT` 标记） | 先还原到 dd21ee4 基线，再重跑 `setup.sh`。 |
+| 装过本次修复之前的 0009（含 eBPF 接管保持网卡 IPv6 的版本） | 先还原到 dd21ee4 基线，再重跑 `setup.sh`。 |
 | 只装到其中一部分（包括旧版的中间状态） | 先还原到 dd21ee4 基线，再装本系列。 |
 
 还原前先确认仓库里没有要保留的改动（`git status`）。还原到基线的做法：

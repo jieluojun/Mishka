@@ -148,21 +148,21 @@ patch0008_blob_after=a5b5c664f0d51734c50233c945a1b8dc6f52be1a app/src/main/kotli
 patch0008_blob_after=70ec0356797777114a1acd2d1aa341d81b9e8f07 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 patch0008_blob_after=7c3cd1df1cc416c71ca6051c125e3bd522e5b4d3 app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 
-# --- 0009：ROOT 设置 · 系统 IPv6：默认关闭、root 下立即禁用非蜂窝网卡 IPv6、APN 协议改 IPv4（写后按实际值校验）、关态每 60 秒校验 APN 漂移；eBPF 接管 IPv6 时才强制保持系统 IPv6 开启（SystemIpv6.ebpfTakesOverIpv6）；启动 eBPF 时重新对账
+# --- 0009：ROOT 设置 · 系统 IPv6：默认关闭、root 下立即禁用非蜂窝网卡 IPv6、APN 协议改 IPv4（写后按实际值校验）、关态每 60 秒校验 APN 漂移；开关对 eBPF 接管同样生效（不做例外）；启动 eBPF 时重新对账
 patch0009_file=patches/app/0009-system-ipv6-switch.patch
 patch0009_prereq=0001,0002,0003,0004,0005,0006,0007,0008
-patch0009_sha256=4f998b7d2e0370e0b3d81d6a234d928725a89fde43789e390c7e6bbe95ba45b4
+patch0009_sha256=3a645e7deadfb99dced9be26bba17406cb67d9fe6836109d50dba2aa9eca2256
 patch0009_blob_after=8b1cf690e035fb12d95df5f7368e9c96e850a9a3 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 patch0009_blob_after=ed24604c26b048c0992e9102cddcf226914ea5e1 app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 patch0009_blob_after=47cdd0721e76285a4200f0eeee000569465eb8a0 app/src/main/kotlin/top/yukonga/mishka/service/BootReceiver.kt
 patch0009_blob_after=e568cc937989cb147c2e44b15fb7d61e3f223634 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-patch0009_blob_new=f2d1601e794fd8279e421de22ea134e5a9fd8802 app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
-patch0009_blob_after=8edfbe44af3c11e3215e256884f7eaff26159026 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
-patch0009_blob_new=45bad2f9986d40c5c38a84a5e2bb3735684f7f7e app/src/main/res/raw/system_ipv6.sh
-patch0009_blob_after=21606a0de3c90e22cb968b9689396f6adc2452a8 app/src/main/res/values-ru/strings.xml
-patch0009_blob_after=93b9fe67f8486bca193035341a966d85b2ad2ccf app/src/main/res/values-zh-rCN/strings.xml
-patch0009_blob_after=8cdbfe66711893a91b1499c75fbdd9e352669fef app/src/main/res/values-zh-rTW/strings.xml
-patch0009_blob_after=f92f1e18a05fdf0938cad5b9b922c8002543e507 app/src/main/res/values/strings.xml
+patch0009_blob_new=61a86a023f02ba4f65c589875d8d37f60fc85d8a app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
+patch0009_blob_after=985b275abe6a3d6597a634399d7997e93813f1c2 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
+patch0009_blob_new=9ffdc2f40e89b86de32465078ea293707e337c4a app/src/main/res/raw/system_ipv6.sh
+patch0009_blob_after=a02298187e906c974f6e08f988c33d1f5c658367 app/src/main/res/values-ru/strings.xml
+patch0009_blob_after=1a4482c9d4ecfd2fdded0c56ab89e2855a6289e9 app/src/main/res/values-zh-rCN/strings.xml
+patch0009_blob_after=f0eae8a3746dc796525e6033c4ccafe302a1d2a4 app/src/main/res/values-zh-rTW/strings.xml
+patch0009_blob_after=034588b219019349c65f65bac031c68f06c69059 app/src/main/res/values/strings.xml
 
 # --- 0010：支持 32 位 armeabi-v7a（app/build.gradle.kts 的 ABI 列表与 splits；buildSrc GoBuildTask 固定 GOARM=7）
 patch0010_file=patches/app/0010-armeabi-v7a.patch
