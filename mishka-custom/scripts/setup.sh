@@ -23,7 +23,7 @@
 #      0007 TPROXY / eBPF 子模式：活动配置里的 tun.enable 写死 false（与运行时一致）
 #      0008 Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：白名单 / 黑名单取自 TUN 页，UID 周期重解析
 #      0009 ROOT 设置新增「系统」分组：系统 IPv6 开关（默认关闭，root 下立即生效，实时显示首选 APN 协议）；
-#           开关同时改写活动订阅 config.yaml 的 IPv6 开关（顶层 ipv6、dns.ipv6、eBPF local/shared ipv6），启动时同步到 runtime；APN 写入与还原按实际值校验，关态每 60 秒纠正漂移
+#           开关同时改写活动订阅 config.yaml 的 IPv6 开关（顶层 ipv6、dns.ipv6、eBPF local/shared ipv6），启动时同步到 runtime；代理运行中则自动重启；APN 写入与还原按实际值校验，关态每 60 秒纠正漂移
 #      0010 支持 32 位 armeabi-v7a：与 arm64-v8a 同时构建内核与 APK（GOARCH=arm、GOARM=7）
 #      0011 最低支持 Android 8（API 26）：MIN_SDK 31 → 26；API 29/30/31+ 调用加 SDK_INT 守卫，低版本走替代实现
 #
