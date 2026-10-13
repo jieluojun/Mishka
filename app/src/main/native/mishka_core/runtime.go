@@ -7,7 +7,6 @@ import "C"
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -135,19 +134,6 @@ func runMihomo() int {
 			}
 		}
 	}
-	// 最终 YAML（含脚本变换）和用户覆写都未选栈时，才覆盖 mihomo 内建默认值。
-	defaultStack, err := shouldDefaultTunStack(configBytes, overrideJSON, ageSecretKey)
-	if err != nil {
-		log.Fatalln("inspect tun stack: %s", err.Error())
-	}
-	if defaultStack {
-		options = append(options, func(cfg *config.Config) {
-			if cfg.General.Tun.Enable {
-				cfg.General.Tun.Stack = Const.TunMips
-			}
-		})
-	}
-
 	if err := hub.Parse(configBytes, options...); err != nil {
 		log.Fatalln("Parse config: %s", err.Error())
 	}
@@ -173,42 +159,6 @@ func runMihomo() int {
 			}
 		}
 	}
-}
-
-func shouldDefaultTunStack(configBytes []byte, overrideJSON, ageSecretKey string) (bool, error) {
-	plain, err := decryptConfig(configBytes, ageSecretKey)
-	if err != nil {
-		return false, err
-	}
-	var subscription struct {
-		Tun struct {
-			Stack *string `yaml:"stack"`
-		} `yaml:"tun"`
-	}
-	if err := yaml.Unmarshal(plain, &subscription); err != nil {
-		return false, err
-	}
-	if subscription.Tun.Stack != nil {
-		return false, nil
-	}
-	if overrideJSON != "" {
-		data, err := os.ReadFile(overrideJSON)
-		if err != nil {
-			return false, err
-		}
-		var user struct {
-			Tun struct {
-				Stack *string `json:"stack"`
-			} `json:"tun"`
-		}
-		if err := json.Unmarshal(data, &user); err != nil {
-			return false, err
-		}
-		if user.Tun.Stack != nil {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 func transformedMixedPort(configBytes []byte) (int, error) {

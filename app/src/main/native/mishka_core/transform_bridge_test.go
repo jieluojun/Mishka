@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	Const "github.com/metacubex/mihomo/constant"
+
 	"mishka_core/overrides"
 )
 
 func TestTransformedMixedPortUsesScriptResult(t *testing.T) {
 	workDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workDir, "config.yaml"), []byte("mixed-port: 7890\nrules: [MATCH,DIRECT]\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "config.yaml"), []byte("mixed-port: 7890\nrules: ['MATCH,DIRECT']\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	scriptPath := filepath.Join(workDir, "port.js")
@@ -37,11 +39,8 @@ func TestTransformedMixedPortUsesScriptResult(t *testing.T) {
 	if port != 7895 {
 		t.Fatalf("transformed mixed-port = %d, want 7895", port)
 	}
-	defaultStack, err := shouldDefaultTunStack(out, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if defaultStack {
+	stack := parseRuntimeConfig(t, out, `{ "tun": { "enable": true } }`).General.Tun.Stack
+	if stack != Const.TunSystem {
 		t.Fatal("transformed subscription's explicit stack was ignored")
 	}
 }

@@ -111,6 +111,7 @@ android {
             isEnable = true
             isUniversalApk = false
             reset()
+            //noinspection ChromeOsAbiSupport
             include("arm64-v8a")
         }
     }
