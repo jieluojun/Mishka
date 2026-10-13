@@ -1,16 +1,60 @@
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/repository/SubscriptionRepositoryImpl.kt b/app/src/main/kotlin/top/yukonga/mishka/data/repository/SubscriptionRepositoryImpl.kt
+index 5b88a9d..486b473 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/data/repository/SubscriptionRepositoryImpl.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/data/repository/SubscriptionRepositoryImpl.kt
+@@ -21,6 +21,7 @@ import kotlinx.coroutines.isActive
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.sync.Mutex
+ import kotlinx.coroutines.sync.withLock
++import kotlinx.coroutines.withContext
+ import top.yukonga.mishka.data.database.ImportedDao
+ import top.yukonga.mishka.data.database.ImportedEntity
+ import top.yukonga.mishka.data.database.AppDatabase
+@@ -120,6 +121,20 @@ class SubscriptionRepositoryImpl(
+         }
+     }
+ 
++    /**
++     * 直接读 DB 的订阅快照（不经 subscriptions Flow）。给「内置免流配置对账」用：Flow 的首个值是
++     * 构造时的空列表，DB 回填前不能拿它判断订阅是否已被删除。resolveProfile 里有目录 stat，
++     * 和 collectProfiles 一样放到 IO 上。
++     */
++    override suspend fun snapshot(): List<Subscription> = withContext(Dispatchers.IO) {
++        profileLock.withLock {
++            val activeId = _activeUuid.value
++            val live = _liveProvider.value
++            val pendingMap = pendingDao.queryAll().associateBy { it.uuid }
++            importedDao.queryAll().map { resolveProfile(it, pendingMap[it.uuid], activeId, live) }
++        }
++    }
++
+     /** 暴露给 ProfileProcessor 用的 profileLock —— DB 快照与 commit 期间持有。 */
+     suspend fun <T> withProfileLock(block: suspend () -> T): T = profileLock.withLock { block() }
+ 
+diff --git a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/SubscriptionRepository.kt b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/SubscriptionRepository.kt
+index f5085d0..2e20b79 100644
+--- a/app/src/main/kotlin/top/yukonga/mishka/domain/repository/SubscriptionRepository.kt
++++ b/app/src/main/kotlin/top/yukonga/mishka/domain/repository/SubscriptionRepository.kt
+@@ -20,6 +20,14 @@ interface SubscriptionRepository {
+     /** 当前活跃订阅（含 mihomo runtime 聚合流量）。 */
+     val activeSubscription: StateFlow<Subscription?>
+ 
++    /**
++     * 直接读 DB 的订阅快照（imported + pending 合并，字段优先级与 [subscriptions] 一致）。
++     *
++     * 给「内置免流配置对账」用的：subscriptions 的首个值是构造时的空列表，DB 回填前按它判断
++     * 「订阅被删了没」会在每次冷启动误判一次；这里从 DB 现读，不依赖 Flow 的回填时机。
++     */
++    suspend fun snapshot(): List<Subscription>
++
+     /** 推送 mihomo runtime 聚合后的 live provider 流量；传 null 清空。 */
+     fun setLiveProviderInfo(subscriptionId: String?, info: SubscriptionInfo?)
+ 
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-index 91a7411..53ffe75 100644
+index 91a7411..cb4cf98 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-@@ -1,6 +1,7 @@
- package top.yukonga.mishka.viewmodel
- 
- import android.content.Context
-+import android.content.SharedPreferences
- import androidx.annotation.StringRes
- import kotlinx.serialization.json.Json
- import kotlinx.serialization.json.decodeFromJsonElement
-@@ -34,6 +35,7 @@ import top.yukonga.mishka.domain.model.TunOverride
+@@ -34,6 +34,7 @@ import top.yukonga.mishka.domain.model.TunOverride
  import top.yukonga.mishka.domain.repository.SubscriptionRepository
  import top.yukonga.mishka.platform.ProfileFileManager
  import top.yukonga.mishka.platform.ProxyServiceController
@@ -18,7 +62,7 @@ index 91a7411..53ffe75 100644
  import top.yukonga.mishka.service.ConfigGenerator
  import top.yukonga.mishka.service.ProfileFileOps
  import top.yukonga.mishka.util.describe
-@@ -100,10 +102,92 @@ class SubscriptionViewModel(
+@@ -100,10 +101,97 @@ class SubscriptionViewModel(
          viewModelScope.launch {
              repository.subscriptions.collect { subs ->
                  _uiState.value = _uiState.value.copy(subscriptions = subs)
@@ -36,21 +80,39 @@ index 91a7411..53ffe75 100644
 +
 +    /**
 +     * [mishka-custom] 内置「免流」配置（res/raw/builtin_mianliu.yaml）对账：上次导入出来的那条订阅还在
-+     * 列表里就什么都不做；被删掉过（或从未导入）就重新导入一份包内版本——即「删掉后自动恢复」。顺带也是
++     * 库里就什么都不做；被删掉过（或从未导入）才重新导入一份包内版本——即「删掉后自动恢复」。顺带也是
 +     * 把包内新配置刷进 App 的途径：删掉内置订阅，它会带着包内版本回来。
 +     *
-+     * 只认「上次导入的那条 id」（用户自己建的同名订阅不算数）；导入不走 runPipeline、不弹导入进度框；
-+     * 失败本轮不再重试（下次进程启动再试），pendingOnFailure 会释放半成品。
++     * 只认「上次导入的那条 id」，用户自己建的同名订阅不算数（改内容 / 改名都不影响，id 不变）；
++     * 导入不走 runPipeline、不弹导入进度框；失败本轮不再重试（下次进程启动再试），pendingOnFailure
++     * 会释放半成品。
++     *
++     * 判断「还在不在」以 DB 快照为准（repository.snapshot()），不能只看列表：subscriptions 的首个值
++     * 是构造时的空列表，DB 回填前按它判断会把「刚启动」当成「被删了」，于是每次冷启动又生成一份默认配置。
 +     */
 +    private fun ensureBuiltinMianliu(subs: List<Subscription>) {
 +        if (builtinMianliuImportFailed) return
 +        if (builtinMianliuJob?.isActive == true) return
 +        val prefs = context.getSharedPreferences(BUILTIN_PREFS_NAME, Context.MODE_PRIVATE)
-+        if (builtinMianliuPresent(prefs, subs)) return
-+        // 记过 id 或老版本的布尔标记 = 之前导入过，这次是「删掉后恢复」；首次导入不弹提示
-+        val restoring = prefs.getString(BUILTIN_MIANLIU_ID_KEY, null) != null ||
-+            prefs.getBoolean(BUILTIN_MIANLIU_KEY, false)
++        val recorded = prefs.getString(BUILTIN_MIANLIU_ID_KEY, null)
++        // 快路径：记录里的那条还在列表里（列表已回填的常见情况），不查库
++        if (recorded != null && subs.any { it.id == recorded }) return
 +        builtinMianliuJob = viewModelScope.launch {
++            val stored = prefs.getString(BUILTIN_MIANLIU_ID_KEY, null)
++            val legacy = prefs.getBoolean(BUILTIN_MIANLIU_KEY, false)
++            val snapshot = repository.snapshot()
++            // 还在库里（列表只是还没回填，或订阅被改过名 / 改过内容）→ 什么都不做；
++            // 老装机只记过布尔标记：按「名字 + 文件类型」认领一次并补记 id，免得凭空多出一条
++            val existing = snapshot.firstOrNull { it.id == stored }
++                ?: if (stored == null && legacy) {
++                    snapshot.firstOrNull { it.name == BUILTIN_MIANLIU_NAME && it.type == ProfileType.File }
++                } else {
++                    null
++                }
++            if (existing != null) {
++                if (stored == null) prefs.edit().putString(BUILTIN_MIANLIU_ID_KEY, existing.id).apply()
++                return@launch
++            }
 +            val sub = importBuiltinMianliu()
 +            if (sub == null) {
 +                builtinMianliuImportFailed = true
@@ -60,22 +122,9 @@ index 91a7411..53ffe75 100644
 +                .putString(BUILTIN_MIANLIU_ID_KEY, sub.id)
 +                .putBoolean(BUILTIN_MIANLIU_KEY, true)
 +                .apply()
-+            if (restoring) showToast(BUILTIN_MIANLIU_RESTORED)
++            // 记过 id 或老版本的布尔标记 = 之前导入过，这次是「删掉后恢复」；首次导入不弹提示
++            if (stored != null || legacy) showToast(BUILTIN_MIANLIU_RESTORED)
 +        }
-+    }
-+
-+    /**
-+     * 上次导入的内置订阅是否还在列表里。id 对上才算；id 对不上（老版本没记 id，或 WebDAV 恢复 /
-+     * 迁移换了 id）时按「名字 + 文件类型」兜底认一次，认到就把 id 补上，免得重复导入。
-+     */
-+    private fun builtinMianliuPresent(prefs: SharedPreferences, subs: List<Subscription>): Boolean {
-+        val id = prefs.getString(BUILTIN_MIANLIU_ID_KEY, null)
-+        if (id != null && subs.any { it.id == id }) return true
-+        if (id == null && !prefs.getBoolean(BUILTIN_MIANLIU_KEY, false)) return false
-+        val named = subs.firstOrNull { it.name == BUILTIN_MIANLIU_NAME && it.type == ProfileType.File }
-+            ?: return false
-+        prefs.edit().putString(BUILTIN_MIANLIU_ID_KEY, named.id).apply()
-+        return true
 +    }
 +
 +    /**
