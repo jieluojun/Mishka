@@ -12,6 +12,7 @@ VM_REL="$APP_PKG_REL/viewmodel/SubscriptionViewModel.kt"
 PROXY_VM_REL="$APP_PKG_REL/viewmodel/ProxyViewModel.kt"
 CONN_REL="$APP_PKG_REL/ui/screen/connection/ConnectionScreen.kt"
 APRC_REL="$APP_PKG_REL/service/ActiveProfileRuntimeConfig.kt"
+BUILTIN_MIANLIU_REL="app/src/main/res/raw/builtin_mianliu.yaml"
 API_CLIENT_REL="$APP_PKG_REL/data/api/MihomoApiClient.kt"
 HOME_VM_REL="$APP_PKG_REL/viewmodel/HomeViewModel.kt"
 
@@ -92,7 +93,10 @@ app_feature_applied() {
           && grep -q 'RuleIndexBadge' "$repo/$CUSTOM_REL/forms/FlowFormPages.kt" 2>/dev/null \
           && grep -q 'titleMaxLines' "$repo/$CUSTOM_REL/forms/ConfigFormPanel.kt" 2>/dev/null \
           && grep -q 'AppPickerSectionTitle' "$repo/$CUSTOM_REL/forms/P3FormEditors.kt" 2>/dev/null ;;
-    0002) grep -q 'importBuiltinMianliuOnce' "$repo/$VM_REL" 2>/dev/null ;;
+    # 0002：导入逻辑（本版 = 删掉后自动恢复）在，且免流配置确实是本包带的那份内容。
+    # 旧版（导入一次、删除不恢复）或内容对不上的，由 setup.sh 的 0002 分支就地升级/刷新。
+    0002) grep -q 'ensureBuiltinMianliu' "$repo/$VM_REL" 2>/dev/null \
+          && grep -q 'LancelotRar/free-subs' "$repo/$BUILTIN_MIANLIU_REL" 2>/dev/null ;;
     0003) [[ -f "$repo/$CUSTOM_REL/forms/ConfigTidy.kt" ]] && grep -q 'fun tidyConfig()' "$fmes" 2>/dev/null ;;
     0004) grep -q 'refreshSelectionAfterTest' "$repo/$PROXY_VM_REL" 2>/dev/null ;;
     # 0005：主页面板 + 面板外网代理（PanelProxyOverride.kt）都在才算已装

@@ -35,7 +35,8 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库> [--kernel-dir <内核
 2. 内核：准备一份 jieluojun/mihomo(Alpha) 到补丁基线 commit，应用 `patches/mihomo/*.patch`
    （`--kernel-dir` 可以放仓库外）；
 3. 写 `go.work` + `go.work.sum`；
-4. 依次应用 app 补丁 `0001 → 0012`（其中 0002「内置免流」可选，打不上只警告）。
+4. 依次应用 app 补丁 `0001 → 0012`（其中 0002「内置免流」可选，打不上只警告；仓库里是旧版 0002
+   —— 「导入一次、删掉不恢复」—— 时只刷新配置并提示先还原到补丁基线）。
 
 常用参数：`--skip-kernel` 只打 app 补丁、`--ci` 非交互（配 Actions）、`--force` 脏工作区也继续、
 `--refresh-sum` 重算 go.work.sum、`--help` 看全部。
@@ -47,6 +48,9 @@ app（仓库处在补丁基线：上游 `8f9147d`，或 fork 合并后的 main `
 ```bash
 for p in mishka-custom/patches/app/[0-9][0-9][0-9][0-9]-*.patch; do git apply "$p" || break; done
 ```
+
+手工打的时候，仓库里如果已经装过旧版 0002（`SubscriptionViewModel.kt` 里有 `importBuiltinMianliuOnce`），
+先还原到补丁基线再打本系列（旧版那两段改动叠加不到新补丁上）。
 
 内核：先 `git checkout <patches/mihomo/BASELINE.txt 里的 base_commit>`，再按序号 `git apply`。
 打不上时 `git apply --check -v <补丁>` 看原因，并拿 sha256 与 BASELINE.txt 对一下，确认补丁本身没被改过。
@@ -100,7 +104,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | # | 内容 |
 | --- | --- |
 | 0001 | 锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑对话框的按钮间距；maplist 拖动排序（DNS「按域名分流解析」等）；路由规则序号；路由规则匹配值省略号；应用选择器：搜索框兼作手动添加（输入完整包名后点「添加」或回车，未安装的包名同样保留），已选应用置顶为「已选择 (N)」、其余为「其他应用 (M)」，标题显示清单计数，确定按钮显示已选数量 |
-| 0002 | 内置「免流」配置（`res/raw/builtin_mianliu.yaml`，可选） |
+| 0002 | 内置「免流」配置：`res/raw/builtin_mianliu.yaml` 内嵌整份配置，后台导入为一个文件订阅「免流」；**被删掉后自动恢复**（对账的是导入时记下的订阅 id，不碰用户自建的同名订阅）。可选补丁：导入逻辑打不上时只警告；仓库里是旧版 0002 时，`setup.sh` 只刷新配置并提示先还原到补丁基线 |
 | 0003 | 字段整理（`ConfigTidy`，按官方字段顺序重排，注释与块式写法原样保留）+ 编辑器工具栏：字段整理按钮放到文件名左侧，右侧「回退修改」按钮（仅内容有改动时显示） |
 | 0004 | 代理页整组测速对齐 mihomo_box 的 `testGroupAll`（组接口的 0 值结论不重测、不可测策略不发请求、每路结果当场回写） |
 | 0005 | 主页面板 / Web 界面（box.app 同款）：主页「工具」下方入口，内嵌 WebView 打开内核 external-controller 的面板；独立 `PanelActivity` 承载；WebView 预热。另含面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP、YouTube 测不出延迟）：WebView 代理用 `androidx.webkit` 的 `ProxyController` 整体覆盖（GET/POST/WebSocket/CONNECT 都经 mihomo，域名由 mihomo 解析）；页面在覆盖生效后才加载；代理没接上时顶部给出提示。新增依赖 |
@@ -111,6 +115,24 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 0010 | 支持 32 位 `armeabi-v7a`：内核与 APK 在 arm64-v8a 之外同时构建 armeabi-v7a（Go `GOARCH=arm`、`GOARM=7`，NDK `armv7a-linux-androideabi` 工具链；`splits.abi` 每个 ABI 各出一个 APK）。CI 构建耗时约翻倍 |
 | 0011 | 最低支持 Android 8（API 26，原 Android 12 / API 31）：`MIN_SDK` 31 → 26，同时给 API 29/30/31+ 的调用加 `SDK_INT` 守卫：`VpnService.Builder.setMetered` / `setHttpProxy`（API 29，低版本跳过系统代理）、`Os.fcntlInt`（API 30，低版本改用 JNI `nativeClearCloexec`）、三参 `startForeground`（API 29）、`setForegroundServiceBehavior`（API 31）、`canScheduleExactAlarms`（API 31，低版本直接精确调度）、`NetworkCallback(flags)` 与 `transportInfo`（API 31，低版本用无参回调 + WifiManager 回退取 SSID）、`POST_NOTIFICATIONS`（API 33，已有守卫）。Go / NDK 的 clang wrapper 随 minSdk 变为 `android26`。 |
 | 0012 | 代理模式即时切换：主页「代理模式」（规则 / 全局 / 直连）运行中改走 `PATCH /configs` 热生效——对齐 mihomo_box 模块的「运行模式」切换，内核不重启、启动链不重跑、代理不中断；随后后台断开存量连接（老长连接不换路由，不主动断开体感就是「点了没生效」）。停止/启动中切模式改为等状态落定后补发 PATCH；PATCH 失败或客户端未就绪才回退一次重启 |
+
+## 内置「免流」配置（0002）
+
+App 里带一份免流订阅配置（`res/raw/builtin_mianliu.yaml`，就是这份包内配置）。行为：
+
+| 场景 | 行为 |
+| --- | --- |
+| 首次（仓库里还没导入过） | 后台导入为一个文件订阅「免流」，不走导入进度框、不弹提示；失败静默，下次启动再试 |
+| 用户把它删了 | 下次启动 / 订阅列表刷新时自动重新导入一份包内版本，并弹一次「内置「免流」配置已自动恢复」 |
+| 用户自己建了个也叫「免流」的订阅 | 不冲突：只认「导入时记下的那条订阅 id」，用户自建的不算内置的，也不会被删 |
+| 失败（比如存储写不进去） | 静默；本轮不再重试，下次启动再试（半成品由原逻辑清理） |
+
+对账（该不该恢复）在订阅列表每次刷新时做一次：记录里的 id 还在列表里就什么都不做，不在了就重新导入。
+记录 id 而不是「已导入过」的布尔值，就是为了分辨「用户删了它」和「用户自己建了同名的」。
+
+**换配置 / 升级包**：内置订阅恢复出来的永远是本包 `builtin_mianliu.yaml` 里的内容 —— 想换上本包的新配置，
+删掉那条「免流」等它自动回来即可。仓库里已经应用过旧版 0002（导入一次）的，要先还原到补丁基线再重跑
+`setup.sh`（本包不做就地升级）。
 
 ## 系统 IPv6 开关（0009）
 
@@ -145,7 +167,8 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 
 | 仓库里装的是 | 怎么办 |
 | --- | --- |
-| 已装满本系列全部 11 个补丁（与最终态逐字节相同） | 直接重跑 `setup.sh`，11 个补丁都会判定为「已在仓库里」。 |
+| 已装满本系列全部 12 个补丁（与最终态逐字节相同） | 直接重跑 `setup.sh`，12 个补丁都会判定为「已在仓库里」。 |
+| 装过之前的 0002（导入一次、删掉不恢复） | 先还原到补丁基线（`8f9147d` / fork main `4fa3c86`），再重跑 `setup.sh`（旧 0002 的两段改动都叠加不到新补丁上；setup.sh 会只刷新配置并提示）。 |
 | 装过含 eBPF 接管逻辑的 0009 版本 | 先还原到补丁基线（`8f9147d` / fork main `4fa3c86`），再重跑 `setup.sh`。 |
 | 只装到其中一部分（包括旧版的中间状态） | 先还原到补丁基线（`8f9147d` / fork main `4fa3c86`），再装本系列。 |
 

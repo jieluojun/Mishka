@@ -13,7 +13,8 @@
 #   4. 应用 app 侧补丁 patches/app/0001…0012（按功能切分，依序应用；每个先判断是否已在仓库里）：
 #      0001 锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复、规则编辑间距、
 #           maplist 拖动排序、路由规则序号、路由规则匹配值省略号；应用选择器（搜索兼手动添加、已选置顶、显示计数）
-#      0002 内置「免流」配置（可选：打不上只警告）
+#      0002 内置「免流」配置：后台导入文件订阅「免流」，被删掉后自动恢复（可选：打不上只警告；
+#           仓库里是旧版 0002 时只刷新配置并提示先还原到补丁基线）
 #      0003 字段整理 + 编辑器工具栏（字段整理按钮位置、回退修改；不加依赖）
 #      0004 代理页整组测速对齐（mihomo_box 同款）
 #      0005 主页面板 / Web 界面（box.app 同款，独立 PanelActivity 承载）；面板外网请求改走 mihomo mixed-port
@@ -289,15 +290,31 @@ for pname in "${APP_PATCHES[@]}"; do
   [[ -f "$patch" ]] || die "缺少补丁文件：patches/app/$pname"
   if app_feature_applied "$REPO" "$num"; then
     ok "已在仓库里：$pname"
+  elif [[ "$num" == "0002" ]] && grep -q 'importBuiltinMianliuOnce' "$REPO/$VM_REL" 2>/dev/null; then
+    # 仓库里是旧版 0002（导入一次、删除不恢复）：补丁的「改 SubscriptionViewModel.kt」「新建
+    # builtin_mianliu.yaml」两段都叠加不到旧状态上。本包不做就地升级（旧改动要靠还原到补丁基线清掉），
+    # 这里只把内置免流配置刷成包内版本，避免配置停在旧内容；.kt 不动，并提示接下来怎么做。
+    if [[ -f "$REPO/$BUILTIN_MIANLIU_REL" ]]; then
+      yaml_backup="$(mktmp)/builtin_mianliu.yaml.old"
+      cp "$REPO/$BUILTIN_MIANLIU_REL" "$yaml_backup"
+      rm -f "$REPO/$BUILTIN_MIANLIU_REL"
+      if git -C "$REPO" apply --include="$BUILTIN_MIANLIU_REL" --whitespace=nowarn "$patch" 2>/dev/null; then
+        warn "$pname：内置免流配置已刷新为包内版本（$BUILTIN_MIANLIU_REL）"
+      else
+        cp "$yaml_backup" "$REPO/$BUILTIN_MIANLIU_REL"
+        warn "$pname：内置免流配置刷新失败，保留原文件"
+      fi
+    fi
+    warn "$pname：仓库里是旧版 0002（导入一次、删除不恢复），本次没有覆盖 SubscriptionViewModel.kt —— 需先还原到补丁基线（git checkout 4fa3c86，或逆序 git apply -R 旧 0002）后重跑本脚本，才会有「删掉后自动恢复」。其余定制不受影响。"
   elif git -C "$REPO" apply --check "$patch" 2>/dev/null; then
-    git -C "$REPO" apply "$patch"
+    git -C "$REPO" apply --whitespace=nowarn "$patch"
     ok "已应用 $pname"
   elif git -C "$REPO" apply --check --3way "$patch" 2>/dev/null; then
-    git -C "$REPO" apply --3way "$patch"
+    git -C "$REPO" apply --3way --whitespace=nowarn "$patch"
     ok "已应用 $pname（3way 合并，注意确认改动）"
   elif [[ "$num" == "0002" ]]; then
     # 内置「免流」配置是可选的：打不上只警告、不中断，其余定制照常可用，内置条目需要手动补
-    warn "$pname 打不上：SubscriptionViewModel.kt 可能已被上游改动。其余定制不受影响。"
+    warn "$pname 打不上：SubscriptionViewModel.kt 可能已被上游改动，或仓库里还是旧版 0002（需先还原到补丁基线）。其余定制不受影响。"
   else
     die "补丁 $pname 打不上：仓库不在它的前一个状态。用 git -C \"$REPO\" apply --check -v \"$patch\" 看详细原因；装过旧系列的话，先还原到补丁基线（上游 8f9147d / fork main 4fa3c86）。"
   fi

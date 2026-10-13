@@ -1,24 +1,88 @@
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-index 91a7411..d607aa4 100644
+index 91a7411..53ffe75 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-@@ -102,6 +102,39 @@ class SubscriptionViewModel(
+@@ -1,6 +1,7 @@
+ package top.yukonga.mishka.viewmodel
+ 
+ import android.content.Context
++import android.content.SharedPreferences
+ import androidx.annotation.StringRes
+ import kotlinx.serialization.json.Json
+ import kotlinx.serialization.json.decodeFromJsonElement
+@@ -34,6 +35,7 @@ import top.yukonga.mishka.domain.model.TunOverride
+ import top.yukonga.mishka.domain.repository.SubscriptionRepository
+ import top.yukonga.mishka.platform.ProfileFileManager
+ import top.yukonga.mishka.platform.ProxyServiceController
++import top.yukonga.mishka.platform.showToast
+ import top.yukonga.mishka.service.ConfigGenerator
+ import top.yukonga.mishka.service.ProfileFileOps
+ import top.yukonga.mishka.util.describe
+@@ -100,10 +102,92 @@ class SubscriptionViewModel(
+         viewModelScope.launch {
+             repository.subscriptions.collect { subs ->
                  _uiState.value = _uiState.value.copy(subscriptions = subs)
++                // [mishka-custom] 内置「免流」配置：列表每次刷新对一次账（见 ensureBuiltinMianliu）
++                ensureBuiltinMianliu(subs)
              }
          }
-+        // [mishka-custom] 内置「免流」配置：首次启动在后台导入一次（见 importBuiltinMianliuOnce）
-+        viewModelScope.launch { importBuiltinMianliuOnce() }
+     }
+ 
++    // [mishka-custom] 内置「免流」配置：导入任务；同时用于防止对账重复触发导入
++    private var builtinMianliuJob: Job? = null
++
++    // [mishka-custom] 本轮导入失败过：停下等下次进程启动 / 列表刷新，别在失败与重试之间打转
++    private var builtinMianliuImportFailed = false
++
++    /**
++     * [mishka-custom] 内置「免流」配置（res/raw/builtin_mianliu.yaml）对账：上次导入出来的那条订阅还在
++     * 列表里就什么都不做；被删掉过（或从未导入）就重新导入一份包内版本——即「删掉后自动恢复」。顺带也是
++     * 把包内新配置刷进 App 的途径：删掉内置订阅，它会带着包内版本回来。
++     *
++     * 只认「上次导入的那条 id」（用户自己建的同名订阅不算数）；导入不走 runPipeline、不弹导入进度框；
++     * 失败本轮不再重试（下次进程启动再试），pendingOnFailure 会释放半成品。
++     */
++    private fun ensureBuiltinMianliu(subs: List<Subscription>) {
++        if (builtinMianliuImportFailed) return
++        if (builtinMianliuJob?.isActive == true) return
++        val prefs = context.getSharedPreferences(BUILTIN_PREFS_NAME, Context.MODE_PRIVATE)
++        if (builtinMianliuPresent(prefs, subs)) return
++        // 记过 id 或老版本的布尔标记 = 之前导入过，这次是「删掉后恢复」；首次导入不弹提示
++        val restoring = prefs.getString(BUILTIN_MIANLIU_ID_KEY, null) != null ||
++            prefs.getBoolean(BUILTIN_MIANLIU_KEY, false)
++        builtinMianliuJob = viewModelScope.launch {
++            val sub = importBuiltinMianliu()
++            if (sub == null) {
++                builtinMianliuImportFailed = true
++                return@launch
++            }
++            prefs.edit()
++                .putString(BUILTIN_MIANLIU_ID_KEY, sub.id)
++                .putBoolean(BUILTIN_MIANLIU_KEY, true)
++                .apply()
++            if (restoring) showToast(BUILTIN_MIANLIU_RESTORED)
++        }
 +    }
 +
 +    /**
-+     * [mishka-custom] 内置「免流」配置（res/raw/builtin_mianliu.yaml）：作为文件订阅后台导入一次。
-+     * 不走 runPipeline，不弹导入进度框；成功后写入标记，之后用户删除也不会再自动恢复。
-+     * 失败不写标记，下次启动重试；失败时 pendingOnFailure 会释放半成品。
++     * 上次导入的内置订阅是否还在列表里。id 对上才算；id 对不上（老版本没记 id，或 WebDAV 恢复 /
++     * 迁移换了 id）时按「名字 + 文件类型」兜底认一次，认到就把 id 补上，免得重复导入。
 +     */
-+    private suspend fun importBuiltinMianliuOnce() {
-+        val prefs = context.getSharedPreferences(BUILTIN_PREFS_NAME, Context.MODE_PRIVATE)
-+        if (prefs.getBoolean(BUILTIN_MIANLIU_KEY, false)) return
-+        try {
++    private fun builtinMianliuPresent(prefs: SharedPreferences, subs: List<Subscription>): Boolean {
++        val id = prefs.getString(BUILTIN_MIANLIU_ID_KEY, null)
++        if (id != null && subs.any { it.id == id }) return true
++        if (id == null && !prefs.getBoolean(BUILTIN_MIANLIU_KEY, false)) return false
++        val named = subs.firstOrNull { it.name == BUILTIN_MIANLIU_NAME && it.type == ProfileType.File }
++            ?: return false
++        prefs.edit().putString(BUILTIN_MIANLIU_ID_KEY, named.id).apply()
++        return true
++    }
++
++    /**
++     * 把包内的免流配置导入为一个文件订阅，成功返回新订阅，失败返回 null（静默：下次再试，不打扰首页）。
++     */
++    private suspend fun importBuiltinMianliu(): Subscription? {
++        return try {
 +            val content = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
 +                context.resources.openRawResource(R.raw.builtin_mianliu).bufferedReader().use { it.readText() }
 +            }
@@ -27,32 +91,37 @@ index 91a7411..d607aa4 100644
 +                fileManager.savePendingConfig(sub.id, content)
 +                processor.apply(sub.id)
 +            }
-+            prefs.edit().putBoolean(BUILTIN_MIANLIU_KEY, true).apply()
++            sub
 +        } catch (e: CancellationException) {
 +            throw e
 +        } catch (e: Throwable) {
-+            // 静默：下次启动重试，不打扰首页
++            null
 +        }
 +    }
 +
 +    private companion object {
 +        const val BUILTIN_MIANLIU_NAME = "免流"
 +        const val BUILTIN_PREFS_NAME = "mishka_builtin_profiles"
++        // 老版本的「已导入」布尔标记（保留：一是兼容老装机，二是判断这次是首次导入还是删掉后恢复）
 +        const val BUILTIN_MIANLIU_KEY = "mianliu_imported"
-     }
- 
++        const val BUILTIN_MIANLIU_ID_KEY = "mianliu_subscription_id"
++        const val BUILTIN_MIANLIU_RESTORED = "内置「免流」配置已自动恢复"
++    }
++
      fun showAddDialog() {
+         _uiState.value = _uiState.value.copy(showAddDialog = true)
+     }
 diff --git a/app/src/main/res/raw/builtin_mianliu.yaml b/app/src/main/res/raw/builtin_mianliu.yaml
 new file mode 100644
-index 0000000..66df5ce
+index 0000000..234078d
 --- /dev/null
 +++ b/app/src/main/res/raw/builtin_mianliu.yaml
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,234 @@
 +mixed-port: 7890
 +tproxy-port: 7893
 +bind-address: "*"
 +mode: rule
-+log-level: error
++log-level: silent
 +find-process-mode: strict
 +ipv6: false
 +allow-lan: true
@@ -88,13 +157,12 @@ index 0000000..66df5ce
 +    - tcp://any:53
 +  auto-route: true
 +  strict-route: true
-+  auto-redirect: true
++  auto-redirect: false
 +  auto-detect-interface: true
 +
 +listeners:
 +  - name: ebpf-in
 +    type: ebpf
-+    bypass-tun-direct: false
 +    local:
 +      enable: false
 +      ipv6: false
@@ -168,7 +236,7 @@ index 0000000..66df5ce
 +  非免订阅:
 +    type: http
 +    <<: *providers
-+    url: http://127.0.0.1:3001
++    url: "https://raw.githubusercontent.com/LancelotRar/free-subs/refs/heads/main/src/clash-lancelot.yaml"
 +    override: { additional-prefix: "非免订阅/", dialer-proxy: 链式代理 }
 +  非免节点:
 +    type: file
@@ -188,10 +256,6 @@ index 0000000..66df5ce
 +      - 钉钉直连
 +      - 国内节点
 +      - 直连出口
-+    url: https://cp.cloudflare.com/generate_204
-+    interval: 300
-+    timeout: 5000
-+    lazy: true
 +  - name: 百度直连
 +    type: select
 +    use:
@@ -215,10 +279,6 @@ index 0000000..66df5ce
 +      - 直连出口
 +    use:
 +      - CNS订阅
-+    url: https://cp.cloudflare.com/generate_204
-+    interval: 300
-+    timeout: 5000
-+    lazy: true
 +  - name: 国内节点
 +    type: select
 +    use:
@@ -227,7 +287,6 @@ index 0000000..66df5ce
 +      - 非免订阅
 +      - 非免节点
 +    filter: 中国|江苏|镇江|浙江|杭州|常州|南京|北京|上海|广东|广州|苏州|杭州|福州|扬州|贵州|兰州|徐州|郑州|广西|河南|河北|重庆|南宁|宿迁|沈阳|四川|安徽|深圳|辽宁|济南|九江|长沙|昆明|武汉|陕西|西宁|芜湖|天津|南昌|成都|山西|太原|保定|湖南|湖北|德阳|山东|十堰|青岛|合肥|云南|西安|内蒙古
-+    empty-fallback: PASS
 +  - name: 链式代理
 +    type: select
 +    use:
@@ -277,13 +336,14 @@ index 0000000..66df5ce
 +  大陆地址:
 +    <<: *ipcidr
 +    url: "https://v6.gh-proxy.org/https://github.com/DustinWin/ruleset_geodata/releases/download/mihomo-ruleset/cnip.mrs"
++
 +rules:
 +  - DST-PORT,53,DNS_Hijack
 +  - AND,(NETWORK,UDP),(OR,(DST-PORT,443/3478/5349/19302),(RULE-SET,本机地址)),REJECT
 +  # 如果遇到某些软件出现跳点就取消下面注释(大概也许可能应该或许有.用)
 +  #  - DOMAIN-REGEX,(wswup.cdn.huya.com)|(cdnws.api.huya.com)|(p2p)|(stun)|(pcdn)|(mcdn)|(torrent)|(tracker)|(httpdns),REJECT-DROP
 +  - RULE-SET,广告域名,广告出口
-+  - RULE-SET,海外域名,国外出口
++  - RULE-SET,海外域名,国外出口 
 +  - AND,(NETWORK,UDP),(PROCESS-NAME-REGEX,(com.tencent.tmgp.sgame)|(com.tencent.tmgp.cf)),游戏UDP
 +  - NETWORK,UDP,全部UDP
 +  - RULE-SET,大陆域名,国内出口
