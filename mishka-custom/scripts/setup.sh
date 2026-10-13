@@ -10,7 +10,7 @@
 #   2. 内核：在 <仓库>/mihomo 放一份 jieluojun/mihomo(Alpha)，checkout 到补丁基线 commit，
 #      校验并应用 patches/mihomo/*.patch（用 --kernel-dir 可以放到仓库外）
 #   3. 写 go.work + go.work.sum（内核换了分支后缺的依赖哈希都在这，仓库自带的 go.mod/go.sum 不动）
-#   4. 应用 app 侧补丁 patches/app/0001…0011（按功能切分，依序应用；每个先判断是否已在仓库里）：
+#   4. 应用 app 侧补丁 patches/app/0001…0012（按功能切分，依序应用；每个先判断是否已在仓库里）：
 #      0001 锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复、规则编辑间距、
 #           maplist 拖动排序、路由规则序号、路由规则匹配值省略号；应用选择器（搜索兼手动添加、已选置顶、显示计数）
 #      0002 内置「免流」配置（可选：打不上只警告）
@@ -26,6 +26,8 @@
 #           开关同时改写活动订阅 config.yaml 的 IPv6 开关（顶层 ipv6、dns.ipv6、eBPF local/shared ipv6），启动时同步到 runtime；代理运行中则自动重启；APN 写入与还原按实际值校验，关态每 60 秒纠正漂移
 #      0010 支持 32 位 armeabi-v7a：与 arm64-v8a 同时构建内核与 APK（GOARCH=arm、GOARM=7）
 #      0011 最低支持 Android 8（API 26）：MIN_SDK 31 → 26；API 29/30/31+ 调用加 SDK_INT 守卫，低版本走替代实现
+#      0012 代理模式即时切换：运行模式（规则 / 全局 / 直连）改走 PATCH /configs 热生效（对齐 mihomo_box 模块），
+#           随后后台断开存量连接；不再「停止再启动」内核，PATCH 失败才回退一次重启
 #
 # 回滚：逆序 git apply -R（见 README.md「回滚」）
 set -euo pipefail
@@ -257,7 +259,7 @@ EOF
 fi
 
 # ---------------------------------------------------------------- 5. app 侧补丁（10 个功能补丁，依序）
-step "5/6 app 侧补丁（patches/app/0001…0011，按功能切分，依序应用）"
+step "5/6 app 侧补丁（patches/app/0001…0012，按功能切分，依序应用）"
 # 按旧系列（旧编号 0001–0010）装过的仓库：面板相关文件停在旧系列的中间状态，和本系列对不上，
 # 不能直接叠加。停下来让人先还原到补丁基线（8f9147d / fork main 4fa3c86），不静默保留旧实现。
 if [[ -f "$REPO/$CUSTOM_REL/panel/PanelProxyFetcher.kt" ]]; then
@@ -279,6 +281,7 @@ APP_PATCHES=(
   0009-system-ipv6-switch.patch
   0010-armeabi-v7a.patch
   0011-minsdk-26.patch
+  0012-instant-mode-switch.patch
 )
 for pname in "${APP_PATCHES[@]}"; do
   num="${pname:0:4}"
@@ -310,7 +313,7 @@ cat <<EOF
     ./gradlew :app:downloadGeoFiles
     ./gradlew -I $CUSTOM_DIR_NAME/init/no-debug.init.gradle "-Pmihomo.version=alpha-smart-<sha>-with-at" :app:assembleRelease
   回滚：
-    逆序 git apply -R：patches/app/0011 → 0001，再 patches/mihomo/0007 → 0001
+    逆序 git apply -R：patches/app/0012 → 0001，再 patches/mihomo/0007 → 0001
   拉上游更新：
     先按上面回滚 → git pull → 再跑 setup.sh（每步都用 git apply --check 做过幂等判断）
 EOF

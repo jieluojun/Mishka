@@ -12,6 +12,8 @@ VM_REL="$APP_PKG_REL/viewmodel/SubscriptionViewModel.kt"
 PROXY_VM_REL="$APP_PKG_REL/viewmodel/ProxyViewModel.kt"
 CONN_REL="$APP_PKG_REL/ui/screen/connection/ConnectionScreen.kt"
 APRC_REL="$APP_PKG_REL/service/ActiveProfileRuntimeConfig.kt"
+API_CLIENT_REL="$APP_PKG_REL/data/api/MihomoApiClient.kt"
+HOME_VM_REL="$APP_PKG_REL/viewmodel/HomeViewModel.kt"
 
 if [[ -t 1 ]]; then
   C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_DIM=$'\033[2m'; C_OFF=$'\033[0m'
@@ -107,6 +109,9 @@ app_feature_applied() {
           && grep -Fq '$_p/$_r（已校验）' "$repo/app/src/main/res/raw/system_ipv6.sh" 2>/dev/null ;;
     0010) grep -q 'include("arm64-v8a", "armeabi-v7a")' "$repo/app/build.gradle.kts" 2>/dev/null ;;
     0011) grep -q 'const val MIN_SDK = 26' "$repo/buildSrc/src/main/kotlin/ProjectConfig.kt" 2>/dev/null ;;
+    # 0012（代理模式即时切换）：客户端有 PATCH /configs 的方法，且主页切模式走即时路径
+    0012) grep -q 'suspend fun setMode(mode: String)' "$repo/$API_CLIENT_REL" 2>/dev/null \
+          && grep -q 'applyModeToLiveCore' "$repo/$HOME_VM_REL" 2>/dev/null ;;
     *) return 1 ;;
   esac
 }

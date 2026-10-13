@@ -188,3 +188,12 @@ patch0011_blob_after=f610eed5c251c397df5f965e89685fbea023f71d app/src/main/kotli
 patch0011_blob_after=57171dfe52ef10eed9caa5d9357e890a70333aa9 app/src/main/kotlin/top/yukonga/mishka/service/ProfileWorker.kt
 patch0011_blob_after=251e85ade0fe83f2117763bab0724594f716ddad app/src/main/kotlin/top/yukonga/mishka/service/WifiPolicyMonitorService.kt
 patch0011_blob_after=bb777fa46de2d6117edd6f0589cf646148b7abaf buildSrc/src/main/kotlin/ProjectConfig.kt
+
+# --- 0012：代理模式即时切换：运行模式（规则 / 全局 / 直连）改走 PATCH /configs 热生效（对齐 mihomo_box 模块的运行模式切换），随后后台断开存量连接；不再「停止再启动」内核，PATCH 失败才回退一次重启 ---
+patch0012_file=patches/app/0012-instant-mode-switch.patch
+patch0012_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009,0010,0011
+patch0012_sha256=ee2beeeac3c5dc2d73d91899bef3d0384c10047f8d757b5ccd6479fe4e1243c3
+patch0012_blob_after=47ccccdf092973f81c0cd83d1225282ba598bcaa app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+patch0012_blob_after=26e2ab747903f29bb33af999a05a1b82f51aa29a app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
+patch0012_blob_after=6ed916b49fd60d6c445c37b43edd582d5b66a705 app/src/main/kotlin/top/yukonga/mishka/domain/repository/MihomoRepository.kt
+patch0012_blob_after=847ac6ec573dc23b7ad9d91daaf0ee887bc613b0 app/src/main/kotlin/top/yukonga/mishka/viewmodel/HomeViewModel.kt

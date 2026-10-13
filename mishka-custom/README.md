@@ -4,13 +4,13 @@
 内核：jieluojun/mihomo @ Alpha（基线见 `patches/mihomo/BASELINE.txt`）。本包只含「打补丁 + 编译」用得上的东西。
 
 app 补丁是**按功能切分**的系列：每个补丁对应一个功能；修正某个功能的改动不单独成补丁，而是随该功能的补丁一起发布。
-编号 0001–0011 与旧系列编号不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
+编号 0001–0012 与旧系列编号不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
 
 ## 包里有什么
 
 | 路径 | 用途 |
 | --- | --- |
-| `patches/app/0001…0011-*.patch` | app 侧补丁，按序号依次叠加（前置关系见 `patches/app/BASELINE.txt`） |
+| `patches/app/0001…0012-*.patch` | app 侧补丁，按序号依次叠加（前置关系见 `patches/app/BASELINE.txt`） |
 | `patches/app/BASELINE.txt` | app 补丁的基线 commit、每个补丁的 sha256、前置与涉及的 blob |
 | `patches/mihomo/0001…0007-*.patch` | 内核补丁，按序号依次应用 |
 | `patches/mihomo/BASELINE.txt` | 内核补丁的基线 commit 与 sha256 |
@@ -35,7 +35,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库> [--kernel-dir <内核
 2. 内核：准备一份 jieluojun/mihomo(Alpha) 到补丁基线 commit，应用 `patches/mihomo/*.patch`
    （`--kernel-dir` 可以放仓库外）；
 3. 写 `go.work` + `go.work.sum`；
-4. 依次应用 app 补丁 `0001 → 0011`（其中 0002「内置免流」可选，打不上只警告）。
+4. 依次应用 app 补丁 `0001 → 0012`（其中 0002「内置免流」可选，打不上只警告）。
 
 常用参数：`--skip-kernel` 只打 app 补丁、`--ci` 非交互（配 Actions）、`--force` 脏工作区也继续、
 `--refresh-sum` 重算 go.work.sum、`--help` 看全部。
@@ -88,7 +88,7 @@ sha="$(git -C mihomo rev-parse --short=8 HEAD)"
 逆序还原，再拉更新、重跑装配：
 
 ```bash
-# app 补丁：0011 → 0001（用 [0-9][0-9][0-9][0-9]-* 匹配，与 setup.sh 一致）
+# app 补丁：0012 → 0001（用 [0-9][0-9][0-9][0-9]-* 匹配，与 setup.sh 一致）
 for p in $(ls -r mishka-custom/patches/app/[0-9][0-9][0-9][0-9]-*.patch); do git apply -R "$p"; done
 # 内核补丁：0007 → 0001（在内核目录里执行）
 git pull
@@ -110,6 +110,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 0009 | ROOT 设置新增「系统」分组，下设「系统 IPv6」开关（移植 mihomo_box 的系统 IPv6 逻辑）：默认关闭；ROOT 可用即立即禁用 Wi-Fi 等非蜂窝网卡的 IPv6（lo / 蜂窝 / 热点下游豁免），上网 APN（跳过 IMS）协议改为 IPv4；开启时恢复 IPv6 并还原 APN。开关同时改写活动订阅 `config.yaml` 的 IPv6 开关，代理运行中时自动重启代理使其生效（顶层 `ipv6`、`dns.ipv6`、eBPF 监听器的 `listeners[].local.ipv6` / `shared.ipv6`；只改已存在的块，不改 DNS `disable-ipv6`）：开启时全部设为 `true`，关闭时全部设为 `false`，不保存原值；启动 ROOT 代理时在复制到 runtime 之前同步一次。打开设置页时读取一次首选 APN 的协议。APN 写入后重新查询同一行，以实际协议值判定成功；关态每 60 秒校验首选 APN，被写回 IPv4/IPv6 时自动重新改写。 |
 | 0010 | 支持 32 位 `armeabi-v7a`：内核与 APK 在 arm64-v8a 之外同时构建 armeabi-v7a（Go `GOARCH=arm`、`GOARM=7`，NDK `armv7a-linux-androideabi` 工具链；`splits.abi` 每个 ABI 各出一个 APK）。CI 构建耗时约翻倍 |
 | 0011 | 最低支持 Android 8（API 26，原 Android 12 / API 31）：`MIN_SDK` 31 → 26，同时给 API 29/30/31+ 的调用加 `SDK_INT` 守卫：`VpnService.Builder.setMetered` / `setHttpProxy`（API 29，低版本跳过系统代理）、`Os.fcntlInt`（API 30，低版本改用 JNI `nativeClearCloexec`）、三参 `startForeground`（API 29）、`setForegroundServiceBehavior`（API 31）、`canScheduleExactAlarms`（API 31，低版本直接精确调度）、`NetworkCallback(flags)` 与 `transportInfo`（API 31，低版本用无参回调 + WifiManager 回退取 SSID）、`POST_NOTIFICATIONS`（API 33，已有守卫）。Go / NDK 的 clang wrapper 随 minSdk 变为 `android26`。 |
+| 0012 | 代理模式即时切换：主页「代理模式」（规则 / 全局 / 直连）运行中改走 `PATCH /configs` 热生效——对齐 mihomo_box 模块的「运行模式」切换，内核不重启、启动链不重跑、代理不中断；随后后台断开存量连接（老长连接不换路由，不主动断开体感就是「点了没生效」）。停止/启动中切模式改为等状态落定后补发 PATCH；PATCH 失败或客户端未就绪才回退一次重启 |
 
 ## 系统 IPv6 开关（0009）
 
@@ -135,7 +136,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 `app/build.gradle.kts` 加一行 `implementation`）。0001–0004 没有新增依赖；0005 是第一个。
 回滚 0005 会把这一行一并撤掉。
 
-**0006–0011 不新增依赖**：0008 只改 Kotlin 与运行时逻辑；0009 只用 Android 自带的 `su`、`content`、`svc`、`ndc` 命令，不引入新库。
+**0006–0012 不新增依赖**：0008 只改 Kotlin 与运行时逻辑；0009 只用 Android 自带的 `su`、`content`、`svc`、`ndc` 命令；0012 只加一个 Ktor `PATCH` 调用（Ktor 早已在依赖里），都不引入新库。
 
 ## 从旧系列升级
 
