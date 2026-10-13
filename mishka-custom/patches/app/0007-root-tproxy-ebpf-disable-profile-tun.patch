@@ -70,10 +70,10 @@ index 934edb3..d3f3737 100644
          put("device", DEFAULT_TUN_DEVICE)
          put("stack", "system")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index dfb7471..2c69081 100644
+index 4a87bff..419bbf2 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-@@ -383,6 +383,8 @@ class MishkaRootService : Service() {
+@@ -421,6 +421,8 @@ class MishkaRootService : Service() {
                      subscriptionId,
                      ebpfEnabled = submode == Submode.Ebpf,
                      forceTunEnabled = submode == Submode.Tun,

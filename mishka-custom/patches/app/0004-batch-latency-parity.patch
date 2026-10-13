@@ -1,8 +1,8 @@
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-index 9274894..c827044 100644
+index db477b4..9790ff7 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
-@@ -128,6 +128,11 @@ class MihomoApiClient(
+@@ -129,6 +129,11 @@ class MihomoApiClient(
      /**
       * 整组测速：一次请求让内核并发测试完整个组。拿不到可信结果时返回空表，
       * 交给调用方的并发补测。
@@ -14,7 +14,7 @@ index 9274894..c827044 100644
       */
      suspend fun getGroupDelay(
          group: String,
-@@ -147,7 +152,7 @@ class MihomoApiClient(
+@@ -148,7 +153,7 @@ class MihomoApiClient(
          val delays = LinkedHashMap<String, Int>(raw.size)
          for ((name, value) in raw) {
              val delay = (value as? JsonPrimitive)?.intOrNull ?: continue

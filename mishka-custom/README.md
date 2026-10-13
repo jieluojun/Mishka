@@ -1,7 +1,7 @@
 # mishka-custom —— Mishka Android 定制补丁交付包
 
-上游 app：YuKongA/Mishka（app 补丁基线 `dd21ee4`）；内核：jieluojun/mihomo @ Alpha（基线见
-`patches/mihomo/BASELINE.txt`）。本包只含「打补丁 + 编译」用得上的东西。
+上游 app：YuKongA/Mishka（app 补丁基线 `8f9147d`；fork 合并上游后的 main `4fa3c86`，app 树与基线一致）。
+内核：jieluojun/mihomo @ Alpha（基线见 `patches/mihomo/BASELINE.txt`）。本包只含「打补丁 + 编译」用得上的东西。
 
 app 补丁是**按功能切分**的系列：每个补丁对应一个功能；修正某个功能的改动不单独成补丁，而是随该功能的补丁一起发布。
 编号 0001–0011 与旧系列编号不对应，旧系列的补丁不再随包发布（见下文「从旧系列升级」）。
@@ -42,7 +42,7 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库> [--kernel-dir <内核
 
 ## 用法 B：手工打补丁
 
-app（仓库处在基线 commit `dd21ee4`、工作区干净时）：
+app（仓库处在补丁基线：上游 `8f9147d`，或 fork 合并后的 main `4fa3c86`；工作区干净时）：
 
 ```bash
 for p in mishka-custom/patches/app/[0-9][0-9][0-9][0-9]-*.patch; do git apply "$p" || break; done
@@ -145,14 +145,14 @@ bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 | 仓库里装的是 | 怎么办 |
 | --- | --- |
 | 已装满本系列全部 11 个补丁（与最终态逐字节相同） | 直接重跑 `setup.sh`，11 个补丁都会判定为「已在仓库里」。 |
-| 装过含 eBPF 接管逻辑的 0009 版本 | 先还原到 dd21ee4 基线，再重跑 `setup.sh`。 |
-| 只装到其中一部分（包括旧版的中间状态） | 先还原到 dd21ee4 基线，再装本系列。 |
+| 装过含 eBPF 接管逻辑的 0009 版本 | 先还原到补丁基线（`8f9147d` / fork main `4fa3c86`），再重跑 `setup.sh`。 |
+| 只装到其中一部分（包括旧版的中间状态） | 先还原到补丁基线（`8f9147d` / fork main `4fa3c86`），再装本系列。 |
 
 还原前先确认仓库里没有要保留的改动（`git status`）。还原到基线的做法：
 
 ```bash
-git -C <Mishka 仓库> checkout dd21ee4    # 或先 git stash 保存改动
+git -C <Mishka 仓库> checkout 4fa3c86    # 你的 fork main；或先 git stash 保存改动
 bash mishka-custom/scripts/setup.sh --repo <Mishka 仓库>
 ```
 
-`git apply -R` 失败，说明仓库里的改动不是原样的，同样请先还原到 dd21ee4 基线，不要硬做。
+`git apply -R` 失败，说明仓库里的改动不是原样的，同样请先还原到补丁基线，不要硬做。

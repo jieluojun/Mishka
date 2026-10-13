@@ -152,10 +152,10 @@ index ea24d23..47cdd07 100644
                  val wasRunning = storage.getString(StorageKeys.SERVICE_WAS_RUNNING, "false") == "true"
                  if (!wasRunning) return
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 70ec035..b26271b 100644
+index f67f281..7a0665f 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-@@ -392,6 +392,8 @@ class MishkaRootService : Service() {
+@@ -429,6 +429,8 @@ class MishkaRootService : Service() {
                      forceTunEnabled = submode == Submode.Tun,
                      // TPROXY / eBPF 两个子模式都不建 sing-tun，把活动配置里的 tun 一并置 false
                      forceTunDisabled = submode == Submode.Tproxy || submode == Submode.Ebpf,
@@ -164,7 +164,7 @@ index 70ec035..b26271b 100644
                  )
              } catch (e: Exception) {
                  Log.e(TAG, "Failed to prepare active profile mode config", e)
-@@ -406,6 +408,9 @@ class MishkaRootService : Service() {
+@@ -443,6 +445,9 @@ class MishkaRootService : Service() {
                  return@launch
              }
  
@@ -174,7 +174,7 @@ index 70ec035..b26271b 100644
              // 3.5 准备 runtime/{uuid}/ 沙箱：从 imported/{uuid}/ 复制，mihomo 在此以 root 写入
              //     不污染 imported/，保证更新/删除始终在 app UID 下工作
              if (subscriptionId != null) {
-@@ -484,7 +489,11 @@ class MishkaRootService : Service() {
+@@ -528,7 +533,11 @@ class MishkaRootService : Service() {
                  appPort = userOverride.tproxyPort,
              )
              val effectiveProfileListeners = profileParameters?.let {

@@ -259,13 +259,13 @@ fi
 # ---------------------------------------------------------------- 5. app 侧补丁（10 个功能补丁，依序）
 step "5/6 app 侧补丁（patches/app/0001…0011，按功能切分，依序应用）"
 # 按旧系列（旧编号 0001–0010）装过的仓库：面板相关文件停在旧系列的中间状态，和本系列对不上，
-# 不能直接叠加。停下来让人先还原到 dd21ee4 基线，不静默保留旧实现。
+# 不能直接叠加。停下来让人先还原到补丁基线（8f9147d / fork main 4fa3c86），不静默保留旧实现。
 if [[ -f "$REPO/$CUSTOM_REL/panel/PanelProxyFetcher.kt" ]]; then
   die "检测到旧系列的 0010（PanelProxyFetcher.kt）：本系列按功能重新切分，不能直接叠加。请先撤回旧 0010：
       unzip -p <原始交付包 mishka-custom-20261009.zip> mishka-custom/patches/app/0010-panel-webview-proxy.patch > /tmp/old-0010.patch
       git -C \"$REPO\" apply -R /tmp/old-0010.patch
-  撤回后仓库应回到旧 0009 的状态。本系列的 0001 已包含应用选择器改动：若仓库里没有这部分改动，0001 会打不上，届时还原到 dd21ee4 基线。提交（或加 --force）后再重跑本脚本。
-  若 git apply -R 失败，说明仓库里的改动不是原样的，请先还原到 dd21ee4 基线。"
+  撤回后仓库应回到旧 0009 的状态。本系列的 0001 已包含应用选择器改动：若仓库里没有这部分改动，0001 会打不上，届时还原到补丁基线（上游 8f9147d / fork main 4fa3c86）。提交（或加 --force）后再重跑本脚本。
+  若 git apply -R 失败，说明仓库里的改动不是原样的，请先还原到补丁基线（上游 8f9147d / fork main 4fa3c86）。"
 fi
 APP_PATCHES=(
   0001-anchor-panel.patch
@@ -296,7 +296,7 @@ for pname in "${APP_PATCHES[@]}"; do
     # 内置「免流」配置是可选的：打不上只警告、不中断，其余定制照常可用，内置条目需要手动补
     warn "$pname 打不上：SubscriptionViewModel.kt 可能已被上游改动。其余定制不受影响。"
   else
-    die "补丁 $pname 打不上：仓库不在它的前一个状态。用 git -C \"$REPO\" apply --check -v \"$patch\" 看详细原因；装过旧系列的话，先还原到 dd21ee4 基线。"
+    die "补丁 $pname 打不上：仓库不在它的前一个状态。用 git -C \"$REPO\" apply --check -v \"$patch\" 看详细原因；装过旧系列的话，先还原到补丁基线（上游 8f9147d / fork main 4fa3c86）。"
   fi
 done
 

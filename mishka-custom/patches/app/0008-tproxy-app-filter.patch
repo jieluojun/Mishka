@@ -77,18 +77,10 @@ index eb3fef8..a5b5c66 100644
      // 启动时刻的 boot session 标记，用于 reopen 重连前识别设备是否重启过（重启会杀死 root
      // mihomo，不能把过期 PID 误当"仍存活"）。判定逻辑见 [BootSession]
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-index 2c69081..70ec035 100644
+index 419bbf2..f67f281 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-@@ -4,6 +4,7 @@ import android.app.Service
- import android.content.Intent
- import android.os.IBinder
- import android.util.Log
-+import kotlinx.coroutines.CancellationException
- import kotlinx.coroutines.CoroutineScope
- import kotlinx.coroutines.Dispatchers
- import kotlinx.coroutines.Job
-@@ -22,6 +23,7 @@ import top.yukonga.mishka.data.bridge.MishkaCoreBridge
+@@ -24,6 +24,7 @@ import top.yukonga.mishka.data.bridge.MishkaCoreBridge
  import top.yukonga.mishka.data.repository.OverrideJsonStore
  import top.yukonga.mishka.data.repository.SubscriptionRepositoryImpl
  import top.yukonga.mishka.data.store.ProfileTransformWriter
@@ -96,7 +88,7 @@ index 2c69081..70ec035 100644
  import top.yukonga.mishka.platform.AppListProvider
  import top.yukonga.mishka.platform.BootSession
  import top.yukonga.mishka.platform.PlatformStorage
-@@ -75,6 +77,9 @@ class MishkaRootService : Service() {
+@@ -78,6 +79,9 @@ class MishkaRootService : Service() {
      private val transformWriter: ProfileTransformWriter by inject()
      private val subscriptionRepository: SubscriptionRepositoryImpl by inject()
      private var monitorJob: Job? = null
@@ -105,8 +97,8 @@ index 2c69081..70ec035 100644
 +    private var tproxyAppliedUids: Set<Int>? = null
      private var notificationRefreshJob: Job? = null
  
-     // 自动连接与补发 BOOT_COMPLETED 的 BootReceiver 会各发一次 ACTION_START，两条启动协程
-@@ -285,9 +290,11 @@ class MishkaRootService : Service() {
+     // 本实例启动或 attach 时记下的 runtime 代次。停机清理必须用它，不能事后读全局代次，
+@@ -316,9 +320,11 @@ class MishkaRootService : Service() {
                          }
  
                          Submode.Tproxy -> {
@@ -119,7 +111,7 @@ index 2c69081..70ec035 100644
                          }
  
                          // eBPF 重定向由 mihomo ebpf listener 自己挂 TC，App 侧无规则可补
-@@ -557,7 +564,17 @@ class MishkaRootService : Service() {
+@@ -602,7 +608,17 @@ class MishkaRootService : Service() {
              // 6.5 按 submode apply 对应的 netfilter 规则集
              when (submode) {
                  Submode.Tun -> applyTetherRules(storage, tproxyForTether)
@@ -138,7 +130,7 @@ index 2c69081..70ec035 100644
                  // eBPF submode 不用 netfilter：流量劫持完全由 mihomo ebpf listener 完成
                  Submode.Ebpf -> {}
              }
-@@ -586,25 +603,25 @@ class MishkaRootService : Service() {
+@@ -631,25 +647,25 @@ class MishkaRootService : Service() {
      }
  
      /**
@@ -173,7 +165,7 @@ index 2c69081..70ec035 100644
          val ipv6Enabled = storage.getString(StorageKeys.VPN_ALLOW_IPV6, "false") == "true"
          RootTproxyApplier.apply(
              appUid,
-@@ -616,6 +633,66 @@ class MishkaRootService : Service() {
+@@ -661,6 +677,66 @@ class MishkaRootService : Service() {
          )
      }
  
@@ -240,7 +232,7 @@ index 2c69081..70ec035 100644
      /**
       * Attach 路径：决定是否 re-apply 规则。默认行为——先 probe 规则是否存在，present 跳过。
       * ROOT_ATTACH_FORCE_REAPPLY=true 时强制 re-apply（诊断开关）。
-@@ -642,6 +719,9 @@ class MishkaRootService : Service() {
+@@ -687,6 +763,9 @@ class MishkaRootService : Service() {
       */
      private suspend fun teardownActiveRootRules(storage: PlatformStorage) {
          withContext(NonCancellable) {
@@ -250,18 +242,20 @@ index 2c69081..70ec035 100644
              when (storage.getString(StorageKeys.ROOT_SUBMODE_ACTIVE, "")) {
                  Submode.Tun.storageValue -> RootTetherHijacker.teardown()
                  Submode.Tproxy.storageValue -> RootTproxyApplier.teardown()
-@@ -794,6 +874,7 @@ class MishkaRootService : Service() {
- 
-     override fun onDestroy() {
+@@ -944,6 +1023,8 @@ class MishkaRootService : Service() {
+         destroyed = true
          notificationRefreshJob?.cancel()
+         // 只停还在轮询的监控。已经确认进程死亡的回写在 cleanupScope，不能在这里 cancel。
++        // 0008：tproxy 分应用名单的 UID 周期性重解析任务同理，onDestroy 一并取消。
 +        tproxyUidRefreshJob?.cancel()
          monitorJob?.cancel()
          dynamicNotification.stop()
-         // 注意：onDestroy 不 kill mihomo，让它继续运行以便重连
-@@ -806,6 +887,7 @@ class MishkaRootService : Service() {
+         // 注意：onDestroy 不 kill mihomo，让它继续运行以便重连。
+@@ -964,6 +1045,8 @@ class MishkaRootService : Service() {
  
-     companion object {
-         private const val TAG = "MishkaRootService"
+         private fun bumpInstanceSerial(): Int = synchronized(this) { ++instanceSerial }
+ 
++        // 0008：Tproxy 分应用名单的 UID 周期重解析间隔
 +        private const val TPROXY_UID_REFRESH_MS = 600_000L
          const val ACTION_START = "top.yukonga.mishka.ROOT_START"
          const val ACTION_STOP = "top.yukonga.mishka.ROOT_STOP"

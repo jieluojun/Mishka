@@ -56,7 +56,7 @@ index 3f369dd..458d080 100644
          val fallback = (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
              ?.connectionInfo
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
-index cba5286..750d893 100644
+index 026efbd..a1dd339 100644
 --- a/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 +++ b/app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 @@ -3,6 +3,7 @@ package top.yukonga.mishka.service

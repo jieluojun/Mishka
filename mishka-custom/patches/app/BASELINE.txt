@@ -1,14 +1,16 @@
 # app 侧补丁基线（导出时生成；按功能切分的系列）
-#   每个补丁相对于它前一个补丁的状态（0001 相对于 upstream dd21ee4），依序号应用。
+#   每个补丁相对于它前一个补丁的状态（0001 相对于 upstream 8f9147d），依序号应用。
+#   8f9147d 是导出时上游 app 树的 commit；fork 合并上游后的 main（app 树与之一致，如 4fa3c86）同样适用。
 #   blob_new：本补丁新增的文件在本补丁之后的 blob；blob_after：本补丁修改的文件在本补丁之后的 blob。
 #   本系列按功能切分，编号与旧系列（0001–0010 旧编号）不对应；旧系列不再发布。
-upstream_commit=dd21ee45c48901b14b7f13e7573c63e1f12abaf2
+upstream_commit=8f9147dbe405665cf8ce18fed44bbc0c76c5dca7
+fork_head_commit=4fa3c86dcde3fad24b5c58263255dbdf9ef7f625
 
 # --- 0001：锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑按钮间距；maplist 拖动排序；路由规则序号；路由规则匹配值省略号；应用选择器（搜索兼手动添加、已选置顶、显示清单计数，不新增依赖） ---
 patch0001_file=patches/app/0001-anchor-panel.patch
 patch0001_prereq=
-patch0001_sha256=c8efb820db0ae936f0af3a9ff1a47ac46a2c19a79c72d8e2d801ee4ad4914644
-patch0001_blob_after=6ecc565923a55fbb53b694964b2c321707ffc0e5 app/build.gradle.kts
+patch0001_sha256=4a9cae08cc72c3f0a7e0ba027dafd80180fe016708f168b7602673a4b258925c
+patch0001_blob_after=93951e9f025b2da53ce0bcb48d9dd19cacfa5bfe app/build.gradle.kts
 patch0001_blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
 patch0001_blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 patch0001_blob_new=a47ce9830e068e4b4576fd7d080e475903cef88c app/src/main/kotlin/top/yukonga/mishka/custom/anchor/AnchorBlock.kt
@@ -36,7 +38,7 @@ patch0001_blob_new=0d66444bfc6d5883e58448db01484653cf42c351 app/src/main/kotlin/
 patch0001_blob_new=1796296a18858516030ff9bbe5fbe596a2a46e5e app/src/main/kotlin/top/yukonga/mishka/custom/forms/ProxyUri.kt
 patch0001_blob_new=8e92a0f3c47c18c93dbde9e7d8e12065694ea65f app/src/main/kotlin/top/yukonga/mishka/custom/forms/YamlEngine.kt
 patch0001_blob_new=0434c16bf9738c5e408ae3d00bde1e953ddeec65 app/src/main/kotlin/top/yukonga/mishka/custom/runtime/RuntimeConfigValues.kt
-patch0001_blob_after=9274894e957f4c74597c13892228c4d1e2afb811 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+patch0001_blob_after=db477b4a7b880b8227ec34639858dcfff40fcb8d app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 patch0001_blob_after=14ebcdc0fde29fd9aae21d9d09e9186b95ef527c app/src/main/kotlin/top/yukonga/mishka/data/bridge/MishkaCoreBridge.kt
 patch0001_blob_after=9132be8bb1f3fd20208a814c6805e68b500d920c app/src/main/kotlin/top/yukonga/mishka/data/repository/MihomoRepositoryImpl.kt
 patch0001_blob_after=d3332ed09e59f2e30b0beca9a6ccb8accd72e401 app/src/main/kotlin/top/yukonga/mishka/di/ViewModelModule.kt
@@ -48,11 +50,11 @@ patch0001_blob_new=934edb341b90e1e1a3c9b37fcd1a8732d3c93fe7 app/src/main/kotlin/
 patch0001_blob_new=934ab5456a0c2eef9b9c8e8ff52eb8477e9aca88 app/src/main/kotlin/top/yukonga/mishka/service/AndroidProcessResolver.kt
 patch0001_blob_after=bc4e1d9de5625bb5be5ff33d649b553a8564c918 app/src/main/kotlin/top/yukonga/mishka/service/ConfigGenerator.kt
 patch0001_blob_after=44da07197b532d9bc67dbd5b1c5ac32cb44fbc0b app/src/main/kotlin/top/yukonga/mishka/service/DynamicNotificationManager.kt
-patch0001_blob_after=a757ff17dbd2ad0566fb9f1a425f41d2827cb56d app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
-patch0001_blob_after=dfb7471f34e7ed851839645f455df1dce6ad8aca app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
-patch0001_blob_after=cba5286dd36fccc7a9a5b12b515d7991d40e9108 app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
-patch0001_blob_after=6329dcc412c1caacf31434c56c4eceb6dcd5c2cc app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
-patch0001_blob_after=e609ff2176b8ccda38ce06cb8c4ed122794ce60a app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
+patch0001_blob_after=aa61af090fd340496d856476709be996d2448866 app/src/main/kotlin/top/yukonga/mishka/service/MihomoRunner.kt
+patch0001_blob_after=4a87bff7f65cc3dba9b6980a18a41866a4a6eeba app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+patch0001_blob_after=026efbd5ed88c1260c501f38f44623adb926b953 app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+patch0001_blob_after=30d012e6bb0b7e7aaa762f7f379eeee72677b1c4 app/src/main/kotlin/top/yukonga/mishka/service/ProfileFileOps.kt
+patch0001_blob_after=4860bacf9e120ed18e42e3f9bd3d4bb1428ee1d8 app/src/main/kotlin/top/yukonga/mishka/service/RootHelper.kt
 patch0001_blob_after=cb24b64cc84a7afd283d48a35ff9dbd69cda3c30 app/src/main/kotlin/top/yukonga/mishka/service/RootTetherHijacker.kt
 patch0001_blob_after=948ec257a69df036d0b72ccb86dc4c1ec180dbcd app/src/main/kotlin/top/yukonga/mishka/service/RootTproxyApplier.kt
 patch0001_blob_after=bf26706ed9dabfdfc44837595dc17f7812f68c88 app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
@@ -71,8 +73,8 @@ patch0001_blob_after=74194d3fd23e8ed8bd9e70d06e8d08fcf4ecec22 app/src/main/kotli
 patch0001_blob_after=e0a0abe09c2df43d2af99b52b85f5fb31a1fd875 app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProviderViewModel.kt
 patch0001_blob_after=4896268fa110da54fd5f5f8aa75c2165f8da653e app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 patch0001_blob_after=91a7411f1c2f09ae2c86ca25c789565ba10d0dfd app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-patch0001_blob_after=a03b6c9eeaeeee436928ba539714caed5fbbbc66 app/src/main/native/mishka_core/runtime.go
-patch0001_blob_after=987a093b9df3b34e3da6a3868c8d9ca1ef1defbd app/src/main/native/mishka_core/runtime_test.go
+patch0001_blob_after=ac03ad312f2166147f5b01210551b64d3da68929 app/src/main/native/mishka_core/runtime.go
+patch0001_blob_after=afd96fd551d74575dad664f90a2772ace8e7502c app/src/main/native/mishka_core/runtime_test.go
 patch0001_blob_new=1dab4a417e4819d51f82eadee967a669619c3f8f app/src/main/native/mishka_core/safe_paths.go
 patch0001_blob_after=2c11db737a7c10e7b1a78f4d7206e3be97eecd16 app/src/main/native/mishka_core/transform_bridge.go
 patch0001_blob_after=8e3fc15ff691275a2e804fe42b946eeb5caaa755 app/src/main/res/values-ru/strings.xml
@@ -97,15 +99,15 @@ patch0003_blob_after=e0f7e9c114e36966ad42fb152ad2221a87cf017f app/src/main/kotli
 # --- 0004：代理页整组测速对齐 mihomo_box testGroupAll ---
 patch0004_file=patches/app/0004-batch-latency-parity.patch
 patch0004_prereq=0001,0002,0003
-patch0004_sha256=18c240e81d3870c8d7a03532dcbdcb077d7a2d3a1b8e7ab54036e9c1cea0ab17
-patch0004_blob_after=c827044975e5736e28a05a9f30ac83a7c1581201 app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
+patch0004_sha256=b20458ba6e91835bacdc7efa7e784104d150fcebcd94b934f12d972958f93a9d
+patch0004_blob_after=9790ff76a3056626d9636a35565870e9029c49fc app/src/main/kotlin/top/yukonga/mishka/data/api/MihomoApiClient.kt
 patch0004_blob_after=3713369989fb88136c127a436744189ab9ff82dd app/src/main/kotlin/top/yukonga/mishka/viewmodel/ProxyViewModel.kt
 
-# --- 0005：主页面板 / Web 界面（box.app 同款；独立 PanelActivity 承载）；面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP / YouTube 测不出延迟；新增 androidx.webkit 依赖）
+# --- 0005：主页面板 / Web 界面（box.app 同款；独立 PanelActivity 承载）；面板外网请求改走 mihomo mixed-port（修国外地址测出国内 IP / YouTube 测不出延迟；新增 androidx.webkit 依赖） ---
 patch0005_file=patches/app/0005-web-panel.patch
 patch0005_prereq=0001,0002,0003,0004
-patch0005_sha256=570d2140672d61c82c880d5a3071b215bccc5e34629d1820502e3b4866cb2832
-patch0005_blob_after=5bc9f305551c922158b1933846ff427946cff2b1 app/build.gradle.kts
+patch0005_sha256=cf6637dc36f8a5dff62871048c03480b56b5674442cd10e8d7093aa493827402
+patch0005_blob_after=c870308f10120d493b881e8353fd32af6f19630f app/build.gradle.kts
 patch0005_blob_after=f85700403ddb80719a0a99f4f8f4b87aed288acb app/src/main/AndroidManifest.xml
 patch0005_blob_after=f9babd6eeed260506c6a851c99a00346c7dd1d3f app/src/main/kotlin/top/yukonga/mishka/App.kt
 patch0005_blob_after=9bdb76c45fc0b1666eb0354bbf4feaafeab94e85 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -135,28 +137,28 @@ patch0006_blob_after=135b8880e3a7bc88463c002931ac7c8a9b84d637 app/src/main/kotli
 # --- 0007：TPROXY / eBPF 子模式：活动配置里的 tun.enable 写死 false ---
 patch0007_file=patches/app/0007-root-tproxy-ebpf-disable-profile-tun.patch
 patch0007_prereq=0001,0002,0003,0004,0005,0006
-patch0007_sha256=498eb06fd94df6fa265f05eabafb1a86f93f38cf129eea0c071cace02ad9e3fa
+patch0007_sha256=97eb341aad3a8638c1e5381964f99d195f468512096a7f211179134538573d77
 patch0007_blob_after=d3f37371bd74ea23554cb2edc77b50bb8df16a1f app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt
-patch0007_blob_after=2c69081b2171037e39f37025135e8e1cd88f477e app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+patch0007_blob_after=419bbf28931efda3f22ce81bfffb9091407feb11 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 
-# --- 0008：Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：白名单 / 黑名单取自 TUN 页名单，UID 周期重解析
+# --- 0008：Tproxy 分应用名单与 TUN 对齐（mihomo_box 语义）：白名单 / 黑名单取自 TUN 页名单，UID 周期重解析 ---
 patch0008_file=patches/app/0008-tproxy-app-filter.patch
 patch0008_prereq=0001,0002,0003,0004,0005,0006,0007
-patch0008_sha256=c4f878771332f1b467da0c988e84e871b5ea602e6a39549e7849c5e1b0783051
+patch0008_sha256=e96d05eb1cbd9a4300b1c4a64f3d4a5eb3f60bbf2c93e6890ebfff61c2b9cf96
 patch0008_blob_new=9345a66edd3bf561fe549711c8aea39d258f2083 app/src/main/kotlin/top/yukonga/mishka/custom/runtime/TproxyAppFilter.kt
 patch0008_blob_after=a5b5c664f0d51734c50233c945a1b8dc6f52be1a app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
-patch0008_blob_after=70ec0356797777114a1acd2d1aa341d81b9e8f07 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+patch0008_blob_after=f67f281b59b11fff826f932cc3b8c60aff750b69 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 patch0008_blob_after=7c3cd1df1cc416c71ca6051c125e3bd522e5b4d3 app/src/main/kotlin/top/yukonga/mishka/service/RuntimeOverrideBuilder.kt
 
-# --- 0009：ROOT 设置 · 系统 IPv6：默认关闭、root 下立即禁用非蜂窝网卡 IPv6、APN 协议改 IPv4（写后按实际值校验）、关态每 60 秒校验 APN 漂移；开关同时改写活动订阅 config.yaml 的 IPv6 开关（开启全 true、关闭全 false，启动时同步，运行中自动重启代理）
+# --- 0009：ROOT 设置 · 系统 IPv6：默认关闭、root 下立即禁用非蜂窝网卡 IPv6、APN 协议改 IPv4（写后按实际值校验）、关态每 60 秒校验 APN 漂移；开关同时改写活动订阅 config.yaml 的 IPv6 开关（开启全 true、关闭全 false，启动时同步，运行中自动重启代理） ---
 patch0009_file=patches/app/0009-system-ipv6-switch.patch
 patch0009_prereq=0001,0002,0003,0004,0005,0006,0007,0008
-patch0009_sha256=c7f9459c554e7c0abcff378b5ce8216baa692464f266cca3a445789581493659
+patch0009_sha256=04cd63026a5dc49beb4a2b5fac7b85d148cebf9b9b933ce4c78dabc77c113b7c
 patch0009_blob_after=8b1cf690e035fb12d95df5f7368e9c96e850a9a3 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
 patch0009_blob_after=ed24604c26b048c0992e9102cddcf226914ea5e1 app/src/main/kotlin/top/yukonga/mishka/platform/PlatformStorage.kt
 patch0009_blob_after=a888bc14a4f202901b38f96234122b5dbb3de212 app/src/main/kotlin/top/yukonga/mishka/service/ActiveProfileRuntimeConfig.kt
 patch0009_blob_after=47cdd0721e76285a4200f0eeee000569465eb8a0 app/src/main/kotlin/top/yukonga/mishka/service/BootReceiver.kt
-patch0009_blob_after=b26271b99ce9ec45bd6fb17a3cc56b2a68663607 app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
+patch0009_blob_after=7a0665f672d84892b50a2cf3e5c8ada0927962ca app/src/main/kotlin/top/yukonga/mishka/service/MishkaRootService.kt
 patch0009_blob_new=3df788578bd7540b8aa3222b2b1c804368018032 app/src/main/kotlin/top/yukonga/mishka/service/SystemIpv6.kt
 patch0009_blob_after=b6b6309dcd018aee97ab2ee8e99353d6eb150316 app/src/main/kotlin/top/yukonga/mishka/ui/screen/settings/RootSettingsScreen.kt
 patch0009_blob_new=a58edd1efb85ff80de7ab99e998ca895a420081f app/src/main/res/raw/system_ipv6.sh
@@ -165,21 +167,21 @@ patch0009_blob_after=833c993db0e2ee651b8773e0d74b1b64d29eb6c6 app/src/main/res/v
 patch0009_blob_after=c874beb5c408f29284f5da86d3e96c5743f8b118 app/src/main/res/values-zh-rTW/strings.xml
 patch0009_blob_after=9daaf2ef46f9863ec1e0b3e8583690c9dbb75afb app/src/main/res/values/strings.xml
 
-# --- 0010：支持 32 位 armeabi-v7a（app/build.gradle.kts 的 ABI 列表与 splits；buildSrc GoBuildTask 固定 GOARM=7）
+# --- 0010：支持 32 位 armeabi-v7a（app/build.gradle.kts 的 ABI 列表与 splits；buildSrc GoBuildTask 固定 GOARM=7） ---
 patch0010_file=patches/app/0010-armeabi-v7a.patch
 patch0010_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009
-patch0010_sha256=0be155caafc19069fb5709687b9da1832e633c3d052c78f486e642dbc6d5b6df
-patch0010_blob_after=d82cc4bec6a4ffd728508eef98712c10b2fc5a54 app/build.gradle.kts
+patch0010_sha256=05465d28397bf1207cb1bd0c5ce9d5810b387e0bec92e273f6c6c4fca40001d7
+patch0010_blob_after=4f214b702e10efc28dadcc663714b6dfc69a0618 app/build.gradle.kts
 patch0010_blob_after=c169196746e0f636b8e84fd9fdac710bb37fbe07 buildSrc/src/main/kotlin/GoBuildTask.kt
 
-# --- 0011：最低支持 Android 8（API 26）：MIN_SDK 31 → 26；API 29/30/31+ 调用加 SDK_INT 守卫，低版本走替代实现（系统代理跳过、JNI fcntl、无参 NetworkCallback + WifiManager 回退）
+# --- 0011：最低支持 Android 8（API 26）：MIN_SDK 31 → 26；API 29/30/31+ 调用加 SDK_INT 守卫，低版本走替代实现（系统代理跳过、JNI fcntl、无参 NetworkCallback + WifiManager 回退） ---
 patch0011_file=patches/app/0011-minsdk-26.patch
 patch0011_prereq=0001,0002,0003,0004,0005,0006,0007,0008,0009,0010
-patch0011_sha256=33e978ab2edc493b4ae235a19bd4869d88322a71a1ac6a12c47e67dbf68ecad2
+patch0011_sha256=bbade506ac57c6106260b1e7a0bb57ca3526e842044aa1bb4d3838f7da2ca303
 patch0011_blob_after=022042b26617627dcf71600eac69940006b781ef README.md
 patch0011_blob_after=0ae7173900b6c0a26f9eeb49333af9ab1be7539c app/src/main/cpp/process_helper.c
 patch0011_blob_after=458d08015556b6d88f5ed0bab67f81d14c7980e1 app/src/main/kotlin/top/yukonga/mishka/platform/WifiPolicyController.kt
-patch0011_blob_after=750d8939f9695d99e55d71364aee8af78f9f2269 app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
+patch0011_blob_after=a1dd339d040e33a0ac30c0c2d74ffafec2235498 app/src/main/kotlin/top/yukonga/mishka/service/MishkaTunService.kt
 patch0011_blob_after=db8756a0f9aac0477e61069fb630540664267974 app/src/main/kotlin/top/yukonga/mishka/service/NotificationHelper.kt
 patch0011_blob_after=13c5c70c6293e12f43dc2a76c8ed542c4e4401a7 app/src/main/kotlin/top/yukonga/mishka/service/ProcessHelper.kt
 patch0011_blob_after=f610eed5c251c397df5f965e89685fbea023f71d app/src/main/kotlin/top/yukonga/mishka/service/ProfileUpdateScheduler.kt
