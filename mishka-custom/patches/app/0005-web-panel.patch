@@ -2088,7 +2088,7 @@ index 8e3fc15..9587246 100644
      <string name="home_interface">Интерфейс</string>
      <string name="home_speed">Скорость</string>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index 138732b..24de553 100644
+index 7d8b807..4b98565 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -143,6 +143,24 @@

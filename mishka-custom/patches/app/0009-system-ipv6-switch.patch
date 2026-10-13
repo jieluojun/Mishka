@@ -827,7 +827,7 @@ index 9587246..bd11413 100644
      <!-- Network Settings -->
      <string name="network_settings_title">Параметры переопределения</string>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index 24de553..3e4a0bb 100644
+index 4b98565..833c993 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -444,6 +444,14 @@

@@ -9703,10 +9703,10 @@ index 0000000..033bcf3
 +    (name.trim().ifEmpty { fallback }).replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_")
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 new file mode 100644
-index 0000000..7bb9254
+index 0000000..30c1157
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
-@@ -0,0 +1,638 @@
+@@ -0,0 +1,652 @@
 +package top.yukonga.mishka.custom.forms
 +
 +import androidx.compose.foundation.layout.Arrangement
@@ -9948,6 +9948,15 @@ index 0000000..7bb9254
 +}
 +
 +/**
++ * 数字列表（[FormFieldType.NUMLIST]：端口 / UID 这类）的项归一化：一项里带逗号说明是多个值
++ * 一次粘进来了（「8888, 9999」），按逗号拆开——不拆整串就是一项，写回 YAML 时因含「, 」
++ * 被引号包成 `'8888, 9999'`，内核解析不到。半角逗号、全角逗号与顿号（字段提示里就有
++ * 「如 0、10」这种写法）都算分隔符。
++ */
++private fun normalizeNumListItems(items: List<String>): List<String> =
++    items.flatMap { it.split(',', '，', '、') }.map { it.trim() }.filter { it.isNotEmpty() }
++
++/**
 + * 字符串列表编辑：按住把手拖动排序（对齐 mihomo_box WebUI 的列表项把手）+ 行尾 × 删除；
 + * `candidates` 非空时列出可勾选的候选，勾一下加进列表、再勾一下移出；
 + * `pickOnly`（参考实现的 datalist 列表）时不给手填框。
@@ -10074,7 +10083,9 @@ index 0000000..7bb9254
 +                        val v = draft.trim()
 +                        if (v.isNotEmpty()) {
 +                            val sep = field.join
++                            // 数字列表：一次粘贴多个端口（「8888, 9999」）按逗号拆成多项；join 型仍按拼接符拆
 +                            if (sep != null) v.split(sep).map { it.trim() }.filter { it.isNotEmpty() }.forEach { items.add(it) }
++                            else if (field.type == FormFieldType.NUMLIST) normalizeNumListItems(listOf(v)).forEach { items.add(it) }
 +                            else items.add(v)
 +                            draft = ""
 +                        }
@@ -10084,7 +10095,10 @@ index 0000000..7bb9254
 +                DialogNote("只能从候选里挑：手填的名字写错了内核会静默忽略")
 +            }
 +            field.desc?.let { DialogNote(it) }
-+            DialogButtons(onDismiss = onDismiss) { onConfirm(items.toList()) }
++            DialogButtons(onDismiss = onDismiss) {
++                // 确认时再归一化一次：存量列表里已经写坏的「'8888, 9999'」会在下一次确认时被拆回多项
++                onConfirm(if (field.type == FormFieldType.NUMLIST) normalizeNumListItems(items.toList()) else items.toList())
++            }
 +        }
 +    }
 +}
@@ -11652,7 +11666,7 @@ index 0000000..a9121ae
 +)
 diff --git a/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 new file mode 100644
-index 0000000..173d3b9
+index 0000000..a68165f
 --- /dev/null
 +++ b/app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 @@ -0,0 +1,2190 @@
@@ -13202,11 +13216,11 @@ index 0000000..173d3b9
 +/** 规则集合的来源类型（参考实现 pages-flow.js:2083）。 */
 +val RULE_PROVIDER_TYPES: List<FormOption> = listOf(FormOption("http", "http"), FormOption("file", "file"), FormOption("inline", "inline"))
 +
-+/** 新建代理集合的默认值（参考实现 pages-flow.js:831）。 */
-+val PROVIDER_DEFAULT: Map<String, Any?> by lazy { linkedMapOf<String, Any?>("type" to "http", "url" to "", "interval" to 86400, "path" to "") }
++/** 新建代理集合的默认值（参考实现 pages-flow.js:831）。不预置 interval：新建时不写「更新间隔」，交给内核默认值。 */
++val PROVIDER_DEFAULT: Map<String, Any?> by lazy { linkedMapOf<String, Any?>("type" to "http", "url" to "", "path" to "") }
 +
-+/** 新建规则集合的默认值（参考实现 pages-flow.js:2068）。 */
-+val RULE_PROVIDER_DEFAULT: Map<String, Any?> by lazy { linkedMapOf<String, Any?>("type" to "http", "behavior" to "domain", "format" to "yaml", "url" to "", "interval" to 86400) }
++/** 新建规则集合的默认值（参考实现 pages-flow.js:2068）。不预置 interval，理由同 [PROVIDER_DEFAULT]。 */
++val RULE_PROVIDER_DEFAULT: Map<String, Any?> by lazy { linkedMapOf<String, Any?>("type" to "http", "behavior" to "domain", "format" to "yaml", "url" to "") }
 +
 +/** file 类型集合不该落盘的远程字段（参考实现 pages-flow.js:702）：sub = 代理集合，ep = 规则集合。 */
 +val FILE_HIDDEN_KEYS: Map<String, List<String>> = mapOf("sub" to listOf("url", "interval", "size-limit", "proxy", "age-secret-key", "header"), "ep" to listOf("url", "interval", "proxy"))
@@ -23770,7 +23784,7 @@ index 78fcd87..8e3fc15 100644
 +    <string name="subscription_visual_config_summary">Редактировать YAML этой подписки с помощью структурированных форм</string>
  </resources>
 diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
-index cba1bbb..138732b 100644
+index cba1bbb..7d8b807 100644
 --- a/app/src/main/res/values-zh-rCN/strings.xml
 +++ b/app/src/main/res/values-zh-rCN/strings.xml
 @@ -103,6 +103,9 @@
@@ -23789,7 +23803,7 @@ index cba1bbb..138732b 100644
      <string name="proxy_refresh_icon">刷新图标</string>
 +    <string name="proxy_show_icons">显示图标</string>
 +    <string name="proxy_hide_unavailable">隐藏不可用</string>
-+    <string name="proxy_close_connections_on_switch">切换节点断开链接</string>
++    <string name="proxy_close_connections_on_switch">切换节点断开连接</string>
      <string name="proxy_single_column">单列显示</string>
      <string name="proxy_show_global_group">GLOBAL 组</string>
      <string name="proxy_timeout">超时</string>
