@@ -84,14 +84,14 @@ patch0001_blob_after=7d8b8074859408c10ddc52c7147e9aaee28c7c89 app/src/main/res/v
 patch0001_blob_after=8f33921d8a0e784a1ab7a190fb322376976e65ee app/src/main/res/values-zh-rTW/strings.xml
 patch0001_blob_after=1cb982cd341d13bda1c58af0c2a29669f8cf8890 app/src/main/res/values/strings.xml
 
-# --- 0002：内置「免流」配置：res/raw/builtin_mianliu.yaml 内嵌整份配置（用户提供的 config），后台导入为一个文件订阅「免流」；被删掉后自动恢复（对账的是导入时记下的订阅 id，不碰用户自建的同名订阅；升级/换新配置也就是删掉它再让它回来）；可选：打不上只警告，旧版 0002 由 setup.sh 就地升级 ---
+# --- 0002：内置「免流」配置：res/raw/builtin_mianliu.yaml 内嵌整份配置（用户提供的 config），后台导入为一个文件订阅「免流」；被删掉后自动恢复（对账的是导入时记下的订阅 id，不碰用户自建的同名订阅；升级/换新配置也就是删掉它再让它回来）；可选：打不上只警告（仓库里是旧版 0002 时，setup.sh 只刷新配置并提示先还原到补丁基线） ---
 patch0002_file=patches/app/0002-builtin-mianliu-profile.patch
 patch0002_prereq=0001
-patch0002_sha256=1c94e4bd4c75df377e8f31133a93e0a6001ef299e89bf20d83c30bd103efc3a9
+patch0002_sha256=7e3a6eadbdd0890f73c3313473b3d6c413b13f7cb47c2b4b371b93deba5fe92f
 patch0002_blob_after=486b4732e3776830f4029e4230021ecd9cd3dc8e app/src/main/kotlin/top/yukonga/mishka/data/repository/SubscriptionRepositoryImpl.kt
 patch0002_blob_after=2e20b7972c1f09b83bc220365668c5136f4b8e56 app/src/main/kotlin/top/yukonga/mishka/domain/repository/SubscriptionRepository.kt
 patch0002_blob_after=cb4cf98955059dd5963d87b48b38b4f0b1e03f32 app/src/main/kotlin/top/yukonga/mishka/viewmodel/SubscriptionViewModel.kt
-patch0002_blob_new=234078d05d0d4d687f74304990d6f08ae8d67c9e app/src/main/res/raw/builtin_mianliu.yaml
+patch0002_blob_new=b8635d05325e453f201f0e0b0ce8bf7895578127 app/src/main/res/raw/builtin_mianliu.yaml
 
 # --- 0003：字段整理（ConfigTidy）+ 编辑器工具栏（字段整理按钮位置、回退修改） ---
 patch0003_file=patches/app/0003-config-tidy-toolbar.patch

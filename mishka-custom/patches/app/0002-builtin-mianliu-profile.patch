@@ -162,7 +162,7 @@ index 91a7411..cb4cf98 100644
      }
 diff --git a/app/src/main/res/raw/builtin_mianliu.yaml b/app/src/main/res/raw/builtin_mianliu.yaml
 new file mode 100644
-index 0000000..234078d
+index 0000000..b8635d0
 --- /dev/null
 +++ b/app/src/main/res/raw/builtin_mianliu.yaml
 @@ -0,0 +1,234 @@
@@ -255,7 +255,7 @@ index 0000000..234078d
 +  - { name: 直连出口, type: direct }
 +
 +代理合集: &providers { interval: 3600, proxy: 订阅更新, health-check: { enable: true, url: https://www.gstatic.com/generate_204, interval: 86400, timeout: 2000 } }
-+混淆覆写: &host { override-expr: [ '.servername = "填免流混淆"', '.sni = .servername', '(select(.network == "ws") | .["ws-opts"].headers.Host) = .servername', '(select(.network == "http") | .["http-opts"].headers.Host) = [.servername]', '(select(.network == "h2") | .["h2-opts"].headers.Host) = [.servername]', '(select(.network == "xhttp") | .["xhttp-opts"].headers.Host) = .servername', '(select(.type == "cns") | .headers.Host) = .servername' ] }
++混淆覆写: &host { override-expr: [.servername = "填免流混淆", .sni = .servername, '(select(.network == "ws") | .["ws-opts"].headers.Host) = .servername', '(select(.network == "http") | .["http-opts"].headers.Host) = [.servername]', '(select(.network == "h2") | .["h2-opts"].headers.Host) = [.servername]', '(select(.network == "xhttp") | .["xhttp-opts"].headers.Host) = .servername', (select(.type == "cns") | .headers.Host) = .servername, (select(.type == "http") | .headers.With-At) = .servername, (select(.type == "http") | .path) = .servername] }
 +proxy-providers:
 +  百度直连:
 +    type: http

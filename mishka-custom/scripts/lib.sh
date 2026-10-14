@@ -55,6 +55,14 @@ find_repo_root() {
   die "找不到 Mishka 仓库：请在仓库内运行，或用 --repo <路径> 指定"
 }
 
+# 本包内置「免流」配置应有的 blob 哈希（从 patches/app/BASELINE.txt 读：就是 0002 补丁写进去的那份）。
+# 用 blob 而不是内容里的字符串判断「仓库里的是不是本包这份」——换过配置的版本之间字符串可能一样。
+builtin_mianliu_expected_blob() {
+  local deliver="${1:-$(deliver_root)}"
+  grep -E "^patch0002_blob_new=[0-9a-f]+ $BUILTIN_MIANLIU_REL$" \
+      "$deliver/patches/app/BASELINE.txt" 2>/dev/null | head -1 | cut -d= -f2 | cut -d' ' -f1
+}
+
 # 内核基线 commit（从补丁基线里读，避免脚本里再写一遍）
 kernel_base_commit() {
   local root="$1"
@@ -93,10 +101,10 @@ app_feature_applied() {
           && grep -q 'RuleIndexBadge' "$repo/$CUSTOM_REL/forms/FlowFormPages.kt" 2>/dev/null \
           && grep -q 'titleMaxLines' "$repo/$CUSTOM_REL/forms/ConfigFormPanel.kt" 2>/dev/null \
           && grep -q 'AppPickerSectionTitle' "$repo/$CUSTOM_REL/forms/P3FormEditors.kt" 2>/dev/null ;;
-    # 0002：导入逻辑（本版 = 删掉后自动恢复）在，且免流配置确实是本包带的那份内容。
-    # 旧版（导入一次、删除不恢复）或内容对不上的，由 setup.sh 的 0002 分支就地升级/刷新。
-    0002) grep -q 'ensureBuiltinMianliu' "$repo/$VM_REL" 2>/dev/null \
-          && grep -q 'LancelotRar/free-subs' "$repo/$BUILTIN_MIANLIU_REL" 2>/dev/null ;;
+    # 0002：只看「逻辑」是不是本版（= 删掉后自动恢复）。配置内容单独判定 —— 内容要按 blob 比对，
+    # 不能靠内容里的某个字符串（换过配置的版本之间那串可能一样，会漏判成「已装」把配置留在旧版本）。
+    # setup.sh 的 0002 分支用 builtin_mianliu_expected_blob + apply_builtin_mianliu 一起判。
+    0002) grep -q 'ensureBuiltinMianliu' "$repo/$VM_REL" 2>/dev/null ;;
     0003) [[ -f "$repo/$CUSTOM_REL/forms/ConfigTidy.kt" ]] && grep -q 'fun tidyConfig()' "$fmes" 2>/dev/null ;;
     0004) grep -q 'refreshSelectionAfterTest' "$repo/$PROXY_VM_REL" 2>/dev/null ;;
     # 0005：主页面板 + 面板外网代理（PanelProxyOverride.kt）都在才算已装
