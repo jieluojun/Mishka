@@ -255,7 +255,7 @@ index 0000000..b8635d0
 +  - { name: 直连出口, type: direct }
 +
 +代理合集: &providers { interval: 3600, proxy: 订阅更新, health-check: { enable: true, url: https://www.gstatic.com/generate_204, interval: 86400, timeout: 2000 } }
-+混淆覆写: &host { override-expr: [.servername = "填免流混淆", .sni = .servername, '(select(.network == "ws") | .["ws-opts"].headers.Host) = .servername', '(select(.network == "http") | .["http-opts"].headers.Host) = [.servername]', '(select(.network == "h2") | .["h2-opts"].headers.Host) = [.servername]', '(select(.network == "xhttp") | .["xhttp-opts"].headers.Host) = .servername', (select(.type == "cns") | .headers.Host) = .servername, (select(.type == "http") | .headers.With-At) = .servername, (select(.type == "http") | .path) = .servername] }
++混淆覆写: &host { override-expr: ['.servername = "填免流混淆"', '.sni = .servername', '(select(.network == "ws") | .["ws-opts"].headers.Host) = .servername', '(select(.network == "http") | .["http-opts"].headers.Host) = [.servername]', '(select(.network == "h2") | .["h2-opts"].headers.Host) = [.servername]', '(select(.network == "xhttp") | .["xhttp-opts"].headers.Host) = .servername', '(select(.type == "cns") | .headers.Host) = .servername'] }
 +proxy-providers:
 +  百度直连:
 +    type: http
@@ -266,7 +266,7 @@ index 0000000..b8635d0
 +    type: http
 +    <<: *providers
 +    url: "https://gist.githubusercontent.com/jieluojun/d4b528ee3418740112357a80e940d912/raw/DingTalkDirect"
-+    override: { additional-prefix: "钉钉直连/" }
++    override: { additional-prefix: "钉钉直连/", override-expr: ['.path = "gw.alicdn.com"', '(select(.type == "http") | .path) = ("@" + .path)'] }
 +  CNS订阅:
 +    type: http
 +    <<: *providers
