@@ -11,7 +11,7 @@ fork_head_commit=4fa3c86dcde3fad24b5c58263255dbdf9ef7f625
 # --- 0001：锚点面板 + 可视化编辑器：自定义编辑器与订阅页入口迁移；编辑器修复（拖动落点 / 回弹、开关误报、挪动末尾规则残留字符）；规则编辑按钮间距；maplist 拖动排序；路由规则序号；路由规则匹配值省略号；应用选择器（搜索兼手动添加、已选置顶、显示清单计数，不新增依赖） ---
 patch0001_file=patches/app/0001-anchor-panel.patch
 patch0001_prereq=
-patch0001_sha256=4a9cae08cc72c3f0a7e0ba027dafd80180fe016708f168b7602673a4b258925c
+patch0001_sha256=37fe59b39addfc500331a6f1b85ff1d1a5d27e1d9bb52d42fd0ed927648a6c71
 patch0001_blob_after=93951e9f025b2da53ce0bcb48d9dd19cacfa5bfe app/build.gradle.kts
 patch0001_blob_after=a059246942f5c9a4b1ccfbab1c850cd8963c3a34 app/src/main/cpp/mishka_jni.c
 patch0001_blob_after=7c761594511d961a2262e84129ec620e37e2ad79 app/src/main/kotlin/top/yukonga/mishka/MainActivity.kt
@@ -31,7 +31,7 @@ patch0001_blob_new=99ef5489b86ff8c2323b0ece78aacf584da7b9ac app/src/main/kotlin/
 patch0001_blob_new=033bcf3aa56cf2370827f72b3f642f7accff1f38 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FlowText.kt
 patch0001_blob_new=30c11572f611ae932486490c8fdd2b63c6e645f0 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormDialogs.kt
 patch0001_blob_new=5e9420498dfbb70fa0a01f7d21c0578bf52d2c6d app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormMapListLogic.kt
-patch0001_blob_new=a9121ae3c15048eb3b6a5777aea9b1e7bb05bcec app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt
+patch0001_blob_new=00a38f2ac6c161097b5592bd594efec54b742271 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecs.kt
 patch0001_blob_new=a68165fd27bdacdf2c34224f06ffb391363a0b43 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormSpecsP2.kt
 patch0001_blob_new=012dd13f58231d9c0a63f6caefee9ed7d0c977e5 app/src/main/kotlin/top/yukonga/mishka/custom/forms/FormValues.kt
 patch0001_blob_new=1704d85adc79661ad662f7bfb7499072dd65edd9 app/src/main/kotlin/top/yukonga/mishka/custom/forms/ListenerSpecs.kt
