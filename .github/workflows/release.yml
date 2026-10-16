@@ -27,6 +27,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: "custom-release-${{ github.ref }}"
@@ -236,3 +237,27 @@ jobs:
           else
             gh release create "$tag" "${apks[@]}" --title "$tag" --generate-notes
           fi
+
+      - name: 清理过期重复缓存
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          # 1. gradle-home-v1 在后续 Post Set up Gradle 阶段总是会写入一条全新记录，
+          #    当本次构建成功时先把旧的 gradle-home-v1 清掉，Post 阶段写完就只剩最新 1 条；
+          # 2. 其余每类缓存（setup-go、gradle-build-cache-v2、gradle-wrapper-zips-v2 等）
+          #    按创建时间倒序只保留最新 1 条，删除多余历史条目。
+          gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/caches" --jq '
+            .actions_caches
+            | group_by(.key | sub("\\|.*$"; "") | sub("-[0-9a-f]{32,}$"; ""))[]
+            | (.[0].key | sub("\\|.*$"; "") | sub("-[0-9a-f]{32,}$"; "")) as $grp
+            | sort_by(.created_at) | reverse
+            | if ($grp == "gradle-home-v1" and env.JOB_STATUS == "success") then .[].id else .[1:][].id end
+          ' | while read -r id; do
+            if [ -n "$id" ]; then
+              echo "删除旧缓存 id=$id"
+              gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/actions/caches/$id" || true
+            fi
+          done
