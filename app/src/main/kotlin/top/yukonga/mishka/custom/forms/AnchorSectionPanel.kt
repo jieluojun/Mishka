@@ -68,10 +68,8 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
     val headLine1 = entry?.let { AnchorInheritance.headLine0(it) + 1 } ?: 0
     var pickL1 by remember { mutableStateOf(false) }
     var pickField by remember { mutableStateOf(false) }
-    // 代理集合 / 规则集合详情只保留「继承锚点」「二级锚点」两个头行：二级锚点下面逐字段展开的
-    // 明细行、以及「锚点定义」一览都不在这两类页面展示（字段明细在二级锚点编辑弹层里照样能看 / 能摘）
-    val isProviderCollection = topKey == "proxy-providers" || topKey == "rule-providers"
-    val showAnchorDefinitions = !isProviderCollection
+    // 代理集合 / 规则集合详情只需要一级、二级锚点操作；「锚点定义」一览信息量大且不参与编辑，不在这两类页面展示
+    val showAnchorDefinitions = topKey != "proxy-providers" && topKey != "rule-providers"
 
     Column(modifier = Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionHeader("YAML 锚点")
@@ -90,8 +88,7 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
                 onClick = { pickL1 = true },
             )
         }
-        // 字段级锚点：非集合页把每个在用字段单独一行展开（标题只放键名，摘要放锚点状态）；
-        // 代理集合 / 规则集合页只留头行，明细去编辑弹层里看
+        // 字段级锚点：每个在用字段单独一行——标题只放键名，摘要放锚点状态（键与值分行，不再挤成一条 chips 串）
         val activeFields = states.filter { it.defAnchor != null || it.aliasRef != null || it.merges.isNotEmpty() }
         Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.defaultColors()) {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -105,13 +102,11 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
                     endActions = { MiniIconButton(MiuixIcons.Edit, "编辑") { pickField = true } },
                     onClick = { pickField = true },
                 )
-                if (!isProviderCollection) {
-                    activeFields.forEach { f ->
-                        BasicComponent(
-                            title = f.key,
-                            summary = fieldAnchorValueText(f) + " · 第 ${f.line1} 行",
-                        )
-                    }
+                activeFields.forEach { f ->
+                    BasicComponent(
+                        title = f.key,
+                        summary = fieldAnchorValueText(f) + " · 第 ${f.line1} 行",
+                    )
                 }
             }
         }
