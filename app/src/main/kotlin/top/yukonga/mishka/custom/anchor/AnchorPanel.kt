@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import top.yukonga.mishka.R
 import top.yukonga.mishka.custom.forms.MiniIconButton
 import top.yukonga.mishka.platform.showToast
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.mishka.ui.theme.StatusColors
 import top.yukonga.mishka.ui.util.sheetContentSafePadding
 import top.yukonga.mishka.ui.util.sheetHeightTransition
@@ -182,8 +184,10 @@ fun MishkaAnchorPanel(
                         graph = graph,
                         onCreate = { creating = true },
                     )
+                    val listState = rememberLazyListState()
                     LazyColumn(
-                        modifier = Modifier.fillMaxWidth(),
+                        state = listState,
+                        modifier = Modifier.fillMaxWidth().verticalScrollbar(listState),
                         contentPadding = PaddingValues(bottom = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {

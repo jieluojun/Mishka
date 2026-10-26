@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -62,6 +63,7 @@ import top.yukonga.mishka.ui.component.rememberSearchScreenStatus
 import top.yukonga.mishka.ui.util.horizontalCutoutPadding
 import top.yukonga.mishka.util.FormatUtils
 import top.yukonga.mishka.viewmodel.ConnectionViewModel
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
@@ -183,8 +185,10 @@ fun ConnectionScreen(
             ) {
                 // 搜索结果列表
                 val imeBottomPadding = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+                val scrollbarListState = rememberLazyListState()
                 LazyColumn(
-                    modifier = Modifier
+                    state = scrollbarListState,
+                    modifier = Modifier.verticalScrollbar(scrollbarListState)
                         .fillMaxSize()
                         .overScrollVertical(),
                 ) {
@@ -228,8 +232,10 @@ fun ConnectionScreen(
         },
     ) { innerPadding ->
         searchStatus.SearchBox {
+            val scrollbarListState2 = rememberLazyListState()
             LazyColumn(
-                modifier = Modifier
+                state = scrollbarListState2,
+                modifier = Modifier.verticalScrollbar(scrollbarListState2)
                     .fillMaxSize()
                     .horizontalCutoutPadding()
                     .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)

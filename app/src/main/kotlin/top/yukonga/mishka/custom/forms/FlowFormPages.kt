@@ -34,6 +34,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.mishka.platform.showToast
+import top.yukonga.mishka.ui.component.verticalScrollWithScrollbar
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
@@ -136,7 +138,8 @@ private fun SeqListPage(
         userScrollEnabled = dragSort.dragging < 0,
         modifier = Modifier
             .fillMaxWidth()
-            .then(dragSort.containerModifier { listState.dispatchRawDelta(it) }),
+            .then(dragSort.containerModifier { listState.dispatchRawDelta(it) })
+            .verticalScrollbar(listState),
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -255,9 +258,11 @@ private fun MapListPage(
     val broken = map != null && map.kind != YamlNode.Kind.MAP && !doc.isNullText(map)
     var confirmDelete by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        state = listState,
+        modifier = Modifier.fillMaxWidth().verticalScrollbar(listState),
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -584,7 +589,7 @@ private fun ProxyImportDialog(host: FormHost, seqPath: YPath, onDismiss: () -> U
             summary?.let { DialogNote(it) }
             details?.let { d ->
                 Column(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScrollWithScrollbar(),
                 ) {
                     Text(text = d, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 }
@@ -935,7 +940,7 @@ private fun NewProviderDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 520.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScrollWithScrollbar(),
         ) {
             TextField(
                 value = name,
@@ -1275,6 +1280,8 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
     // 外层 items 变化（写回成功后文档换新版本）时以文档为准回填。
     var local by remember { mutableStateOf(items) }
     LaunchedEffect(items) { local = items }
+    val presetScroll = rememberScrollState()
+    val exprScroll = rememberScrollState()
     WindowDialog(
         show = true,
         title = "override-expr",
@@ -1291,7 +1298,8 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 160.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScrollbar(presetScroll)
+                    .verticalScroll(presetScroll),
             ) {
                 for ((label, exprs) in EXPR_PRESETS) {
                     BasicComponent(
@@ -1316,7 +1324,8 @@ private fun ExprListDialog(items: List<String>, onDismiss: () -> Unit, onCommit:
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 220.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScrollbar(exprScroll)
+                    .verticalScroll(exprScroll),
             ) {
                 if (local.isEmpty()) DialogNote("未设置表达式（点「＋ 添加表达式」可视化新建，或点上方快捷按钮填入）")
                 local.forEachIndexed { i, ex ->
@@ -1391,7 +1400,7 @@ private fun ExprEditDialog(initial: String, title: String, onDismiss: () -> Unit
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 520.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScrollWithScrollbar(),
         ) {
             if (parsed != null) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -1768,7 +1777,7 @@ private fun RuleEditDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 560.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScrollWithScrollbar(),
         ) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(
@@ -1801,7 +1810,7 @@ private fun RuleEditDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 240.dp)
-                            .verticalScroll(rememberScrollState()),
+                            .verticalScrollWithScrollbar(),
                     ) {
                         for (t in RULE_TYPES) {
                             BasicComponent(title = t.value, summary = t.label, onClick = { type = t.value; pickType = false })
@@ -1821,7 +1830,7 @@ private fun RuleEditDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 160.dp)
-                                .verticalScroll(rememberScrollState()),
+                                .verticalScrollWithScrollbar(),
                         ) {
                             for (c in valueCandidates) BasicComponent(title = c.value, summary = c.label, onClick = { value = c.value })
                         }
@@ -1838,7 +1847,7 @@ private fun RuleEditDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 220.dp)
-                            .verticalScroll(rememberScrollState()),
+                            .verticalScrollWithScrollbar(),
                     ) {
                         if (policyCandidates.isEmpty()) DialogNote("文档里还没有可选的目标")
                         for (c in policyCandidates) {
@@ -2179,7 +2188,7 @@ private fun NewTunnelDialog(host: FormHost, onDismiss: () -> Unit, onConfirm: (A
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 520.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScrollWithScrollbar(),
         ) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(text = if (asMap) "改用单行写法" else "改用映射写法", minWidth = 0.dp, minHeight = 0.dp, onClick = { asMap = !asMap })
@@ -2200,7 +2209,7 @@ private fun NewTunnelDialog(host: FormHost, onDismiss: () -> Unit, onConfirm: (A
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 200.dp)
-                            .verticalScroll(rememberScrollState()),
+                            .verticalScrollWithScrollbar(),
                     ) {
                         BasicComponent(title = "留空直连", onClick = { proxy = ""; pickProxy = false })
                         for (c in proxies) BasicComponent(title = c.value, summary = c.label.takeIf { it != c.value }, onClick = { proxy = c.value; pickProxy = false })
@@ -2313,8 +2322,10 @@ private fun TunnelDetailPage(host: FormHost, nav: FormNav, index: Int) {
     val raw = FormValues.scalarText(doc, node).orEmpty()
     val parts = TunnelText.parse(raw)
     var editing by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        state = listState,
+        modifier = Modifier.fillMaxWidth().verticalScrollbar(listState),
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

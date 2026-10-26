@@ -108,6 +108,7 @@ import top.yukonga.mishka.viewmodel.isBuiltInOutbound
 import top.yukonga.mishka.viewmodel.ProxyUiState
 import top.yukonga.mishka.viewmodel.ProxyViewModel
 import top.yukonga.mishka.viewmodel.visibleProxyGroups
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.DropdownImpl
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
@@ -586,7 +587,7 @@ fun ProxyScreen(
                 val sheetGroup = popupGroup ?: lastPopupGroup
 
                 LazyColumn(
-                    modifier = Modifier
+                    modifier = Modifier.verticalScrollbar(listState)
                         .fillMaxSize()
                         .scrollEndHaptic()
                         .overScrollVertical()
@@ -1451,7 +1452,7 @@ private fun ProxyGroupNodesSheet(
                     )
                     LazyColumn(
                         state = sheetListState,
-                        modifier = Modifier
+                        modifier = Modifier.verticalScrollbar(sheetListState)
                             .fillMaxWidth()
                             .heightIn(max = 520.dp),
                         contentPadding = PaddingValues(bottom = 12.dp),

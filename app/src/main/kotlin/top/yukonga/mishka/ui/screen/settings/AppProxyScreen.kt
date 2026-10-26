@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -58,6 +59,7 @@ import top.yukonga.mishka.ui.platform.setPlainText
 import top.yukonga.mishka.ui.util.horizontalCutoutPadding
 import top.yukonga.mishka.viewmodel.AppProxyMode
 import top.yukonga.mishka.viewmodel.AppProxyViewModel
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
@@ -288,8 +290,10 @@ fun AppProxyScreen(
                 searchBarTopPadding = dynamicTopPadding,
             ) {
                 // 搜索结果列表
+                val scrollbarListState = rememberLazyListState()
                 LazyColumn(
-                    modifier = Modifier
+                    state = scrollbarListState,
+                    modifier = Modifier.verticalScrollbar(scrollbarListState)
                         .fillMaxSize()
                         .overScrollVertical()
                         .imePadding(),
@@ -340,8 +344,10 @@ fun AppProxyScreen(
         },
     ) { innerPadding ->
         val appList: @Composable () -> Unit = {
+            val scrollbarListState2 = rememberLazyListState()
             LazyColumn(
-                modifier = Modifier
+                state = scrollbarListState2,
+                modifier = Modifier.verticalScrollbar(scrollbarListState2)
                     .fillMaxSize()
                     .horizontalCutoutPadding()
                     .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)

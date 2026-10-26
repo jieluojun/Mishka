@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,6 +25,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.collections.immutable.ImmutableList
 import top.yukonga.mishka.R
 import top.yukonga.mishka.ui.theme.StatusColors
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.mishka.ui.util.sheetContentSafePadding
 import top.yukonga.mishka.ui.util.sheetHeightTransition
 import top.yukonga.mishka.util.FormatUtils
@@ -88,14 +90,18 @@ internal fun SpeedDetailSheet(
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
 
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    items(items = rates, key = { it.id }) { rate ->
-                        // 排名逐秒变动，让重排走动画而不是硬跳
-                        ConnectionRateCard(rate, Modifier.animateItem())
+                else -> {
+                    val listState = rememberLazyListState()
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxWidth().verticalScrollbar(listState),
+                        contentPadding = PaddingValues(bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(items = rates, key = { it.id }) { rate ->
+                            // 排名逐秒变动，让重排走动画而不是硬跳
+                            ConnectionRateCard(rate, Modifier.animateItem())
+                        }
                     }
                 }
             }

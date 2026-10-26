@@ -12,8 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +40,8 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
 import top.yukonga.mishka.ui.component.groupedCardItems
 import top.yukonga.mishka.ui.util.horizontalCutoutPadding
 import top.yukonga.mishka.viewmodel.BackupViewModel
+import top.yukonga.mishka.ui.component.verticalScrollWithScrollbar
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -105,8 +106,10 @@ fun BackupRestoreScreen(
             }
         },
     ) { innerPadding ->
+        val scrollbarListState = rememberLazyListState()
         LazyColumn(
-            modifier = Modifier
+            state = scrollbarListState,
+            modifier = Modifier.verticalScrollbar(scrollbarListState)
                 .fillMaxSize()
                 .horizontalCutoutPadding()
                 .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
@@ -314,7 +317,7 @@ private fun WebDavDialog(
             Column(
                 modifier = Modifier
                     .weight(1f, fill = false)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScrollWithScrollbar(),
             ) {
                 TextField(
                     value = url,

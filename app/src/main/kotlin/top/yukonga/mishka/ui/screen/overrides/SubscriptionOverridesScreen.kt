@@ -41,6 +41,7 @@ import top.yukonga.mishka.ui.util.WideContentBox
 import top.yukonga.mishka.ui.util.horizontalCutoutPadding
 import top.yukonga.mishka.viewmodel.OverrideProfileViewModel
 import top.yukonga.mishka.viewmodel.SubscriptionViewModel
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
@@ -139,7 +140,7 @@ fun SubscriptionOverridesScreen(
                 state = listState,
                 // 拖动一开始就关掉用户滚动：外层 scrollable 退出仲裁；自动翻滚走 dispatchRawDelta 不受影响
                 userScrollEnabled = dragSort.dragging < 0,
-                modifier = Modifier
+                modifier = Modifier.verticalScrollbar(listState)
                     .fillMaxSize()
                     .then(dragSort.containerModifier { listState.dispatchRawDelta(it) })
                     .horizontalCutoutPadding()

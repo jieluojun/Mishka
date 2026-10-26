@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
@@ -133,7 +134,8 @@ private fun ScanResultDialog(
         title = stringResource(R.string.root_tether_scan_result_title),
         onDismissRequest = onDismiss,
     ) {
-        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+        val listState = rememberLazyListState()
+        LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().verticalScrollbar(listState)) {
             items(candidates) { iface ->
                 val checked = selected[iface] == true
                 BasicComponent(

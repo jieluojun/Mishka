@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import top.yukonga.mishka.platform.showToast
 import top.yukonga.mishka.ui.component.TetherInterfaceEditDialog
 import top.yukonga.mishka.ui.component.tetherInterfaceSummary
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.mishka.ui.util.sheetContentSafePadding
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
@@ -410,8 +411,10 @@ private val HUB: List<HubEntry> = listOf(
 
 @Composable
 private fun FormHub(doc: YamlDoc, fileName: String, onOpen: (FormRoute) -> Unit) {
+    val listState = rememberLazyListState()
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        state = listState,
+        modifier = Modifier.fillMaxWidth().verticalScrollbar(listState),
         contentPadding = PaddingValues(bottom = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -981,8 +984,10 @@ internal fun SectionsPage(
     intercept: FieldInterceptor? = null,
 ) {
     val doc = host.doc
+    val listState = rememberLazyListState()
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        state = listState,
+        modifier = Modifier.fillMaxWidth().verticalScrollbar(listState),
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

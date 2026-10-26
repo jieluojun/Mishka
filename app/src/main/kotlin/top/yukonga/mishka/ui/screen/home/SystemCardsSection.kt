@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -37,6 +38,7 @@ import kotlinx.datetime.number
 import kotlinx.datetime.toLocalDateTime
 import top.yukonga.mishka.R
 import top.yukonga.mishka.platform.NetworkAddressType
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.mishka.ui.util.sheetContentSafePadding
 import top.yukonga.mishka.ui.util.sheetHeightTransition
 import top.yukonga.mishka.util.FormatUtils
@@ -195,16 +197,20 @@ internal fun SubscriptionTrafficDialog(
                     modifier = Modifier.align(Alignment.Center),
                 )
 
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    items(
-                        items = providers,
-                        key = { it.id },
-                    ) { provider ->
-                        ProviderTrafficCard(provider)
+                else -> {
+                    val listState = rememberLazyListState()
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxWidth().verticalScrollbar(listState),
+                        contentPadding = PaddingValues(bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(
+                            items = providers,
+                            key = { it.id },
+                        ) { provider ->
+                            ProviderTrafficCard(provider)
+                        }
                     }
                 }
             }

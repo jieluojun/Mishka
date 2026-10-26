@@ -57,6 +57,7 @@ import top.yukonga.mishka.ui.component.blur.rememberBlurEnabled
 import top.yukonga.mishka.ui.component.effect.BgEffectBackground
 import top.yukonga.mishka.ui.theme.LocalAppDarkMode
 import top.yukonga.mishka.ui.util.horizontalCutoutPadding
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -314,7 +315,7 @@ private fun AboutContent(
 
         LazyColumn(
             state = lazyListState,
-            modifier = Modifier
+            modifier = Modifier.verticalScrollbar(lazyListState)
                 .fillMaxSize()
                 .scrollEndHaptic()
                 .overScrollVertical()

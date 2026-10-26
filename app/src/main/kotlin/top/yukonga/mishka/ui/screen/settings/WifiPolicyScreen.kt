@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.runtime.Composable
@@ -41,6 +42,7 @@ import top.yukonga.mishka.ui.component.blur.BlurredBar
 import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
 import top.yukonga.mishka.ui.component.groupedCardItems
 import top.yukonga.mishka.ui.util.WideContentBox
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -264,8 +266,10 @@ fun WifiPolicyScreen(
         },
     ) { innerPadding ->
         WideContentBox { sidePadding ->
+            val scrollbarListState = rememberLazyListState()
             LazyColumn(
-                modifier = Modifier
+                state = scrollbarListState,
+                modifier = Modifier.verticalScrollbar(scrollbarListState)
                     .fillMaxSize()
                     .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                     .scrollEndHaptic()

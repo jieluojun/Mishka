@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import top.yukonga.mishka.R
+import top.yukonga.mishka.ui.component.verticalScrollWithScrollbar
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Checkbox
@@ -107,7 +109,7 @@ internal fun SelectDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 320.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScrollWithScrollbar(),
             ) {
                 if (allowEmpty) {
                     BasicComponent(
@@ -283,6 +285,7 @@ internal fun ListDialog(
                     .fillMaxWidth()
                     .heightIn(max = 220.dp)
                     .then(dragSort.containerModifier { scrollState.dispatchRawDelta(it) })
+                    .verticalScrollbar(scrollState)
                     .verticalScroll(scrollState, enabled = dragSort.dragging < 0),
             ) {
                 if (items.isEmpty()) DialogNote("（空）")
@@ -339,7 +342,7 @@ internal fun ListDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 200.dp)
-                            .verticalScroll(rememberScrollState()),
+                            .verticalScrollWithScrollbar(),
                     ) {
                         for (c in candidates) {
                             val picked = c.value in items
@@ -415,7 +418,7 @@ internal fun MapDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 300.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScrollWithScrollbar(),
             ) {
                 for (index in keys.indices) {
                     Row(
@@ -491,7 +494,7 @@ internal fun MapListDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 300.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScrollWithScrollbar(),
             ) {
                 for (index in rows.indices) {
                     Row(
@@ -576,7 +579,7 @@ internal fun OptionPickerDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 380.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScrollWithScrollbar(),
             ) {
                 for (o in options) {
                     BasicComponent(
@@ -633,7 +636,7 @@ internal fun BlockedDeleteDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 320.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .verticalScrollWithScrollbar(),
             ) {
                 for (loc in locations.take(100)) {
                     Text(text = loc, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(vertical = 1.dp))

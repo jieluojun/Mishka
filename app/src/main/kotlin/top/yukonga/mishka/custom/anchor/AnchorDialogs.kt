@@ -11,9 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
@@ -34,6 +32,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.mishka.R
+import top.yukonga.mishka.ui.component.verticalScrollWithScrollbar
 import top.yukonga.mishka.ui.theme.StatusColors
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.DropdownDefaults
@@ -382,7 +381,7 @@ internal fun AnchorDefEditDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 360.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScrollWithScrollbar(),
         ) {
             when {
                 textMode -> {
@@ -691,7 +690,7 @@ internal fun AnchorRefEditDialog(
             ModeSwitch(textMode = textMode, onMode = { textMode = it })
             Spacer(Modifier.height(8.dp))
         }
-        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScrollWithScrollbar()) {
             if (textMode) {
                 TextField(
                     value = textDraft,
@@ -847,7 +846,7 @@ internal fun AnchorCreateDialog(
         summary = "建一个顶层定义块并插到文件头，别处就能用 `<<: *名字` 继承它",
         onDismissRequest = onDismiss,
     ) {
-        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).verticalScrollWithScrollbar()) {
             TextField(
                 value = topKey,
                 onValueChange = { topKey = it },
@@ -986,7 +985,7 @@ internal fun AnchorRenameDialog(
         summary = "改名会级联到 ${anchor.refs.size} 处引用（`<<:` 与 `*值` 一起改）；条目名只改定义行的键",
         onDismissRequest = onDismiss,
     ) {
-        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScrollWithScrollbar()) {
             TextField(
                 value = newName,
                 onValueChange = { newName = it },
@@ -1165,7 +1164,7 @@ private fun CodePreview(caption: String, text: String) {
             .heightIn(min = 34.dp, max = 140.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-            .verticalScroll(rememberScrollState())
+            .verticalScrollWithScrollbar()
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Text(

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,6 +41,7 @@ import top.yukonga.mishka.util.FormatUtils
 import top.yukonga.mishka.util.formatEpochMillisAsLocal
 import top.yukonga.mishka.viewmodel.ProfileOperation
 import top.yukonga.mishka.viewmodel.SubscriptionViewModel
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
@@ -114,8 +116,10 @@ fun SubscriptionScreen(
         },
     ) { innerPadding ->
         WideContentBox { sidePadding ->
+            val scrollbarListState = rememberLazyListState()
             LazyColumn(
-                modifier = Modifier
+                state = scrollbarListState,
+                modifier = Modifier.verticalScrollbar(scrollbarListState)
                     .fillMaxSize()
                     .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                     .scrollEndHaptic()

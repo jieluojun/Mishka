@@ -5,8 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -16,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.mishka.platform.showToast
+import top.yukonga.mishka.ui.component.verticalScrollWithScrollbar
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -128,7 +127,7 @@ internal fun AnchorSectionCard(host: FormHost, topKey: String, base: YPath) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 220.dp)
-                                .verticalScroll(rememberScrollState()),
+                                .verticalScrollWithScrollbar(),
                         ) {
                             val entryAnchor = entry?.anchor
                             defs.forEach { d ->

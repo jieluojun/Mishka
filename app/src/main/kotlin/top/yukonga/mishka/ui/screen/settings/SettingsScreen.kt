@@ -3,6 +3,7 @@ package top.yukonga.mishka.ui.screen.settings
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -27,6 +28,7 @@ import top.yukonga.mishka.ui.component.blur.BlurredBar
 import top.yukonga.mishka.ui.component.blur.rememberBlurBackdrop
 import top.yukonga.mishka.ui.component.groupedCardItems
 import top.yukonga.mishka.ui.util.WideContentBox
+import top.yukonga.mishka.ui.component.verticalScrollbar
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -115,8 +117,10 @@ fun SettingsScreen(
         },
     ) { innerPadding ->
         WideContentBox { sidePadding ->
+            val scrollbarListState = rememberLazyListState()
             LazyColumn(
-                modifier = Modifier
+                state = scrollbarListState,
+                modifier = Modifier.verticalScrollbar(scrollbarListState)
                     .fillMaxSize()
                     .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                     .scrollEndHaptic()
